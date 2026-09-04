@@ -52,7 +52,12 @@ final class SparkleUpdateController: NSObject, SPUUserDriver, ObservableObject {
                 backgroundQueue.schedule(
                     after: .init(.now()),
                     interval: .seconds(60 * 60 * 6)
-                ) {
+                ) { @Sendable in
+                    // @Sendable stops this closure inheriting the isolation of the
+                    // (main-actor) context that installs it. Combine's `schedule` takes a
+                    // non-Sendable closure, so without this it is treated as main-actor
+                    // isolated and then run on `backgroundQueue` — which trips Swift's
+                    // runtime isolation check and kills the app on launch.
                     Task { @MainActor in
                         SparkleUpdateController.shared.checkForUpdates(userInitiated: false)
                     }
