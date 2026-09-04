@@ -323,12 +323,20 @@ extension SettingsView {
         @AppStorage("discordRPC") private var discordRPCEnabled: Bool = true
         @State private var isServicesDiscordSectionExpanded: Bool = true
         @State private var isServicesEpicSectionExpanded: Bool = true
+        @State private var isServicesSteamSectionExpanded: Bool = true
 
         @State private var isCleaning: Bool = false
         @State private var isCleanupSuccessful: Bool?
 
         @State private var isEpicCloudSynchronising: Bool = false
         @State private var isEpicCloudSyncSuccessful: Bool?
+
+        @State private var isOpeningSteam: Bool = false
+        @State private var isOpeningSteamSuccessful: Bool?
+
+        @State private var isResettingSteamContainer: Bool = false
+        @State private var isResettingSteamContainerSuccessful: Bool?
+        @State private var isResetSteamContainerAlertPresented: Bool = false
 
         var body: some View {
             Section("Discord", isExpanded: $isServicesDiscordSectionExpanded) {
@@ -380,8 +388,58 @@ extension SettingsView {
                 // TODO: potenially add manual cloud save deletion
             }
 
-            Section("Steam", isExpanded: .constant(false)) { }
-                .help("Coming Soon")
+            Section("Steam", isExpanded: $isServicesSteamSectionExpanded) {
+                if Steam.isClientInstalled {
+                    OperationButton(
+                        "Open Steam Client",
+                        systemImage: "storefront",
+                        operating: $isOpeningSteam,
+                        successful: $isOpeningSteamSuccessful
+                    ) {
+                        do {
+                            try await Steam.openClient()
+                            isOpeningSteamSuccessful = true
+                        } catch {
+                            isOpeningSteamSuccessful = false
+                        }
+                    }
+
+                    OperationButton(
+                        "Reset Steam Container",
+                        systemImage: "trash",
+                        operating: $isResettingSteamContainer,
+                        successful: $isResettingSteamContainerSuccessful
+                    ) {
+                        isResetSteamContainerAlertPresented = true
+                    }
+                    .alert("Reset the Steam container?", isPresented: $isResetSteamContainerAlertPresented) {
+                        Button("Cancel", role: .cancel) { }
+                        Button("Reset", role: .destructive) {
+                            Task {
+                                do {
+                                    if let containerURL = Steam.containerURL {
+                                        try Wine.deleteContainer(containerURL: containerURL)
+                                    }
+                                    isResettingSteamContainerSuccessful = true
+                                } catch {
+                                    isResettingSteamContainerSuccessful = false
+                                }
+                            }
+                        }
+                    } message: {
+                        Text("""
+                        This deletes Steam's dedicated container, including the Steam client itself \
+                        and every game installed inside it. Your Steam library and cloud saves aren't \
+                        affected — reinstalling games afterward just re-downloads them through Steam. \
+                        Use this if Steam or a game inside it becomes unreliable and reinstalling \
+                        normally hasn't helped.
+                        """)
+                    }
+                } else {
+                    Text("Steam hasn't been set up yet. Use Import Game > Steam from your library to set it up.")
+                        .foregroundStyle(.secondary)
+                }
+            }
         }
     }
 

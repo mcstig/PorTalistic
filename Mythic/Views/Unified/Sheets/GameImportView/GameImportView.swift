@@ -22,9 +22,8 @@ struct GameImportView: View {
                     }
                     
                     Tab("Steam", systemImage: "storefront") {
-
+                        SteamGameImportView(isPresented: $isPresented)
                     }
-                    .hidden()
                     
                     Tab("Local", systemImage: "storefront") {
                         LocalGameImportView(isPresented: $isPresented)
@@ -38,7 +37,12 @@ struct GameImportView: View {
                         .tabItem {
                             Label("Epic", systemImage: "storefront")
                         }
-                    
+
+                    SteamGameImportView(isPresented: $isPresented)
+                        .tabItem {
+                            Label("Steam", systemImage: "storefront")
+                        }
+
                     LocalGameImportView(isPresented: $isPresented)
                         .tabItem {
                             Label("Local", systemImage: "storefront")

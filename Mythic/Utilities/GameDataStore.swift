@@ -96,6 +96,25 @@ import OSLog
             }
         }
         
+        // steam
+        if storefronts.contains(.steam), Steam.isClientInstalled {
+            do {
+                let installed = try await Steam.importInstalledGames()
+
+                for fetchedGame in installed {
+                    if let existing = library.first(where: { $0 == fetchedGame }) {
+                        try existing.merge(with: fetchedGame, requiring: .identicalIgnoredKeys)
+                        library.update(with: existing)
+                    } else {
+                        library.update(with: fetchedGame)
+                    }
+                }
+            } catch {
+                log.error("Unable to refresh game data from Steam: \(error.localizedDescription)")
+                throw error
+            }
+        }
+
         // TODO: others
         // if storefronts.contains(...) { ... }
     }

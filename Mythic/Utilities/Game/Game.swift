@@ -199,6 +199,20 @@ extension Game: Hashable {
     }
 }
 
+// `Game` is a reference type that Mythic passes freely between the main actor (SwiftUI
+// views, `GameDataStore`) and the nonisolated storefront managers that shell out to
+// Legendary/Wine. Swift 6's strict concurrency checking flags every one of those
+// hand-offs ("Sending 'game' risks causing data races") because the class isn't
+// `Sendable`.
+//
+// Stating that assumption explicitly here keeps the existing threading behaviour exactly
+// as it is. The honest alternative — pinning `Game` and the whole Epic/Legendary manager
+// chain to `@MainActor` — would move long-running install/launch work onto the main
+// actor, which is a much larger and riskier change than the one this unblocks.
+// FIXME: revisit once the storefront managers have a coherent isolation story; the
+// mutable state on `Game` should really be main-actor-isolated rather than unchecked.
+extension Game: @unchecked Sendable {}
+
 extension Game: CustomStringConvertible {
     var description: String { "\"\(title)\"" }
     var debugDescription: String { "\(description) (\(installationState), \(id))" }
@@ -273,6 +287,7 @@ struct AnyGame: Codable, Equatable {
         self.base = try {
             switch storefront {
             case .epicGames:    try EpicGamesGame(from: decoder)
+            case .steam:        try SteamGame(from: decoder)
             case .local:        try LocalGame(from: decoder)
             case nil:           try Game(from: decoder)
             }

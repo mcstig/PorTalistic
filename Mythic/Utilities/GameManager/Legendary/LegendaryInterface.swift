@@ -589,6 +589,13 @@ final class Legendary {
         return assetInfo.buildVersion != installationData.version
     }
 
+    /// Holds values parsed out of legendary's output by reference, so the streaming
+    /// handler doesn't have to capture and concurrently mutate local variables.
+    private final class PreInstallationMetadata: @unchecked Sendable {
+        var installSize: Int64?
+        var optionalPacks: [String: String] = .init()
+    }
+
     static func fetchPreInstallationMetadata(
         game: EpicGamesGame,
         platform: Game.Platform
@@ -598,9 +605,8 @@ final class Legendary {
         }
 
         let arguments: [String] = ["install", game.id, "--platform", matchPlatform(for: platform)]
-        
-        var installSize: Int64?
-        var optionalPacks: [String: String] = .init()
+
+        let metadata = PreInstallationMetadata()
 
         // if the data lock is present, legendary will terminate itself, so this is ok
         // nice n safe
@@ -612,28 +618,25 @@ final class Legendary {
             try await executeStreamed(process) { chunk in
                 switch chunk.stream {
                 case .standardError:
-                    // Handle install size
-                    Task {
-                        // legendary always returns install size in MiB
-                        if let match = try? Regex(#"Install size: (\d+(?:\.\d+)?) MiB"#).firstMatch(in: chunk.output),
-                           let sizeString = match[1].substring,
-                           let sizeValue = Double(sizeString) {
-                            await MainActor.run {
-                                installSize = Int64(Int(sizeValue) * 1_048_576) // MiB ➜ B
-                                
-                                process.interrupt()
-                            }
-                        }
+                    // Handle install size.
+                    // Parsed inline rather than in a detached Task: the previous version
+                    // could still have the parse pending when this function returned,
+                    // silently dropping the size (and the optional packs below).
+                    // legendary always returns install size in MiB
+                    if let match = try? Regex(#"Install size: (\d+(?:\.\d+)?) MiB"#).firstMatch(in: chunk.output),
+                       let sizeString = match[1].substring,
+                       let sizeValue = Double(sizeString) {
+                        metadata.installSize = Int64(Int(sizeValue) * 1_048_576) // MiB ➜ B
+
+                        process.interrupt()
                     }
-                    
+
                 case .standardOutput:
                     // Handle optional packs
-                    Task { @MainActor in
-                        if let match = try? Regex(#"\s*\* (?<identifier>\w+) - (?<name>.+)"#).firstMatch(in: chunk.output),
-                           let id = match["identifier"]?.substring,
-                           let name = match["name"]?.substring {
-                            optionalPacks[String(id)] = String(name)
-                        }
+                    if let match = try? Regex(#"\s*\* (?<identifier>\w+) - (?<name>.+)"#).firstMatch(in: chunk.output),
+                       let id = match["identifier"]?.substring,
+                       let name = match["name"]?.substring {
+                        metadata.optionalPacks[String(id)] = String(name)
                     }
                     
                     if chunk.output.contains("Please enter tags of pack(s) to install") {
@@ -658,7 +661,7 @@ final class Legendary {
             process.interrupt()
         }
         
-        return (installSize, optionalPacks)
+        return (metadata.installSize, metadata.optionalPacks)
     }
 
     static func isFileVerificationRequired(gameID: String) throws -> Bool {
