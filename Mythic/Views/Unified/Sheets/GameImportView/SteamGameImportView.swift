@@ -27,6 +27,8 @@ struct SteamGameImportView: View {
 
     @State private var stage: Stage = .checkingPreflight
     @State private var isScanning = false
+    @State private var openErrorDescription: String?
+    @State private var isClientStarting = false
     @State private var scanErrorDescription: String?
     @State private var importedGames: [SteamGame] = []
 
@@ -76,8 +78,9 @@ struct SteamGameImportView: View {
                 VStack(alignment: .leading, spacing: 12) {
                     HStack {
                         Button("Open Steam…") {
-                            Task { try? await Steam.openClient() }
+                            Task { await openClient() }
                         }
+                        .disabled(isClientStarting)
                         .help("Sign in and install/update games from within the real Steam client.")
 
                         Button {
@@ -90,6 +93,21 @@ struct SteamGameImportView: View {
                             }
                         }
                         .disabled(isScanning)
+                    }
+
+                    if isClientStarting {
+                        HStack(spacing: 8) {
+                            ProgressView().controlSize(.small)
+                            Text("Steam is starting. The first launch after an update can take a couple of minutes, and its window won't appear until it's finished.")
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+
+                    if let openErrorDescription {
+                        Label(openErrorDescription, systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
 
                     if let scanErrorDescription {
@@ -119,6 +137,54 @@ struct SteamGameImportView: View {
         }
         .padding()
         .frame(minWidth: 500, minHeight: 320)
+    }
+
+    /// Launches the real Steam client and stays with it until it either settles or dies.
+    ///
+    /// Steam's failure mode under Wine is to exit quietly: it spends two minutes on an
+    /// update check that times out, then shuts down without ever drawing a window. To the
+    /// user that is indistinguishable from a button that does nothing, which is exactly what
+    /// this used to look like. So: report that it's starting, and if it exits, read its own
+    /// bootstrap log back and say why.
+    private func openClient() async {
+        openErrorDescription = nil
+        isClientStarting = true
+        defer { isClientStarting = false }
+
+        let process: Process
+        do {
+            process = try await Steam.openClient()
+        } catch {
+            // Never swallow this. A button that silently does nothing is worse than one
+            // that fails loudly.
+            openErrorDescription = [
+                error.localizedDescription,
+                (error as? LocalizedError)?.failureReason,
+                (error as? LocalizedError)?.recoverySuggestion
+            ].compactMap { $0 }.joined(separator: "\n")
+            return
+        }
+
+        // Poll rather than using a termination handler: this stays on the main actor for
+        // the whole wait, so the non-Sendable Process never crosses an isolation boundary.
+        let deadline: Date = .now.addingTimeInterval(300)
+        while process.isRunning, .now < deadline {
+            try? await Task.sleep(for: .seconds(2))
+        }
+
+        guard !process.isRunning else { return } // Still up after five minutes: it's fine.
+
+        if let containerURL = Steam.containerURL,
+           let reason = Steam.lastClientError(containerURL: containerURL)
+            ?? Steam.lastBootstrapError(containerURL: containerURL) {
+            openErrorDescription = String(
+                localized: "Steam closed before it finished starting. Its own log says: \(reason)"
+            )
+        } else {
+            openErrorDescription = String(
+                localized: "Steam closed before it finished starting, without recording why. Export Steam diagnostics from Settings for the full picture."
+            )
+        }
     }
 
     private func refreshStage() async {

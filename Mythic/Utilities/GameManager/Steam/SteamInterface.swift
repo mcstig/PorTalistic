@@ -298,6 +298,22 @@ final class Steam {
         let container = try await ensureContainer()
         guard isClientInstalled else { throw NotInstalledError() }
 
+        // If the container's runtime was changed while an older wineserver still held the
+        // prefix, every wine call below would fail with a protocol mismatch on stderr and
+        // nothing would open. Clear that first, and only when it's actually the case —
+        // shutting the prefix down unconditionally would kill a game the user is playing.
+        if await !Wine.isPrefixServerCompatible(containerURL: container.url) {
+            log.notice("Steam container's wineserver predates its selected runtime; shutting it down.")
+            await Wine.shutdownPrefix(at: container.url)
+
+            // Verify rather than hope. Launching into a prefix that still refuses every wine
+            // call produces exactly the symptom this whole exercise is about: a button that
+            // does nothing, with the reason on a stderr no one reads.
+            guard await Wine.isPrefixServerCompatible(containerURL: container.url) else {
+                throw Wine.PrefixRuntimeMismatchError(containerName: container.name)
+            }
+        }
+
         try await ensureClientRegistryConfiguration(containerURL: container.url)
 
         // Only once the client is complete. On an incomplete install the bootstrapper is
@@ -326,6 +342,52 @@ final class Steam {
         return process
     }
 
+
+    /// Where the bootstrapper writes its own account of a launch.
+    static func bootstrapLogURL(containerURL: URL) -> URL {
+        containerURL.appending(path: "drive_c/Program Files (x86)/Steam/logs/bootstrap_log.txt")
+    }
+
+    /// A fatal Wine-level error from the client's captured output, if one is there.
+    ///
+    /// This takes precedence over the bootstrapper's own log: when Wine itself refuses to
+    /// start the process, Steam never runs at all, so `bootstrap_log.txt` still describes
+    /// whatever happened on some earlier, unrelated launch — which is a very convincing way
+    /// to send someone chasing the wrong problem.
+    static func lastClientError(containerURL: URL) -> String? {
+        guard let contents = try? String(contentsOf: clientOutputLogURL(containerURL: containerURL), encoding: .utf8) else {
+            return nil
+        }
+
+        let fatal = contents
+            .split(separator: "\n")
+            .first { $0.contains("wine client error") || $0.contains("err:module:") }
+
+        guard let fatal else { return nil }
+        return String(fatal).trimmingCharacters(in: .whitespaces)
+    }
+
+    /// The last error the Steam bootstrapper recorded, in its own words.
+    ///
+    /// When Steam fails to start it almost never says so on screen — it exits, and the only
+    /// account of why is this log. Reading it back turns "clicking the button did nothing"
+    /// into an actual diagnosis, which is the whole point of the exercise.
+    ///
+    /// - Returns: The message after the last `Error:` line, or `nil` if the log records none.
+    static func lastBootstrapError(containerURL: URL) -> String? {
+        guard let contents = try? String(contentsOf: bootstrapLogURL(containerURL: containerURL), encoding: .utf8) else {
+            return nil
+        }
+
+        // Walk backwards: the most recent run's failure is the one worth reporting.
+        for line in contents.split(separator: "\n").reversed() {
+            guard let marker = line.range(of: "] Error: ") else { continue }
+            let message = line[marker.upperBound...].trimmingCharacters(in: .whitespaces)
+            return message.isEmpty ? nil : message
+        }
+
+        return nil
+    }
     struct NotInstalledError: LocalizedError {
         var errorDescription: String? = String(localized: "The Steam client hasn't been installed into Mythic's Steam container yet. Use Set Up Steam first.")
     }
@@ -474,7 +536,15 @@ final class Steam {
         line("steam root: \(steamRoot.path)")
         line("engine installed: \(Engine.isInstalled)")
         line("engine version: \(await Engine.installedVersion?.description ?? "unknown")")
-        line("wine version: \(Wine.retrieveVersion()?.description ?? "unknown")")
+        line("bundled wine version: \(Wine.retrieveVersion()?.description ?? "unknown")")
+
+        // The container's *own* runtime, which is what actually runs Steam. Reporting only
+        // the bundled engine's version here sent two rounds of debugging at the wrong
+        // problem, because the number shown had nothing to do with the binary in use.
+        let containerRuntime = Wine.runtime(forContainerAtURL: containerURL)
+        line("container runtime: \(containerRuntime.description)")
+        line("container runtime path: \(containerRuntime.executableURL.path)")
+        line("container runtime can reach prefix: \(await Wine.isPrefixServerCompatible(containerURL: containerURL))")
         line("rosetta present: \(Rosetta.exists)")
         line()
         line("## available wine runtimes")

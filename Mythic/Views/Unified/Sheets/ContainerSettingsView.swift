@@ -187,6 +187,15 @@ struct ContainerSettingsView: View {
                     get: { container.settings.runtimeID ?? Runtime.bundled.id },
                     set: { newValue in
                         container.settings.runtimeID = (newValue == Runtime.bundled.id) ? nil : newValue
+
+                        // The prefix's running wineserver still speaks the old runtime's
+                        // protocol, and a wine binary that disagrees with it fails on stderr
+                        // and nowhere else. Retire it now, while the user is here and
+                        // expecting the change to take effect.
+                        let containerURL = container.url
+                        Task.detached(priority: .utility) {
+                            await Wine.shutdownPrefix(at: containerURL)
+                        }
                     }
                 )) {
                     ForEach(availableRuntimes) { runtime in

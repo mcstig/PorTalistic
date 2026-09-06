@@ -74,6 +74,16 @@ struct Runtime: Identifiable, Hashable {
         return FileManager.default.isExecutableFile(atPath: executableURL.path)
     }
 
+    /// The `wineserver` belonging to this runtime.
+    ///
+    /// A prefix is served by exactly one `wineserver`, and a `wineserver` speaks exactly one
+    /// protocol version. Mixing them is the failure behind
+    /// `wine client error:0: version mismatch`, so every server operation has to name the
+    /// runtime it means rather than assuming the bundled one.
+    var wineserverURL: URL {
+        executableURL.deletingLastPathComponent().appending(path: "wineserver")
+    }
+
     /// Asks the binary what version it is. Cheap, but shells out — cache the result.
     func resolvedVersion() -> SemanticVersion? {
         guard isInstalled else { return nil }
@@ -173,11 +183,53 @@ extension Runtime {
         ]
     }
 
+    /// Cached result of ``discoverAll()``.
+    ///
+    /// Discovery spawns `wine --version` once per candidate. That's fine occasionally and
+    /// badly wrong in a hot path: `Wine.transformProcess` resolves a container's runtime on
+    /// every single wine invocation, and setting up the Steam container alone makes several
+    /// in a row — which turned "open Steam" into a long, silent pause while a dozen
+    /// subprocesses were spawned and thrown away.
+    private static let cache: Cache = .init()
+
+    private final class Cache: @unchecked Sendable {
+        private let lock: NSLock = .init()
+        private var runtimes: [Runtime]?
+
+        func value(orCompute compute: () -> [Runtime]) -> [Runtime] {
+            lock.lock()
+            if let runtimes { lock.unlock(); return runtimes }
+            lock.unlock()
+
+            let computed = compute()
+
+            lock.lock()
+            runtimes = computed
+            lock.unlock()
+
+            return computed
+        }
+
+        func invalidate() {
+            lock.lock()
+            runtimes = nil
+            lock.unlock()
+        }
+    }
+
+    /// Forget the cached runtime list. Call after installing or removing one.
+    static func invalidateDiscoveryCache() {
+        cache.invalidate()
+    }
+
     /// Every runtime currently available on this machine.
     ///
-    /// - Note: Version resolution shells out once per runtime, so call this when the set of
-    ///   runtimes might have changed rather than on every launch.
+    /// Cached after the first call — use ``invalidateDiscoveryCache()`` when the set changes.
     static func discoverAll() -> [Runtime] {
+        cache.value(orCompute: discoverAllUncached)
+    }
+
+    private static func discoverAllUncached() -> [Runtime] {
         var discovered: [Runtime] = []
 
         var bundledRuntime = bundled

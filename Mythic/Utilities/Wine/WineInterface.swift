@@ -119,6 +119,74 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
         process.environment = constructEnvironment(with: containerURL, additionalVariables: capturedEnvironment ?? [:])
     }
 
+    /// Whether the container's selected runtime can actually talk to the `wineserver` that
+    /// currently owns this prefix.
+    ///
+    /// A prefix is served by one long-lived `wineserver`, and each `wineserver` speaks one
+    /// protocol version. Switching a container from the bundled Wine 7.7 to Wine 11 while
+    /// the 7.7 server is still alive means every subsequent `wine` call dies with
+    ///
+    /// ```
+    /// wine client error:0: version mismatch 762/930.
+    /// ```
+    ///
+    /// — on stderr, with no window, no dialog and no exit code anyone looks at. Choosing a
+    /// runtime in the UI and then watching Steam refuse to open, silently, was exactly this.
+    ///
+    /// Probing costs one short subprocess, which is worth paying to avoid launching into a
+    /// failure that reports itself nowhere.
+    static func isPrefixServerCompatible(containerURL: URL) async -> Bool {
+        let process: Process = .init()
+        process.arguments = ["cmd", "/c", "ver"]
+        transformProcess(process, containerURL: containerURL)
+
+        guard let result = try? await process.runWrapped() else { return true }
+        return !(result.standardError?.contains("version mismatch") ?? false)
+    }
+
+    /// Shuts down whichever `wineserver` is holding this prefix, whatever runtime it came from.
+    ///
+    /// The runtime that started the server may no longer be the container's selected one —
+    /// that mismatch is the whole reason we're here — so asking the *current* runtime's
+    /// `wineserver -k` to do it finds nothing and changes nothing. Every known runtime gets
+    /// asked instead; the ones that aren't serving this prefix simply do nothing.
+    static func shutdownPrefix(at containerURL: URL) async {
+        for runtime in Runtime.discoverAll() where runtime.isInstalled {
+            guard FileManager.default.isExecutableFile(atPath: runtime.wineserverURL.path) else { continue }
+
+            let process: Process = .init()
+            process.executableURL = runtime.wineserverURL
+            process.arguments = ["-k"]
+            // Inherit the environment rather than replacing it. A bare
+            // ["WINEPREFIX": …] strips HOME, PATH and TMPDIR, and wineserver without those
+            // exits having done nothing at all — which is indistinguishable, from here,
+            // from a kill that worked.
+            var environment = ProcessInfo.processInfo.environment
+            environment["WINEPREFIX"] = containerURL.path
+            process.environment = environment
+            process.qualityOfService = .utility
+
+            let result = try? await process.runWrapped()
+            if let stderr = result?.standardError, !stderr.isEmpty {
+                log.debug("wineserver -k (\(runtime.name, privacy: .public)): \(stderr, privacy: .public)")
+            }
+        }
+
+        log.notice("Asked every known wineserver to release \(containerURL.lastPathComponent, privacy: .public)")
+    }
+
+    struct PrefixRuntimeMismatchError: LocalizedError {
+        let containerName: String
+
+        var errorDescription: String? {
+            String(localized: "\"\(containerName)\" is still being held by an older version of Wine than the one it's set to use, so nothing can start in it.")
+        }
+
+        var recoverySuggestion: String? {
+            String(localized: "Quit and reopen Mythic. If that doesn't clear it, the container was built by the older Wine and needs to be recreated.")
+        }
+    }
+
     static func tasklist(for containerURL: URL) async throws -> [Container.Process] {
         var list: [Container.Process] = .init()
         
@@ -286,9 +354,12 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
             process.arguments = ["-k"]
 
             Task {
-                process.environment = ["WINEPREFIX": url.path]
+                // Inherited, not replaced — see `shutdownPrefix(at:)`.
+                var environment = ProcessInfo.processInfo.environment
+                environment["WINEPREFIX"] = url.path
+                process.environment = environment
                 process.qualityOfService = .utility
-                
+
                 try process.run()
             }
         }

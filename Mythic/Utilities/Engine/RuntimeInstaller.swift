@@ -134,6 +134,7 @@ enum RuntimeInstaller {
 
         // Asking the binary its version proves it actually runs, not just that it exists.
         runtime.version = runtime.resolvedVersion()
+        Runtime.invalidateDiscoveryCache()
         log.notice("Installed \(runtime.description, privacy: .public) at \(destination.path, privacy: .public)")
 
         return runtime
@@ -156,6 +157,7 @@ enum RuntimeInstaller {
         }
 
         try FileManager.default.removeItem(at: root)
+        Runtime.invalidateDiscoveryCache()
         log.notice("Removed runtime \(name, privacy: .public)")
     }
 
