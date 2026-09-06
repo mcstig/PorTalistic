@@ -476,6 +476,17 @@ final class Steam {
         line("engine version: \(await Engine.installedVersion?.description ?? "unknown")")
         line("wine version: \(Wine.retrieveVersion()?.description ?? "unknown")")
         line("rosetta present: \(Rosetta.exists)")
+        line()
+        line("## available wine runtimes")
+        let runtimes = Runtime.discoverAll()
+        if runtimes.isEmpty {
+            line("(none discovered)")
+        } else {
+            for runtime in runtimes {
+                line("\(runtime.description)  [\(runtime.origin)]  \(runtime.executableURL.path)")
+            }
+        }
+        line()
         line("client considered installed: \(isClientInstalled)")
         line("launch arguments: \(clientLaunchArguments.joined(separator: " "))")
         line()

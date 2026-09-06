@@ -62,7 +62,16 @@ struct Runtime: Identifiable, Hashable {
     }
 
     var isInstalled: Bool {
-        FileManager.default.isExecutableFile(atPath: executableURL.path)
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: executableURL.path, isDirectory: &isDirectory),
+              !isDirectory.boolValue else {
+            // `isExecutableFile` answers true for directories as well, since POSIX treats
+            // the execute bit on a directory as search permission — which let a tools
+            // *folder* through as though it were a wine binary.
+            return false
+        }
+
+        return FileManager.default.isExecutableFile(atPath: executableURL.path)
     }
 
     /// Asks the binary what version it is. Cheap, but shells out — cache the result.
@@ -121,13 +130,28 @@ extension Runtime {
     /// rather than taking ownership. Globs are resolved at discovery time because
     /// Homebrew's Cellar paths carry the version.
     private static var externalCandidates: [(name: String, path: String)] {
-        [
+        let home = NSHomeDirectory()
+
+        return [
+            // The Gcenx cask installs GPTK as an app bundle, not into the Homebrew prefix.
+            ("Game Porting Toolkit", "/Applications/Game Porting Toolkit.app/Contents/Resources/wine/bin/wine64"),
+            ("Game Porting Toolkit", "\(home)/Applications/Game Porting Toolkit.app/Contents/Resources/wine/bin/wine64"),
+
+            // Older formula-style installs.
             ("Game Porting Toolkit (Homebrew)", "/opt/homebrew/opt/game-porting-toolkit/bin/wine64"),
             ("Game Porting Toolkit (Homebrew, Intel)", "/usr/local/opt/game-porting-toolkit/bin/wine64"),
+
+            ("Wine CrossOver", "/Applications/Wine Crossover.app/Contents/Resources/wine/bin/wine64"),
             ("Wine CrossOver (Homebrew)", "/opt/homebrew/opt/wine-crossover/bin/wine64"),
+            ("Wine Stable", "/Applications/Wine Stable.app/Contents/Resources/wine/bin/wine64"),
+            ("Wine Devel", "/Applications/Wine Devel.app/Contents/Resources/wine/bin/wine64"),
+
             ("CrossOver", "/Applications/CrossOver.app/Contents/SharedSupport/CrossOver/bin/wine64"),
-            ("Whisky", "\(NSHomeDirectory())/Library/Application Support/com.isaacmarovitz.Whisky/Libraries/Wine/bin/wine64"),
-            ("Wine (Homebrew)", "/opt/homebrew/bin/wine64")
+            ("Whisky", "\(home)/Library/Application Support/com.isaacmarovitz.Whisky/Libraries/Wine/bin/wine64"),
+            ("Heroic (bundled wine)", "\(home)/Library/Application Support/heroic/tools/wine"),
+
+            ("Wine (Homebrew)", "/opt/homebrew/bin/wine64"),
+            ("Wine (Homebrew, Intel)", "/usr/local/bin/wine64")
         ]
     }
 
