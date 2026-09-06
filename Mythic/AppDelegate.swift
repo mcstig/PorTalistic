@@ -29,6 +29,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         setenv("CX_ROOT", Bundle.main.bundlePath, 1)
 
+        // Before anything launches a wine process: children inherit this, and msync spends
+        // a file descriptor per Win32 sync object. See `ResourceLimits`.
+        ResourceLimits.raiseOpenFileLimit()
+
         // MARK: Register Defaults
         UserDefaults.standard.register(defaults: [
             "discordRPC": true,

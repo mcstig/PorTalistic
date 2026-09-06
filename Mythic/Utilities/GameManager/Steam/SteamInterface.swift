@@ -348,23 +348,48 @@ final class Steam {
         containerURL.appending(path: "drive_c/Program Files (x86)/Steam/logs/bootstrap_log.txt")
     }
 
-    /// A fatal Wine-level error from the client's captured output, if one is there.
+    /// A fatal error from the client's captured output, if one is there.
     ///
-    /// This takes precedence over the bootstrapper's own log: when Wine itself refuses to
-    /// start the process, Steam never runs at all, so `bootstrap_log.txt` still describes
-    /// whatever happened on some earlier, unrelated launch — which is a very convincing way
-    /// to send someone chasing the wrong problem.
+    /// The hard part is not finding errors — a healthy Steam launch under Wine logs hundreds.
+    /// It's refusing to report the ones that don't matter. Steam spawns throwaway probes
+    /// (`gldriverquery.exe`, `vulkandriverquery.exe`) whose whole job is to fail on machines
+    /// that lack a driver, so `err:module:import_dll ... gldriverquery.exe` is what a
+    /// *working* launch looks like. Reporting it as the cause of death sends someone hunting
+    /// a missing SDL2.dll while the actual crash sits a thousand lines further down.
+    ///
+    /// So: only things that genuinely end the client.
     static func lastClientError(containerURL: URL) -> String? {
         guard let contents = try? String(contentsOf: clientOutputLogURL(containerURL: containerURL), encoding: .utf8) else {
             return nil
         }
 
-        let fatal = contents
-            .split(whereSeparator: \.isNewline)
-            .first { $0.contains("wine client error") || $0.contains("err:module:") }
+        let lines = contents.split(whereSeparator: \.isNewline)
 
-        guard let fatal else { return nil }
-        return String(fatal.trimmingCharacters(in: .whitespaces).prefix(displayedReasonLimit))
+        // Wine couldn't start the process at all. Nothing after this is meaningful.
+        if let refusal = lines.first(where: { $0.contains("wine client error") }) {
+            return String(refusal.trimmingCharacters(in: .whitespaces).prefix(displayedReasonLimit))
+        }
+
+        // Steam's own fatal assertions, in Valve's words. These are the ones that actually
+        // take the client down, and they name the source file they came from.
+        let steamAssertion = lines.last {
+            $0.contains("Thread synchronization object is unuseable")
+            || $0.contains("Fatal Error")
+            || $0.contains("Assertion Failed")
+        }
+        if let steamAssertion {
+            return String(steamAssertion.trimmingCharacters(in: .whitespaces).prefix(displayedReasonLimit))
+        }
+
+        // A module that failed to load in the *client* itself, as opposed to one of its
+        // disposable probes.
+        let fatalImport = lines.last {
+            $0.contains("err:module:loader_init")
+            && (($0.contains("steam.exe") && !$0.contains("bin\\")) || $0.contains("steamwebhelper.exe"))
+        }
+
+        guard let fatalImport else { return nil }
+        return String(fatalImport.trimmingCharacters(in: .whitespaces).prefix(displayedReasonLimit))
     }
 
     /// The last error the Steam bootstrapper recorded, in its own words.
@@ -559,6 +584,12 @@ final class Steam {
         line("container runtime path: \(containerRuntime.executableURL.path)")
         line("container runtime can reach prefix: \(await Wine.isPrefixServerCompatible(containerURL: containerURL))")
         line("rosetta present: \(Rosetta.exists)")
+
+        // msync spends a file descriptor per Win32 sync object, so this number decides
+        // whether a long Steam session survives. See `ResourceLimits`.
+        if let limits = ResourceLimits.openFileLimitDescription {
+            line("open file limit: \(limits)")
+        }
         line()
         line("## available wine runtimes")
         let runtimes = Runtime.discoverAll()
