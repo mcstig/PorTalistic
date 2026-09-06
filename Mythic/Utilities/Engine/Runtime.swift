@@ -129,6 +129,24 @@ extension Runtime {
     /// Deliberately read-only: these belong to other applications, and Mythic borrows them
     /// rather than taking ownership. Globs are resolved at discovery time because
     /// Homebrew's Cellar paths carry the version.
+    /// Binary names a Wine install might expose, newest convention first.
+    ///
+    /// Wine 11 dropped `wine64` entirely — the new WoW64 architecture runs 32-bit Windows
+    /// processes through the single 64-bit `wine` binary. Older builds (the bundled 7.7
+    /// engine, GPTK, CrossOver) still ship the split pair, so both have to be probed.
+    static let executableNames = ["wine64", "wine"]
+
+    /// Resolves the wine binary inside a `bin` directory, whichever convention it uses.
+    static func executable(inBinDirectory binDirectory: URL) -> URL? {
+        executableNames
+            .map { binDirectory.appending(path: $0) }
+            .first { candidate in
+                var isDirectory: ObjCBool = false
+                return FileManager.default.fileExists(atPath: candidate.path, isDirectory: &isDirectory)
+                    && !isDirectory.boolValue
+            }
+    }
+
     private static var externalCandidates: [(name: String, path: String)] {
         let home = NSHomeDirectory()
 
@@ -173,9 +191,15 @@ extension Runtime {
                                                                      includingPropertiesForKeys: nil,
                                                                      options: [.skipsHiddenFiles]) {
             for entry in entries.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
+                let release = RuntimeRelease.catalogue.first { $0.id == entry.lastPathComponent }
+                let executableURL = release
+                    .map { entry.appending(path: $0.executableSubpath) }
+                    ?? executable(inBinDirectory: entry.appending(path: "Contents/Resources/wine/bin"))
+                    ?? entry.appending(path: "bin/wine64")
+
                 var runtime = Runtime(id: "managed:\(entry.lastPathComponent)",
-                                      name: entry.lastPathComponent,
-                                      executableURL: entry.appending(path: "bin/wine64"),
+                                      name: release?.name ?? entry.lastPathComponent,
+                                      executableURL: executableURL,
                                       origin: .managed)
                 guard runtime.isInstalled else { continue }
                 runtime.version = runtime.resolvedVersion()
@@ -184,9 +208,16 @@ extension Runtime {
         }
 
         for candidate in externalCandidates {
-            var runtime = Runtime(id: "external:\(candidate.path)",
+            let listed = URL(filePath: candidate.path)
+            guard let executableURL = executable(inBinDirectory: listed.deletingLastPathComponent()) else { continue }
+
+            // Two candidates can resolve to the same binary (a Homebrew symlink pointing
+            // into an app bundle, say); keep the first and don't list it twice.
+            guard !discovered.contains(where: { $0.executableURL.standardizedFileURL == executableURL.standardizedFileURL }) else { continue }
+
+            var runtime = Runtime(id: "external:\(executableURL.path)",
                                   name: candidate.name,
-                                  executableURL: .init(filePath: candidate.path),
+                                  executableURL: executableURL,
                                   origin: .external)
             guard runtime.isInstalled else { continue }
             runtime.version = runtime.resolvedVersion()

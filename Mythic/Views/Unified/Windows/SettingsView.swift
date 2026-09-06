@@ -324,6 +324,12 @@ extension SettingsView {
         @State private var isServicesDiscordSectionExpanded: Bool = true
         @State private var isServicesEpicSectionExpanded: Bool = true
         @State private var isServicesSteamSectionExpanded: Bool = true
+        @State private var isServicesRuntimesSectionExpanded: Bool = true
+
+        @State private var installedRuntimes: [Runtime] = []
+        @State private var installingRuntimeID: String?
+        @State private var installStage: RuntimeInstaller.Stage?
+        @State private var runtimeInstallError: String?
 
         @State private var isCleaning: Bool = false
         @State private var isCleanupSuccessful: Bool?
@@ -456,6 +462,107 @@ extension SettingsView {
                 } else {
                     Text("Steam hasn't been set up yet. Use Import Game > Steam from your library to set it up.")
                         .foregroundStyle(.secondary)
+                }
+            }
+
+            Section("Wine Runtimes", isExpanded: $isServicesRuntimesSectionExpanded) {
+                ForEach(installedRuntimes) { runtime in
+                    HStack {
+                        Image(systemName: runtime.isManagedByMythic ? "shippingbox.fill" : "shippingbox")
+                            .foregroundStyle(.secondary)
+
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(runtime.name)
+                            Text(runtime.version.map { "wine \($0.description)" } ?? String(localized: "unknown version"))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        Spacer()
+
+                        if !runtime.isManagedByMythic {
+                            Text("Installed separately")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+                }
+
+                ForEach(RuntimeRelease.catalogue.filter { release in
+                    !installedRuntimes.contains { $0.id == "managed:\(release.id)" }
+                }) { release in
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(release.name)
+                                Text(release.summary)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+
+                            Spacer()
+
+                            Button("Install") {
+                                install(release)
+                            }
+                            .disabled(installingRuntimeID != nil)
+                        }
+
+                        if installingRuntimeID == release.id {
+                            HStack(spacing: 6) {
+                                if case .downloading(let fraction) = installStage, let fraction {
+                                    ProgressView(value: fraction)
+                                } else {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                }
+
+                                Text(installStage?.localizedDescription ?? "")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+
+                if let runtimeInstallError {
+                    Text(runtimeInstallError)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .task { refreshRuntimes() }
+        }
+
+        private func refreshRuntimes() {
+            installedRuntimes = Runtime.discoverAll()
+        }
+
+        private func install(_ release: RuntimeRelease) {
+            runtimeInstallError = nil
+            installingRuntimeID = release.id
+
+            Task {
+                defer {
+                    installingRuntimeID = nil
+                    installStage = nil
+                    refreshRuntimes()
+                }
+
+                do {
+                    try await RuntimeInstaller.install(release) { stage in
+                        Task { @MainActor in installStage = stage }
+                    }
+                } catch {
+                    // Include the underlying reason: "didn't contain the files Mythic
+                    // expected" alone isn't something anyone can act on, whereas naming
+                    // the missing path is.
+                    let reason = (error as? LocalizedError)?.failureReason
+                    runtimeInstallError = [error.localizedDescription, reason]
+                        .compactMap { $0 }
+                        .joined(separator: "\n")
                 }
             }
         }
