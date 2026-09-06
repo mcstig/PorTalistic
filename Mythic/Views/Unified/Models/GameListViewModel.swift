@@ -62,6 +62,16 @@ import OSLog
             }
     }
     
+    /// ``sortedLibrary`` narrowed to a single storefront, or all of it when `storefront` is nil.
+    ///
+    /// Deliberately *not* implemented by pushing a `.storefront` search token: the tokens are
+    /// the user's own filter, shared across the whole app, and having navigation quietly
+    /// rewrite them means the sidebar and the filter menu fight each other.
+    func library(inStorefront storefront: Game.Storefront?) -> [Game] {
+        guard let storefront else { return sortedLibrary }
+        return sortedLibrary.filter { $0.storefront == storefront }
+    }
+
     var suggestedTokens: [SearchToken] {
         var suggestions: [SearchToken] = []
         

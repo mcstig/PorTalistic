@@ -105,9 +105,17 @@ struct SteamGameImportView: View {
                     }
 
                     if let openErrorDescription {
-                        Label(openErrorDescription, systemImage: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.orange)
-                            .fixedSize(horizontal: false, vertical: true)
+                        // Bounded and scrollable on purpose. The sheet sizes itself to its
+                        // content, so a long message doesn't wrap — it grows the window
+                        // until the whole thing looks frozen.
+                        ScrollView {
+                            Label(openErrorDescription, systemImage: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange)
+                                .textSelection(.enabled)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .frame(maxHeight: 90)
                     }
 
                     if let scanErrorDescription {

@@ -35,16 +35,40 @@ struct ContentView: View {
                                 .help("Everything in one place")
                         }
                         
-                        NavigationLink(destination: LibraryView()) {
-                            Label("Library", systemImage: "books.vertical")
-                                .help("View your games")
-                        }
-                        
                         NavigationLink(destination: StoreView()) {
                             Label("Store", systemImage: "bag")
                                 .help("Purchase new games from Epic")
                         }
                     }
+
+                    // One shelf per storefront. Epic and Steam are installed, updated,
+                    // launched and broken in completely different ways, so a single list
+                    // that mixes them means every action has to be qualified by "…but which
+                    // kind of game is this?" — for the user and for the code.
+                    Section {
+                        NavigationLink(destination: LibraryView()) {
+                            Label("All Games", systemImage: "books.vertical")
+                                .help("Every game, from every storefront")
+                        }
+
+                        NavigationLink(destination: LibraryView(storefront: .epicGames)) {
+                            Label("Epic Games", systemImage: "gamecontroller")
+                                .help("Games from your Epic Games library")
+                        }
+
+                        NavigationLink(destination: LibraryView(storefront: .steam)) {
+                            Label("Steam", systemImage: "cloud")
+                                .help("Games installed through the Steam client")
+                        }
+
+                        NavigationLink(destination: LibraryView(storefront: .local)) {
+                            Label("Local", systemImage: "internaldrive")
+                                .help("Games you added from your own disk")
+                        }
+                    } header: {
+                        Text("Library")
+                    }
+
                     
                     Section {
                         NavigationLink(destination: ContainersView()) {

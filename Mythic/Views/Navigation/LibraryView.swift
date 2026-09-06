@@ -13,6 +13,9 @@ import SwordRPC
 
 /// A view displaying the user's library of games.
 struct LibraryView: View {
+    /// Which storefront this library shows. `nil` is the combined view.
+    var storefront: Game.Storefront?
+
     @Bindable var gameDataStore: GameDataStore = .shared
     @ObservedObject private var variables: VariableManager = .shared
 
@@ -21,8 +24,8 @@ struct LibraryView: View {
     @CodableAppStorage("gameListLayout") var gameListLayout: GameListViewModel.Layout = .grid
 
     var body: some View {
-        GameListView()
-            .navigationTitle("Library")
+        GameListView(storefront: storefront)
+            .navigationTitle(storefront?.description ?? String(localized: "All Games"))
         
             .toolbar {
                 ToolbarItem(placement: .status) {
@@ -40,7 +43,8 @@ struct LibraryView: View {
                     } label: {
                         Label("Import Game", systemImage: "plus.app")
                     }
-                    .help("Import a game")
+                    .help(storefront.map { String(localized: "Import a \($0.description) game") }
+                          ?? String(localized: "Import a game"))
                 }
                 
                 ToolbarItem(placement: .automatic) {
@@ -72,10 +76,15 @@ struct LibraryView: View {
                                 }
                             }
                             
-                            Section("Storefront") {
-                                ForEach(Game.Storefront.allCases, id: \.self) { storefront in
-                                    Toggle(storefront.description,
-                                           isOn: searchTokenBinding(for: .storefront(storefront)))
+                            // Only in the combined view: filtering "Storefront" while
+                            // already inside Steam's library is a control that can only
+                            // make the list wrong.
+                            if storefront == nil {
+                                Section("Storefront") {
+                                    ForEach(Game.Storefront.allCases, id: \.self) { candidate in
+                                        Toggle(candidate.description,
+                                               isOn: searchTokenBinding(for: .storefront(candidate)))
+                                    }
                                 }
                             }
                             
@@ -98,7 +107,8 @@ struct LibraryView: View {
             .task(priority: .background) {
                 discordRPC.setPresence({
                     var presence: RichPresence = .init()
-                    presence.details = "Looking through their game library"
+                    presence.details = storefront.map { "Looking through their \($0.description) library" }
+                        ?? "Looking through their game library"
                     presence.state = "Viewing Library"
                     presence.timestamps.start = .now
                     presence.assets.largeImage = "macos_512x512_2x"
@@ -108,8 +118,7 @@ struct LibraryView: View {
             }
         
             .sheet(isPresented: $isGameImportSheetPresented) {
-                GameImportView(isPresented: $isGameImportSheetPresented)
-                    .fixedSize()
+                GameImportView(isPresented: $isGameImportSheetPresented, storefront: storefront)
             }
     }
     

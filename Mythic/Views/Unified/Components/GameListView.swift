@@ -11,6 +11,9 @@ import Foundation
 import SwiftUI
 
 struct GameListView: View {
+    /// Which storefront this list shows. `nil` shows everything.
+    var storefront: Game.Storefront?
+
     @Bindable var viewModel: GameListViewModel = .shared
     @Bindable var gameDataStore: GameDataStore = .shared
     
@@ -19,21 +22,20 @@ struct GameListView: View {
     
     @State private var isGameImportViewPresented: Bool = false
     
+    private var games: [Game] { viewModel.library(inStorefront: storefront) }
+
     var body: some View {
         VStack {
-            if gameDataStore.library.isEmpty {
+            if games.isEmpty {
                 ContentUnavailableView(
-                    "No games found. 😢",
+                    emptyTitle,
                     systemImage: "folder.badge.questionmark",
-                    description: Text("""
-                        Games in your library will appear here.
-                        If there are games in your library and they're not appearing, try restarting Mythic.
-                        """)
+                    description: Text(emptyDescription)
                 )
                 .task {
                     try? await gameDataStore.refreshFromStorefronts()
                 }
-                
+
                 Button {
                     isGameImportViewPresented = true
                 } label: {
@@ -42,7 +44,9 @@ struct GameListView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .sheet(isPresented: $isGameImportViewPresented) {
-                    GameImportView(isPresented: $isGameImportViewPresented)
+                    // Opens on this list's storefront — there is no reason to ask again
+                    // which storefront you meant when you asked from inside its library.
+                    GameImportView(isPresented: $isGameImportViewPresented, storefront: storefront)
                 }
             } else {
                 ScrollView(.vertical) {
@@ -51,14 +55,14 @@ struct GameListView: View {
                     switch layout {
                     case .grid:
                         LazyVGrid(columns: [.init(.adaptive(minimum: gameCardSize))]) {
-                            ForEach(viewModel.sortedLibrary) { game in
+                            ForEach(games) { game in
                                 GameCard(game: .constant(game))
                             }
                         }
                         .padding()
                     case .list:
                         LazyVStack {
-                            ForEach(viewModel.sortedLibrary) { game in
+                            ForEach(games) { game in
                                 ListGameCard(game: .constant(game))
                             }
                         }
@@ -85,7 +89,32 @@ struct GameListView: View {
             }
         }
         .animation(.easeInOut, value: layout)
-        .animation(.default, value: viewModel.sortedLibrary)
+        .animation(.default, value: games)
+    }
+
+    /// Empty-state copy that names the storefront being looked at, rather than claiming the
+    /// whole library is empty when it's only this one shelf that is.
+    private var emptyTitle: String {
+        guard let storefront else { return String(localized: "No games found. 😢") }
+        return String(localized: "No \(storefront.description) games yet.")
+    }
+
+    private var emptyDescription: String {
+        guard let storefront else {
+            return String(localized: """
+                Games in your library will appear here.
+                If there are games in your library and they're not appearing, try restarting Mythic.
+                """)
+        }
+
+        switch storefront {
+        case .epicGames:
+            return String(localized: "Sign in to Epic Games and your library will appear here.")
+        case .steam:
+            return String(localized: "Set up Steam, sign in to the Steam client, and the games you've installed will appear here.")
+        case .local:
+            return String(localized: "Games you add from your own disk will appear here.")
+        }
     }
 }
     

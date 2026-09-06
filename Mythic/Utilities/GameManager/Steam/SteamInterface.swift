@@ -360,11 +360,11 @@ final class Steam {
         }
 
         let fatal = contents
-            .split(separator: "\n")
+            .split(whereSeparator: \.isNewline)
             .first { $0.contains("wine client error") || $0.contains("err:module:") }
 
         guard let fatal else { return nil }
-        return String(fatal).trimmingCharacters(in: .whitespaces)
+        return String(fatal.trimmingCharacters(in: .whitespaces).prefix(displayedReasonLimit))
     }
 
     /// The last error the Steam bootstrapper recorded, in its own words.
@@ -379,15 +379,28 @@ final class Steam {
             return nil
         }
 
-        // Walk backwards: the most recent run's failure is the one worth reporting.
-        for line in contents.split(separator: "\n").reversed() {
+        // Only this launch. The bootstrapper appends run after run to the same file, so
+        // scanning the whole thing reports a failure from days ago as though it just
+        // happened — which is worse than saying nothing, because it's confidently wrong.
+        let lines = contents.split(whereSeparator: \.isNewline)
+        let currentRun = lines.lastIndex { $0.contains("Startup - updater built") }
+            .map { Array(lines[$0...]) } ?? Array(lines)
+
+        for line in currentRun.reversed() {
             guard let marker = line.range(of: "] Error: ") else { continue }
             let message = line[marker.upperBound...].trimmingCharacters(in: .whitespaces)
-            return message.isEmpty ? nil : message
+            return message.isEmpty ? nil : String(message.prefix(displayedReasonLimit))
         }
 
         return nil
     }
+
+    /// How much of a log line is worth putting in front of someone.
+    ///
+    /// Any of these readers can, in principle, hand back something enormous, and the import
+    /// sheet sizes itself to its content — so an unbounded string doesn't produce an ugly
+    /// label, it produces a window thousands of points tall that looks like the app has hung.
+    private static let displayedReasonLimit = 400
     struct NotInstalledError: LocalizedError {
         var errorDescription: String? = String(localized: "The Steam client hasn't been installed into Mythic's Steam container yet. Use Set Up Steam first.")
     }
