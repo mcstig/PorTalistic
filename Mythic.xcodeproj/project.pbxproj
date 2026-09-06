@@ -111,6 +111,7 @@
 		6AA1744F2CD5CC290035B081 /* WhatsNewKit in Frameworks */ = {isa = PBXBuildFile; productRef = 6AA1744E2CD5CC290035B081 /* WhatsNewKit */; };
 		6AA445762EABA0E80064A14F /* Engine+UpdateCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6AA445752EABA0DF0064A14F /* Engine+UpdateCatalog.swift */; };
 		6AA445792EABB1300064A14F /* Engine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6AA445782EABB12D0064A14F /* Engine.swift */; };
+		623C9019C1E73FCE5E33CA66 /* Runtime.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2A4A3B97BB3FC883BFE7F13 /* Runtime.swift */; };
 		6AA4457B2EABBB3A0064A14F /* SemanticVersion+Codable(PropertyList).swift in Sources */ = {isa = PBXBuildFile; fileRef = 6AA4457A2EABBB350064A14F /* SemanticVersion+Codable(PropertyList).swift */; };
 		6AACEF752C18846700258A7E /* exeIcon.icns in Resources */ = {isa = PBXBuildFile; fileRef = 6AACEF742C18846700258A7E /* exeIcon.icns */; };
 		6AAD31152B08693D0035FA69 /* SemanticVersion in Frameworks */ = {isa = PBXBuildFile; productRef = 6AAD31142B08693D0035FA69 /* SemanticVersion */; };
@@ -251,6 +252,7 @@
 		6AA134C42EC30C7D00632FDE /* WineInterface+DXVK.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WineInterface+DXVK.swift"; sourceTree = "<group>"; };
 		6AA445752EABA0DF0064A14F /* Engine+UpdateCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Engine+UpdateCatalog.swift"; sourceTree = "<group>"; };
 		6AA445782EABB12D0064A14F /* Engine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Engine.swift; sourceTree = "<group>"; };
+		D2A4A3B97BB3FC883BFE7F13 /* Runtime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Runtime.swift; sourceTree = "<group>"; };
 		6AA4457A2EABBB350064A14F /* SemanticVersion+Codable(PropertyList).swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SemanticVersion+Codable(PropertyList).swift"; sourceTree = "<group>"; };
 		6AACEF742C18846700258A7E /* exeIcon.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; path = exeIcon.icns; sourceTree = "<group>"; };
 		6AB474952AACBBE900AB9C63 /* Mythic.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Mythic.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -380,6 +382,7 @@
 			isa = PBXGroup;
 			children = (
 				6AA445782EABB12D0064A14F /* Engine.swift */,
+				D2A4A3B97BB3FC883BFE7F13 /* Runtime.swift */,
 				6AA445752EABA0DF0064A14F /* Engine+UpdateCatalog.swift */,
 				6A0CB97F2EACCCA900757AC5 /* Engine+Extensions.swift */,
 			);
@@ -855,6 +858,7 @@
 				1217C8BA2EADC544003EC8C9 /* RichAlertView.swift in Sources */,
 				6A2935382BFCFAFD0035CE4B /* Logger+Extensions.swift in Sources */,
 				6AA445792EABB1300064A14F /* Engine.swift in Sources */,
+				623C9019C1E73FCE5E33CA66 /* Runtime.swift in Sources */,
 				6A2935372BFCFAFD0035CE4B /* Data+Extensions.swift in Sources */,
 				6A8080D52EA3611A00F10A00 /* OnboardingViewModel.swift in Sources */,
 				6A29353D2BFCFAFD0035CE4B /* LegendaryInterface.swift in Sources */,
@@ -1067,7 +1071,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 4494;
+				CURRENT_PROJECT_VERSION = 4496;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_ASSET_PATHS = "\"Mythic/Preview Content\"";
@@ -1115,7 +1119,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 4494;
+				CURRENT_PROJECT_VERSION = 4496;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_ASSET_PATHS = "\"Mythic/Preview Content\"";
