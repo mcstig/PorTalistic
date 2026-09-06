@@ -334,7 +334,9 @@ extension SettingsView {
         @State private var isOpeningSteam: Bool = false
         @State private var isOpeningSteamSuccessful: Bool?
 
-        @State private var isResettingSteamContainer: Bool = false
+        @State private var isExportingSteamDiagnostics: Bool = false
+    @State private var isExportingSteamDiagnosticsSuccessful: Bool?
+    @State private var isResettingSteamContainer: Bool = false
         @State private var isResettingSteamContainerSuccessful: Bool?
         @State private var isResetSteamContainerAlertPresented: Bool = false
 
@@ -403,6 +405,22 @@ extension SettingsView {
                             isOpeningSteamSuccessful = false
                         }
                     }
+
+                    OperationButton(
+                        "Export Steam Diagnostics",
+                        systemImage: "stethoscope",
+                        operating: $isExportingSteamDiagnostics,
+                        successful: $isExportingSteamDiagnosticsSuccessful
+                    ) {
+                        do {
+                            let destination = try await Steam.exportDiagnostics()
+                            isExportingSteamDiagnosticsSuccessful = true
+                            NSWorkspace.shared.activateFileViewerSelecting([destination])
+                        } catch {
+                            isExportingSteamDiagnosticsSuccessful = false
+                        }
+                    }
+                    .help("Collects the Steam container's logs and install state into a folder, for diagnosing launch failures.")
 
                     OperationButton(
                         "Reset Steam Container",
