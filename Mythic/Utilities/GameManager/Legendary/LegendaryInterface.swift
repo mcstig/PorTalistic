@@ -38,11 +38,18 @@ final class Legendary {
 
     @MainActor
     private static func applyOfflineFlagIfNeeded(_ currentArguments: [String]) -> [String] {
-        var modifiedArguments = currentArguments
-        if NetworkMonitor.shared.epicAccessibilityState != .accessible {
-            modifiedArguments.append("--offline")
+        // Only fall back to offline mode when Epic has been *confirmed* unreachable.
+        //
+        // This previously tested `!= .accessible`, which is also true while the
+        // reachability probe is still running and — crucially — before it has ever run,
+        // because `epicAccessibilityState` starts as `nil`. Any legendary command issued
+        // in that window silently ran with `--offline`: signing in would fail, and the
+        // library would come back empty, with no indication why.
+        guard case .inaccessible = NetworkMonitor.shared.epicAccessibilityState else {
+            return currentArguments
         }
-        return modifiedArguments
+
+        return currentArguments + ["--offline"]
     }
     
     ///
@@ -68,11 +75,17 @@ final class Legendary {
 
     /// Modify a process' properties to call `legendary`.
     /// This will modify `executableURL`, `arguments`, and `environment`, and passthrough existing values.
-    static func transformProcess(_ process: Process) async {
+    /// - Parameter allowOfflineFallback: Whether this command may be run with `--offline`
+    ///   when Epic is unreachable. Pass `false` for commands that are meaningless offline —
+    ///   authentication above all, where the flag turns a recoverable network problem into
+    ///   a flat "unable to sign in".
+    static func transformProcess(_ process: Process, allowOfflineFallback: Bool = true) async {
         process.executableURL = legendaryExecutableURL
         
-        let capturedArguments = process.arguments
-        let arguments = await applyOfflineFlagIfNeeded(capturedArguments ?? [])
+        let capturedArguments = process.arguments ?? []
+        let arguments = allowOfflineFallback
+            ? await applyOfflineFlagIfNeeded(capturedArguments)
+            : capturedArguments
         process.arguments = arguments
         
         let capturedEnvironment = process.environment
@@ -488,7 +501,8 @@ final class Legendary {
     static func signIn(authKey: String) async throws -> String {
         let process: Process = .init()
         process.arguments = ["auth", "--code", authKey]
-        await transformProcess(process)
+        // Authentication can't work offline, so never let the offline fallback apply here.
+        await transformProcess(process, allowOfflineFallback: false)
         
         let result = try await process.runWrapped()
         
@@ -499,6 +513,24 @@ final class Legendary {
             // refresh failure should not affect signin capability
             try? await GameDataStore.shared.refreshFromStorefronts()
             return String(username)
+        }
+
+        // Legendary explains itself on stderr. Throwing a bare `SignInError` here discarded
+        // that explanation and left the user with "Unable to sign in to Epic Games." twice
+        // over, with nothing to act on. Surface what it actually said.
+        if let standardError = result.standardError {
+            log.error("Epic sign-in failed. legendary output: \(standardError, privacy: .public)")
+            try handleCLIErrorOutput(fromStandardErrorOutput: standardError)
+
+            let detail = standardError
+                .split(whereSeparator: \.isNewline)
+                .last
+                .map(String.init)?
+                .trimmingCharacters(in: .whitespaces)
+
+            if let detail, !detail.isEmpty {
+                throw GenericError(reason: detail)
+            }
         }
 
         throw SignInError()
@@ -672,13 +704,19 @@ final class Legendary {
     /// Queries for the user that is currently signed into epic games.
     static func retrieveUser() throws -> String? {
         let userURL: URL = configurationFolder.appending(path: "user.json")
-        
-        guard let userData = try? Data(contentsOf: userURL),
-              let userObject = try? JSONDecoder().decode(User.self, from: userData) else {
+
+        guard let userData = try? Data(contentsOf: userURL) else { return nil }
+
+        do {
+            return try JSONDecoder().decode(User.self, from: userData).displayName
+        } catch {
+            // Worth shouting about: legendary is authenticated (the file exists) but we
+            // can't read it, so the app is about to claim the user is signed out and show
+            // an empty library. Silently returning nil here made that indistinguishable
+            // from never having signed in.
+            log.error("legendary is signed in, but user.json couldn't be decoded: \(error, privacy: .public)")
             return nil
         }
-
-        return userObject.displayName
     }
 
     /// Checks account signin state.
@@ -707,22 +745,57 @@ final class Legendary {
         }
     }
 
+    /// Asks legendary to fetch the signed-in account's catalogue from Epic and cache it
+    /// into `metadata/`.
+    ///
+    /// This step is what actually populates the library. ``getInstallableGames()`` only
+    /// *reads* that cache — so without this the app can be signed in perfectly happily and
+    /// still show an empty library forever, which is exactly what it did.
+    ///
+    /// - Parameter forceRefresh: Bypass legendary's own caching and re-fetch from Epic.
+    ///   Use for an explicit, user-initiated refresh; the default is enough on launch.
+    static func refreshLibraryMetadata(forceRefresh: Bool = false) async throws {
+        guard isSignedIn else { throw NotSignedInError() }
+
+        let process: Process = .init()
+        process.arguments = ["list"] + (forceRefresh ? ["--force-refresh"] : [])
+        await transformProcess(process)
+
+        let result = try await process.runWrapped()
+
+        if let standardError = result.standardError {
+            try handleCLIErrorOutput(fromStandardErrorOutput: standardError)
+        }
+    }
+
     static func getInstallableGames() throws -> [EpicGamesGame] {
         guard isSignedIn else { throw NotSignedInError() }
 
         let metadataDirectory: URL = configurationFolder.appending(path: "metadata")
 
+        // A signed-in account that has never successfully fetched its catalogue has no
+        // metadata directory at all. Treat that as "nothing cached yet" rather than an
+        // error, so a failed refresh degrades to an empty library instead of taking the
+        // whole storefront sync down with it.
+        guard FileManager.default.fileExists(atPath: metadataDirectory.path) else { return [] }
+
         return try {
-            try FileManager.default.contentsOfDirectory(atPath: metadataDirectory.path).map { fileName -> EpicGamesGame in
-                let data = try Data(contentsOf: metadataDirectory.appending(path: fileName))
-                let metadata = try JSONDecoder().decode(GameMetadata.self, from: data)
+            try FileManager.default.contentsOfDirectory(atPath: metadataDirectory.path)
+                .filter { $0.hasSuffix(".json") }
+                .compactMap { fileName -> EpicGamesGame? in
+                    let data = try Data(contentsOf: metadataDirectory.appending(path: fileName))
 
-                let game: EpicGamesGame = .init(id: metadata.appName,
-                                                title: metadata.appTitle,
-                                                installationState: .uninstalled)
+                    // One unparseable entry (a new field, a partial write) shouldn't blank
+                    // out the entire library — skip it and keep the rest.
+                    guard let metadata = try? JSONDecoder().decode(GameMetadata.self, from: data) else {
+                        log.warning("Skipping unreadable Epic metadata file: \(fileName, privacy: .public)")
+                        return nil
+                    }
 
-                return game
-            }
+                    return .init(id: metadata.appName,
+                                 title: metadata.appTitle,
+                                 installationState: .uninstalled)
+                }
         }()
     }
 

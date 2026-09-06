@@ -310,53 +310,58 @@ extension Legendary {
             case tokenType = "token_type"
         }
 
+        /// Parses an ISO-8601 timestamp with or without fractional seconds.
+        ///
+        /// `ISO8601DateFormatter` is strict: a formatter configured `.withFractionalSeconds`
+        /// returns nil for "2026-09-05T20:23:01Z", and one without it returns nil for
+        /// "...:01.000Z". Epic emits both shapes, so try each.
+        private static func parseTimestamp(_ value: String) -> Date? {
+            let withFraction: ISO8601DateFormatter = .init()
+            withFraction.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+
+            let withoutFraction: ISO8601DateFormatter = .init()
+            withoutFraction.formatOptions = [.withInternetDateTime]
+
+            return withFraction.date(from: value) ?? withoutFraction.date(from: value)
+        }
+
         init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
-            let dateFormatter: ISO8601DateFormatter = .init()
-            dateFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
 
-            accessToken = try container.decode(String.self, forKey: .accessToken)
-            accountID = try container.decode(String.self, forKey: .accountID)
-            acr = try container.decode(String.self, forKey: .acr)
-            app = try container.decode(String.self, forKey: .app)
-
-            let authTimeString = try container.decode(String.self, forKey: .authTime)
-            guard let authTimeDate = dateFormatter.date(from: authTimeString) else {
-                throw DecodingError.dataCorruptedError(forKey: .authTime,
-                                                       in: container,
-                                                       debugDescription: "Invalid ISO8601 date format")
-            }
-            authTime = authTimeDate
-
-            clientID = try container.decode(String.self, forKey: .clientID)
-            clientService = try container.decode(String.self, forKey: .clientService)
-            deviceID = try container.decode(String.self, forKey: .deviceID)
+            // Only `displayName` is actually consumed by Mythic (`Legendary.retrieveUser()`),
+            // and `isSignedIn` is derived from whether this decode succeeds at all.
+            //
+            // Every other field was previously required, and both timestamps had to carry
+            // fractional seconds. So a single renamed, dropped or differently-formatted
+            // field in Epic's token response made the whole decode throw — and the app then
+            // reported "Not signed in" and an empty library, while legendary itself was
+            // perfectly authenticated. Nothing surfaced the real cause.
+            //
+            // Decoding is now tolerant: anything non-essential that's missing or malformed
+            // falls back rather than signing the user out.
             displayName = try container.decode(String.self, forKey: .displayName)
 
-            let expiresAtString = try container.decode(String.self, forKey: .expiresAt)
-            guard let expiresAtDate = dateFormatter.date(from: expiresAtString) else {
-                throw DecodingError.dataCorruptedError(forKey: .expiresAt,
-                                                       in: container,
-                                                       debugDescription: "Invalid ISO8601 date format")
-            }
-            expiresAt = expiresAtDate
+            accessToken = try container.decodeIfPresent(String.self, forKey: .accessToken) ?? ""
+            accountID = try container.decodeIfPresent(String.self, forKey: .accountID) ?? ""
+            acr = try container.decodeIfPresent(String.self, forKey: .acr) ?? ""
+            app = try container.decodeIfPresent(String.self, forKey: .app) ?? ""
+            clientID = try container.decodeIfPresent(String.self, forKey: .clientID) ?? ""
+            clientService = try container.decodeIfPresent(String.self, forKey: .clientService) ?? ""
+            deviceID = try container.decodeIfPresent(String.self, forKey: .deviceID) ?? ""
+            expiresIn = try container.decodeIfPresent(Int.self, forKey: .expiresIn) ?? 0
+            inAppID = try container.decodeIfPresent(String.self, forKey: .inAppID) ?? ""
+            internalClient = try container.decodeIfPresent(Bool.self, forKey: .internalClient) ?? false
+            refreshExpires = try container.decodeIfPresent(Int.self, forKey: .refreshExpires) ?? 0
+            refreshToken = try container.decodeIfPresent(String.self, forKey: .refreshToken) ?? ""
+            scope = try container.decodeIfPresent([String].self, forKey: .scope) ?? []
+            tokenType = try container.decodeIfPresent(String.self, forKey: .tokenType) ?? ""
 
-            expiresIn = try container.decode(Int.self, forKey: .expiresIn)
-            inAppID = try container.decode(String.self, forKey: .inAppID)
-            internalClient = try container.decode(Bool.self, forKey: .internalClient)
-            refreshExpires = try container.decode(Int.self, forKey: .refreshExpires)
-
-            let refreshExpiresAtString = try container.decode(String.self, forKey: .refreshExpiresAt)
-            guard let refreshExpiresAtDate = dateFormatter.date(from: refreshExpiresAtString) else {
-                throw DecodingError.dataCorruptedError(forKey: .refreshExpiresAt,
-                                                       in: container,
-                                                       debugDescription: "Invalid ISO8601 date format")
-            }
-            refreshExpiresAt = refreshExpiresAtDate
-
-            refreshToken = try container.decode(String.self, forKey: .refreshToken)
-            scope = try container.decode([String].self, forKey: .scope)
-            tokenType = try container.decode(String.self, forKey: .tokenType)
+            authTime = (try container.decodeIfPresent(String.self, forKey: .authTime))
+                .flatMap(Self.parseTimestamp) ?? .distantPast
+            expiresAt = (try container.decodeIfPresent(String.self, forKey: .expiresAt))
+                .flatMap(Self.parseTimestamp) ?? .distantPast
+            refreshExpiresAt = (try container.decodeIfPresent(String.self, forKey: .refreshExpiresAt))
+                .flatMap(Self.parseTimestamp) ?? .distantPast
         }
 
         func encode(to encoder: Encoder) throws {

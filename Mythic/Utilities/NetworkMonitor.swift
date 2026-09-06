@@ -12,6 +12,7 @@
 import Foundation
 import Network
 import SwiftUI
+import OSLog
 
 final class NetworkMonitor: ObservableObject, @unchecked Sendable {
     static let shared: NetworkMonitor = .init()
@@ -55,11 +56,25 @@ final class NetworkMonitor: ObservableObject, @unchecked Sendable {
             timeoutInterval: .init(5)
         )
 
-        let (_, response) = try await URLSession.shared.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
 
-        await MainActor.run {
-            self.epicAccessibilityState = (200...299).contains(httpResponse.statusCode) ? .accessible : .inaccessible
+            // Anything that answered is good enough to call Epic reachable. Restricting this
+            // to 2xx meant a redirect, a bot-protection 403, or a maintenance page put the
+            // app into offline mode for the whole session.
+            let reachable = httpResponse.statusCode < 500
+            await MainActor.run {
+                self.epicAccessibilityState = reachable ? .accessible : .inaccessible
+            }
+        } catch {
+            // Leaving this as `.checking` on failure stranded the app in a state that reads
+            // as "not accessible" forever. Record the real outcome instead.
+            Logger.app.warning("Epic reachability check failed: \(error.localizedDescription)")
+            await MainActor.run {
+                self.epicAccessibilityState = .inaccessible
+            }
+            throw error
         }
     }
 }

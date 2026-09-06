@@ -155,6 +155,35 @@ final class Steam {
         }
     }
 
+    /// Launch arguments Mythic always passes to the real Steam client.
+    ///
+    /// Steam's bootstrapper is *the* failure point when running the Windows client under
+    /// Wine. Left to itself it tries to self-update on every launch, fails partway through,
+    /// and dies with "Steam needs to be online to update. Please confirm your network
+    /// connection and try again" — even when the network is perfectly fine. The client is
+    /// already fully installed at that point; it just refuses to start.
+    ///
+    /// These flags stop it doing that, and are the long-standing workaround the Wine
+    /// community (Lutris, Bottles, Proton) settled on for the same bug:
+    ///
+    /// - `-no-cef-sandbox`: Steam's Chromium UI can't run its sandbox under Wine.
+    /// - `-noverifyfiles`: skip the file-verification pass that kicks off the update loop.
+    /// - `-nobootstrapupdate`: don't try to replace the bootstrapper itself.
+    /// - `-skipinitialbootstrap`: don't run the initial bootstrap at all.
+    /// - `-norepairfiles`: don't "repair" (re-download) a install that isn't broken.
+    ///
+    /// - Note: These suppress Steam's *self*-update. Game downloads, updates, login, cloud
+    ///   saves and the rest are untouched and still work normally.
+    /// - Important: update-suppression flags (`-noverifyfiles`, `-nobootstrapupdate`,
+    ///   `-skipinitialbootstrap`, `-norepairfiles`) are deliberately NOT here. What Steam's
+    ///   installer puts in the container is only the bootstrapper — `steamui.dll` and the
+    ///   rest of the client are downloaded on first run. Those flags suppress exactly that
+    ///   download, so the client comes up and immediately dies with "Failed to load
+    ///   steamui.dll". Verified both ways on a clean container.
+    static let clientLaunchArguments: [String] = [
+        "-no-cef-sandbox"
+    ]
+
     /// Opens the real Steam client's window (installing/launching the container's copy if needed).
     /// This is the entry point for a user to sign in, browse the store, and install/update games —
     /// Mythic deliberately doesn't try to automate that part.
@@ -165,7 +194,7 @@ final class Steam {
         guard isClientInstalled else { throw NotInstalledError() }
 
         let process: Process = .init()
-        process.arguments = [steamExecutableURL(containerURL: container.url).path]
+        process.arguments = [steamExecutableURL(containerURL: container.url).path] + clientLaunchArguments
         process.environment = try Wine.assembleEnvironmentVariables(forContainerAtURL: container.url)
         Wine.transformProcess(process, containerURL: container.url)
         try process.run()

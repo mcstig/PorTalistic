@@ -73,6 +73,19 @@ import OSLog
         // legendary (epic games)
         if storefronts.contains(.epicGames) {
             do {
+                // Pull the catalogue down first. `getInstallableGames()` only reads
+                // legendary's on-disk cache, so skipping this leaves a signed-in account
+                // with a permanently empty library.
+                // A refresh failure (offline, Epic down) is not fatal: fall through and
+                // show whatever was cached last time.
+                if Legendary.isSignedIn {
+                    do {
+                        try await Legendary.refreshLibraryMetadata()
+                    } catch {
+                        log.warning("Couldn't refresh the Epic catalogue, using cached data: \(error.localizedDescription)")
+                    }
+                }
+
                 let installables = try Legendary.getInstallableGames()
                 let installed = try Legendary.getInstalledGames()
                 

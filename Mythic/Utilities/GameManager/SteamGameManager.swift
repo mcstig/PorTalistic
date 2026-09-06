@@ -63,8 +63,12 @@ final class SteamGameManager {
             // shortcuts use — Steam resolves the appid to its installed executable,
             // working directory, and any launch options the game/depot specifies,
             // so Mythic never needs to know the game's actual exe path.
-            process.arguments = [Steam.steamExecutableURL(containerURL: containerURL).path,
-                                 "-applaunch", game.appID] + game.launchArguments
+            // The bootstrapper-bypass flags from `Steam.clientLaunchArguments` apply here too:
+            // launching a game starts the client, so it hits the identical self-update failure.
+            process.arguments = [Steam.steamExecutableURL(containerURL: containerURL).path]
+                + Steam.clientLaunchArguments
+                + ["-applaunch", game.appID]
+                + game.launchArguments
             process.environment = try Wine.assembleEnvironmentVariables(forContainerAtURL: containerURL)
             Wine.transformProcess(process, containerURL: containerURL)
 
