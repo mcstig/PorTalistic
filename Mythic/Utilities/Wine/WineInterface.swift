@@ -17,10 +17,12 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
         return "(\(containerURL.prettyPath)) \(description)" + (error != nil ? ": \(error!.localizedDescription)" : (description.hasSuffix(".") ? "" : "."))
     }
     
-    internal static func retrieveVersion() -> SemanticVersion? {
+    internal static func retrieveVersion(forContainerAtURL containerURL: URL? = nil) -> SemanticVersion? {
         let process: Process = .init()
         process.arguments = ["--version"]
-        process.executableURL = Engine.directory.appending(path: "wine/bin/wine64")
+        process.executableURL = containerURL
+            .map { runtime(forContainerAtURL: $0).executableURL }
+            ?? Runtime.bundled.executableURL
         
         let result = try? process.runWrapped()
         
@@ -90,9 +92,29 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
     
     /// Modify a process' properties to call `wine`.
     /// This will modify `executableURL`, and `environment`, and will passthrough existing values.
+    /// The runtime a container runs on, falling back to the bundled engine.
+    ///
+    /// A container records its runtime by id. If that runtime has since been removed, we
+    /// fall back rather than refusing to launch — a missing runtime shouldn't make an
+    /// existing container permanently unusable — but say so, because the prefix was
+    /// migrated by the other build and may misbehave.
+    static func runtime(forContainerAtURL containerURL: URL) -> Runtime {
+        guard let settings = try? getContainerObject(at: containerURL).settings,
+              let runtimeID = settings.runtimeID else {
+            return .bundled
+        }
+
+        guard let resolved = Runtime.discoverAll().first(where: { $0.id == runtimeID }) else {
+            log.warning("Container at \(containerURL.prettyPath) wants runtime '\(runtimeID, privacy: .public)', which isn't installed. Falling back to the bundled engine.")
+            return .bundled
+        }
+
+        return resolved
+    }
+
     static func transformProcess(_ process: Process, containerURL: URL) {
-        process.executableURL = Engine.directory.appending(path: "wine/bin/wine64")
-        
+        process.executableURL = runtime(forContainerAtURL: containerURL).executableURL
+
         let capturedEnvironment = process.environment
         process.environment = constructEnvironment(with: containerURL, additionalVariables: capturedEnvironment ?? [:])
     }
@@ -250,13 +272,19 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
     }
 
     static func killAll(at urls: URL...) throws {
-        let process: Process = .init()
-        process.executableURL = Engine.directory.appending(path: "wine/bin/wineserver")
-        process.arguments = ["-k"]
-
         let urls: [URL] = urls.isEmpty ? .init(containerURLs) : urls
-        
+
         for url in urls {
+            // wineserver has to be the one belonging to the container's own runtime.
+            // Shutting a Wine 11 prefix down with the 7.7 engine's wineserver won't find
+            // the running processes, and the container would appear to hang.
+            let process: Process = .init()
+            process.executableURL = runtime(forContainerAtURL: url)
+                .executableURL
+                .deletingLastPathComponent()
+                .appending(path: "wineserver")
+            process.arguments = ["-k"]
+
             Task {
                 process.environment = ["WINEPREFIX": url.path]
                 process.qualityOfService = .utility
@@ -467,7 +495,7 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
             "XDG_CACHE_HOME": cacheDirectory,
             "WINEPREFIX": containerURL.path,
             "WINE": Engine.wineExecutableURL.path,
-            "WINE64": Engine.wineExecutableURL.path,
+            "WINE64": Engine.wineExecutableURL.path,  // FIXME: should follow the container's runtime
             "WINESERVER": wineBinDirectory.appending(path: "wineserver").path,
             "WINEARCH": "win64",
             "PATH": "\(wineBinDirectory.path):/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin",

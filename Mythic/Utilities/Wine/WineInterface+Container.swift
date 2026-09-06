@@ -108,6 +108,17 @@ extension Wine.Container {
         var scaling: Int
         var avx2: Bool
 
+        /// Which Wine build runs this container, as a ``Runtime/id``.
+        ///
+        /// `nil` means the bundled engine, which is what every container created before
+        /// runtimes existed will decode as.
+        ///
+        /// - Important: A container is effectively married to its runtime. Wine migrates a
+        ///   prefix forward on first run and has no downgrade path, so moving a container
+        ///   from Wine 11 back to the 7.7 engine will not work — see
+        ///   ``Runtime/isCompatible(withPrefixCreatedBy:)``.
+        var runtimeID: String?
+
         init(metalHUD: Bool = false,
              msync: Bool = true,
              retinaMode: Bool = true,
@@ -115,7 +126,9 @@ extension Wine.Container {
              dxvkAsync: Bool = false,
              windowsVersion: Wine.WindowsVersion = .win11,
              scaling: Int = 192,
-             avx2: Bool = true) {
+             avx2: Bool = true,
+             runtimeID: String? = nil) {
+            self.runtimeID = runtimeID
             self.metalHUD = metalHUD
             self.msync = msync
             self.retinaMode = retinaMode
@@ -149,6 +162,7 @@ extension Wine.Container.Settings: Codable {
         case windowsVersion
         case scaling
         case avx2
+        case runtimeID
     }
 
     init(from decoder: Decoder) throws {
@@ -163,6 +177,7 @@ extension Wine.Container.Settings: Codable {
         self.windowsVersion = try container.decodeIfPresent(Wine.WindowsVersion.self, forKey: .windowsVersion) ?? self.windowsVersion
         self.scaling = try container.decodeIfPresent(Int.self, forKey: .scaling) ?? self.scaling
         self.avx2 = try container.decodeIfPresent(Bool.self, forKey: .avx2) ?? self.avx2
+        self.runtimeID = try container.decodeIfPresent(String.self, forKey: .runtimeID)
     }
 }
 

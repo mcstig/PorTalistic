@@ -25,6 +25,8 @@ struct ContainerSettingsView: View {
     @State private var modifyingDXVK: Bool = false
     @State private var dxvkSuccess: Bool?
 
+    @State private var availableRuntimes: [Runtime] = []
+
     @State private var windowsVersion: Wine.WindowsVersion = Wine.Container.Settings().windowsVersion
     @State private var modifyingWindowsVersion: Bool = true // keep progressview displayed until async fetching is complete
     @State private var windowsVersionSuccess: Bool?
@@ -180,6 +182,30 @@ struct ContainerSettingsView: View {
                     set: { container.settings.dxvkAsync = $0 }
                 ))
                 .disabled(!container.settings.dxvk || modifyingDXVK)
+
+                Picker("Wine Runtime", selection: Binding(
+                    get: { container.settings.runtimeID ?? Runtime.bundled.id },
+                    set: { newValue in
+                        container.settings.runtimeID = (newValue == Runtime.bundled.id) ? nil : newValue
+                    }
+                )) {
+                    ForEach(availableRuntimes) { runtime in
+                        Text(runtime.description).tag(runtime.id)
+                    }
+                }
+                .task { availableRuntimes = Runtime.discoverAll() }
+                .help("""
+                    Which Wine build runs this container. Newer builds run newer software                     but drop D3DMetal; the bundled engine has D3DMetal but is older.
+                    """)
+
+                if let selected = availableRuntimes.first(where: { $0.id == (container.settings.runtimeID ?? Runtime.bundled.id) }),
+                   !selected.isCompatible(withPrefixCreatedBy: .bundled) {
+                    Label("""
+                        This container was set up with an older Wine. Wine upgrades a container                         when it first runs and can't downgrade it again, so switching back may                         not work — make a fresh container if something breaks.
+                        """, systemImage: "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
 
                 Picker("Windows Version", selection: $windowsVersion) {
                     ForEach(Wine.WindowsVersion.allCases, id: \.self) { version in
