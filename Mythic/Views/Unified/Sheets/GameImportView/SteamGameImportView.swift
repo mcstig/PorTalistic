@@ -144,7 +144,7 @@ struct SteamGameImportView: View {
                             }
                         }
 
-                        Text("Today's Steam interface doesn't render under Wine — it connects and runs, but draws nothing and closes itself. Installing an older client from the Internet Archive is what Wine and CrossOver users use instead. Valve retires old clients eventually, so if sign-in stops working, try a newer one.")
+                        Text("Today's Steam interface doesn't render under Wine — it connects and runs, but draws nothing and closes itself. Installing an older client from the Internet Archive is what Wine and CrossOver users use instead. Builds around mid-2024 are the ones reported working; late-2025 builds have been tried here and don't. Valve retires old clients eventually, so if sign-in stops working, come back and try a newer one.")
                             .font(.callout)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)

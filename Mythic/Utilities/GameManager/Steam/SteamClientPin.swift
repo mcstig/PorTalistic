@@ -82,14 +82,20 @@ extension SteamClientPin {
     ///
     /// `collapse=digest` gives one entry per *distinct* manifest rather than one per capture,
     /// so the list is actual client builds instead of hundreds of identical crawls.
-    static func availableSnapshots(limit: Int = 25) async throws -> [SteamClientPin] {
+    static func availableSnapshots() async throws -> [SteamClientPin] {
         var components = URLComponents(string: "https://web.archive.org/cdx/search/cdx")!
         components.queryItems = [
             .init(name: "url", value: manifestPath),
             .init(name: "output", value: "json"),
             .init(name: "filter", value: "statuscode:200"),
-            .init(name: "collapse", value: "digest"),
-            .init(name: "limit", value: String(-limit)) // negative: newest captures first
+
+            // One capture per month, across years. Not `limit=-25`: a negative limit asks
+            // for the *newest* captures, so the list only ever contained builds from the
+            // last few months — which are precisely the ones that don't render. Anything
+            // old enough to be worth trying was never offered.
+            .init(name: "collapse", value: "timestamp:6"),
+            .init(name: "from", value: "2022"),
+            .init(name: "to", value: latestUsefulTimestamp)
         ]
 
         let (data, _) = try await URLSession.shared.data(from: components.url!)
@@ -123,13 +129,15 @@ extension SteamClientPin {
             )
         }
 
-        // Newest first, and drop anything from the last few months: those are the builds
-        // whose interface doesn't render here, which is the entire reason for doing this.
-        let cutoff: Date = .now.addingTimeInterval(-60 * 60 * 24 * 120)
-        let usable = pins
-            .filter { formatter.date(from: $0.archiveTimestamp).map { $0 < cutoff } ?? false }
-            .sorted { $0.archiveTimestamp > $1.archiveTimestamp }
-
+        let usable = pins.sorted { $0.archiveTimestamp > $1.archiveTimestamp }
         return usable.isEmpty ? [fallback] : usable
+    }
+
+    /// The newest capture worth offering, as `yyyyMMdd`.
+    ///
+    /// Builds from late 2025 onwards have been tried here and don't render, so listing them
+    /// only wastes a several-hundred-megabyte download to learn something already known.
+    private static var latestUsefulTimestamp: String {
+        "20250601"
     }
 }
