@@ -81,12 +81,17 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
     }
 
     private static func constructEnvironment(with containerURL: URL?, additionalVariables: [String: String] = .init()) -> [String: String] {
-        var constructedEnvironment: [String: String] = .init()
-        
+        // Start from Mythic's own environment rather than an empty one. Setting
+        // `Process.environment` replaces it wholesale, so building from scratch handed every
+        // wine process a world with no HOME, no PATH and no TMPDIR — which is not a
+        // configuration anyone tests Wine in, and which quietly changes how it resolves
+        // helpers and where it puts its runtime state.
+        var constructedEnvironment = ProcessInfo.processInfo.environment
+
         if let containerURL {
             constructedEnvironment["WINEPREFIX"] = containerURL.path
         }
-        
+
         return constructedEnvironment.merging(additionalVariables, uniquingKeysWith: { $1 })
     }
     
