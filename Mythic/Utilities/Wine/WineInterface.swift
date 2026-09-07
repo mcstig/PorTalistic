@@ -323,6 +323,20 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
             try await setWindowsVersion(containerURL: url, version: settings.windowsVersion)
             try await setDisplayScaling(containerURL: url, dpi: settings.scaling)
 
+            // An empty root store makes every HTTPS request inside the container fail in a
+            // way that doesn't mention certificates. See ``Wine/Certificates``.
+            try? await Certificates.installIfMissing(inContainerAtURL: url)
+
+            // A container asked for DXVK and never got it.
+            //
+            // Only the container settings sheet ever called `DXVK.install`, so a container
+            // created with `dxvk: true` came up with the DLL override set and no DLLs to
+            // override with — Direct3D 11 silently on wined3d, in a prefix whose settings said
+            // otherwise. Nothing reported it; you had to read a GPU log to find out.
+            if settings.dxvk {
+                try? await DXVK.install(toContainerAtURL: url)
+            }
+
             log.error("\(formatLog(containerURL: url, description: "Created container"))")
             return newContainer
         } catch {
@@ -342,7 +356,20 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
         environmentVariables["ROSETTA_ADVERTISE_AVX"] = container.settings.avx2.numericalValue.description
 
         if container.settings.dxvk {
-            environmentVariables["WINEDLLOVERRIDES"] = "d3d10core,d3d11=n,b"
+            // `dxgi` is listed for completeness rather than because a file is expected: the
+            // macOS DXVK builds are compiled against Wine's own DXGI and ship no dxgi.dll, so
+            // this half of the override normally falls straight through to `b`. It matters
+            // only for prefixes that were given an upstream DXVK, where d3d11 and dxgi have to
+            // come from the same build or `D3D11CreateDevice` rejects the adapter.
+            //
+            // Worth saying plainly: this line is a promise, not a guarantee. `n,b` means
+            // "native if it's there, builtin otherwise", so a container whose settings say DXVK
+            // but whose prefix never received the DLLs runs on builtin d3d11 over wined3d and
+            // says nothing about it. That reports Direct3D feature level 9_3 and an NVIDIA
+            // GeForce 6800 that is not in any Mac — enough for ANGLE to cap GLES at 2.0 and for
+            // the Steam client to give up on drawing. ``createContainer`` installing DXVK when
+            // the setting asks for it is what makes the promise true.
+            environmentVariables["WINEDLLOVERRIDES"] = "dxgi,d3d10core,d3d11=n,b"
             environmentVariables["DXVK_ASYNC"] = container.settings.dxvkAsync.numericalValue.description
         }
 

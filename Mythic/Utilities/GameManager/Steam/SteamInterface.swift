@@ -53,21 +53,90 @@ final class Steam {
         .init(metalHUD: false,
               msync: true,
               retinaMode: true,
-              dxvk: true,
-              dxvkAsync: true,
+
+              // Off, because the engine below already provides Direct3D 11 and DXVK would
+              // replace it with something worse. See `runtimeID`.
+              dxvk: false,
+              dxvkAsync: false,
+
               windowsVersion: .win10,
               scaling: 192,
-              avx2: true)
+              avx2: true,
+
+              // The bundled engine, deliberately, even though newer Wine is installed.
+              //
+              // This is the whole reason the client showed a black login window. The Steam
+              // client is Chromium, Chromium on Windows draws through ANGLE's Direct3D 11
+              // backend, and what backs Direct3D 11 is a property of the *engine*, not of
+              // Steam:
+              //
+              //   - The bundled Mythic Engine is Game Porting Toolkit derived and ships
+              //     Apple's D3DMetal `d3d11.dll` and `dxgi.dll`, which run Direct3D 11 on
+              //     Metal.
+              //   - The managed upstream Wine builds ship wined3d, which on macOS has only
+              //     OpenGL 2.1 to work with. It answers `D3D11CreateDevice` with feature
+              //     level 9_3 and an adapter named "NVIDIA GeForce 6800". ANGLE caps GLES at
+              //     2.0 on 9_3, Steam concludes the GPU is unusable
+              //     ("Disabling GPU acceleration due to runtime detect") and never paints the
+              //     window.
+              //
+              // Moving the container to Wine 11 fixed a wineserver problem and quietly caused
+              // this one. Nothing in the client's own logs points at the engine, which is why
+              // client builds from 2024 through 2026, four launch flags and both runtimes all
+              // produced exactly the same black rectangle.
+              //
+              // DXVK is not a way out on macOS: upstream DXVK 2.x requires the `geometryShader`
+              // Vulkan feature, which Metal does not have, so MoltenVK is rejected outright
+              // ("No adapters found"), and the last macOS DXVK build predates Wine 11.
+              runtimeID: Runtime.bundled.id)
     }
 
     /// Creates the Steam container if it doesn't already exist, or returns the existing one.
     @discardableResult
     static func ensureContainer() async throws -> Wine.Container {
-        if let containerURL, let existing = try? Wine.getContainerObject(at: containerURL) {
+        if let containerURL, var existing = try? Wine.getContainerObject(at: containerURL) {
+            try await reconcileContainerForClient(&existing)
             return existing
         }
 
         return try await Wine.createContainer(name: containerName, settings: recommendedContainerSettings)
+    }
+
+    /// Brings an existing Steam container in line with what the client actually needs.
+    ///
+    /// This container is Mythic's, made for one application, so Mythic gets to correct it —
+    /// and it needs correcting: containers created before this was understood have DXVK
+    /// installed, which is what stops the client drawing. Turning the setting off isn't
+    /// enough on its own, because installing DXVK overwrites the prefix's Direct3D DLLs and
+    /// nothing put them back.
+    ///
+    /// Only the settings that belong to Mythic are touched. A runtime the user chose is
+    /// theirs, and stays.
+    private static func reconcileContainerForClient(_ container: inout Wine.Container) async throws {
+        // Containers created before Mythic imported them have no root certificates, and the
+        // symptom is Steam insisting it needs to be online while the network is fine.
+        try? await Wine.Certificates.installIfMissing(inContainerAtURL: container.url)
+
+        // A container that asked for DXVK but never received the DLLs. `createContainer` now
+        // installs them, but containers made before it did are still out there, running on
+        // builtin Direct3D while their settings claim otherwise.
+        if container.settings.dxvk, !Wine.DXVK.isInstalled(inContainerAtURL: container.url) {
+            log.notice("Steam container wants DXVK but has none of its DLLs; installing.")
+            try? await Wine.DXVK.install(toContainerAtURL: container.url)
+        }
+
+        // A prefix cannot be moved back to an older Wine once a newer one has upgraded it, so
+        // there is nothing to repair here — only something to say. See
+        // ``recommendedContainerSettings`` for why the engine is what decides whether the
+        // client can draw at all.
+        let runtime = Wine.runtime(forContainerAtURL: container.url)
+        if runtime.origin != .bundledEngine {
+            log.warning("""
+                Steam container is on \(runtime.description, privacy: .public), not the bundled engine. \
+                Only the bundled engine provides Direct3D 11 on Metal; the client will connect and run \
+                but its window will stay black. Recreate the container to fix it.
+                """)
+        }
     }
 
     // MARK: - Client detection & installation
@@ -220,8 +289,24 @@ final class Steam {
             // black window is not explained by the GPU path being unavailable, and
             // disabling it costs smoothness for no demonstrated benefit.
             //
-            // Not `-cef-force-32bit` either: Steam accepts the flag and ignores it. With it
-            // set, the webhelper log still shows `bin\\cef\\cef.win7x64\\steamwebhelper.exe`.
+            // The older CEF runtime.
+            //
+            // steamwebhelper crash-loops here, and its first complaint is its own:
+            //
+            //     check.cc(376)] Check failed: false. NOTREACHED log messages are omitted
+            //     crashpad_client_win.cc(144)] crash server failed to launch, self-terminating
+            //
+            // In that order — the NOTREACHED fires first and crashpad then fails trying to
+            // report it, so the crash handler is a symptom. Steam launches the webhelper with
+            // `--enable-chrome-runtime`, CEF's newer browser runtime, and this turns that off
+            // in favour of the older one that has far less of Chromium's browser layer behind
+            // it.
+            //
+            // Both flag names here were read out of the shipped binaries rather than from a
+            // forum post, which is worth doing: `-cef-force-32bit`, cited everywhere as *the*
+            // macOS fix, is not in this build at all. It was tried, appeared to be ignored,
+            // and it was — `strings steam.exe` has no such option.
+            "-cef-disable-chrome-runtime",
 
             // A Wine virtual desktop (`explorer /desktop=Steam,WxH`) was tried too, on the
             // theory that Steam composing its window at 0x2FFF0000 — some eight hundred
