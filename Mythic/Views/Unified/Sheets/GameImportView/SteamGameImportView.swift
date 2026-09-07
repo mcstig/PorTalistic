@@ -89,13 +89,19 @@ struct SteamGameImportView: View {
                         .disabled(isClientStarting || isRestartingClient)
                         .help("Sign in and install/update games from within the real Steam client.")
 
-                        if isClientAlreadyRunning {
-                            Button("Restart Steam") {
-                                Task { await restartClient() }
-                            }
-                            .disabled(isRestartingClient)
-                            .help("Shut Steam down and start it again.")
+                        // Always offered, not just when Mythic believes Steam is running.
+                        //
+                        // The state this button exists to fix is exactly the state in which
+                        // detection is least trustworthy: a client that died halfway leaves
+                        // processes behind that `tasklist` may or may not report, and every
+                        // subsequent "Open Steam…" quietly hands off to the wreckage instead
+                        // of starting anything. Hiding the way out until Mythic is sure there
+                        // is something to shut down gets it backwards.
+                        Button("Restart Steam") {
+                            Task { await restartClient() }
                         }
+                        .disabled(isRestartingClient)
+                        .help("Shut the container down completely and start Steam again.")
 
                         Button {
                             Task { await scanLibrary() }

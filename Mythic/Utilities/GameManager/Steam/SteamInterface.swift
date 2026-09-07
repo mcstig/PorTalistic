@@ -308,6 +308,21 @@ final class Steam {
             // and it was — `strings steam.exe` has no such option.
             "-cef-disable-chrome-runtime",
 
+            // Keep Chromium on the GPU, against Steam's own judgement.
+            //
+            // Steam recognises a CrossOver-derived Wine and responds by launching the
+            // webhelper with `--in-process-gpu --disable-gpu --use-gl=angle
+            // --use-angle=swiftshader-webgl`. That is a sensible default for a Wine with no
+            // Direct3D, and the wrong one here: SwiftShader is a software rasteriser that
+            // JIT-compiles x86, this is an Apple Silicon Mac, and every instruction it emits
+            // then goes through Rosetta. The renderer stops answering and the browser kills
+            // it:
+            //
+            //     clienthandler.cpp (6514) : Assertion Failed: killing unresponsive browser
+            //
+            // The container has D3DMetal, so there is a real GPU path to use instead.
+            "-cef-force-gpu",
+
             // A Wine virtual desktop (`explorer /desktop=Steam,WxH`) was tried too, on the
             // theory that Steam composing its window at 0x2FFF0000 — some eight hundred
             // million pixels out — was why nothing reached the screen. It made things
@@ -709,12 +724,23 @@ final class Steam {
         _ = try? await process.runWrapped()
 
         let deadline: ContinuousClock.Instant = .now.advanced(by: .seconds(20))
-        while .now < deadline {
-            if await !isClientRunning() { return }
+        while .now < deadline, await isClientRunning() {
             try? await Task.sleep(for: .seconds(2))
         }
 
-        log.notice("Steam ignored the shutdown request; shutting the container down instead.")
+        // The container goes down either way, rather than only when Steam refuses to.
+        //
+        // Steam's processes are not the whole of what a run leaves behind. Its client and
+        // webhelper talk over named shared memory, those sections live in the wineserver
+        // rather than in either process, and a webhelper that died mid-startup leaves them
+        // there. The next client finds them already present —
+        //
+        //     Created mapping SteamChrome_MasterStream_spid32_mem when set to fail if created
+        //     steamuisharedjscontroller.cpp (529) : Failed creating offscreen shared JS context
+        //
+        // — and never gets a UI. Only `wineserver -k` clears them, so a restart that stops at
+        // killing processes restarts into the same wreckage. This container runs nothing but
+        // Steam, so there is nothing else to lose.
         await Wine.shutdownPrefix(at: containerURL)
     }
 
