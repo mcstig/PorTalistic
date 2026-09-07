@@ -203,8 +203,24 @@ final class Steam {
     /// So: bootstrap freely when incomplete, and stop letting a failed update check block a
     /// client that's already good. Steam still updates itself whenever the check succeeds.
     static var clientLaunchArguments: [String] {
-        // Steam's Chromium UI can't run its sandbox under Wine; always needed.
-        ["-no-cef-sandbox"]
+        [
+            // Steam's Chromium UI can't run its sandbox under Wine; always needed.
+            "-no-cef-sandbox",
+
+            // Without this the client opens as a black rectangle. Steam's CEF drives ANGLE's
+            // Direct3D 11 backend, which under Wine can't get what it needs from the
+            // adapter and gives up half-initialised:
+            //
+            //     Renderer11::populateRenderer11DeviceCaps: Error querying driver version
+            //         from DXGI Adapter.
+            //     eglCreateContext: Requested GLES version (3.0) is greater than max
+            //         supported (2, 0).
+            //
+            // Chromium then has no usable GPU context and paints nothing. Software
+            // rendering costs a little smoothness in the store and is the difference
+            // between a usable client and an empty window.
+            "-cef-disable-gpu"
+        ]
     }
 
     /// Turns Steam's own bootstrapper self-update on or off via `steam.cfg`.
@@ -460,6 +476,35 @@ final class Steam {
         }
 
         return await isClientRunning()
+    }
+
+    /// Shuts the Steam client down inside the container.
+    ///
+    /// Asks Steam to quit itself first — it owns its own bookkeeping and force-killing it
+    /// mid-write is how download manifests get corrupted. Only if it's still there after a
+    /// grace period does the prefix get shut down outright.
+    ///
+    /// This exists because Steam under Wine does not always take its own children with it:
+    /// closing the window can leave `steamwebhelper.exe` behind, still holding the
+    /// single-instance lock, so the next `steam.exe` hands off to a corpse and exits
+    /// without drawing anything. From the outside, Steam simply stops opening.
+    static func quitClient() async throws {
+        guard let containerURL else { return }
+
+        let process: Process = .init()
+        process.arguments = [steamExecutableURL(containerURL: containerURL).path, "-shutdown"]
+        process.environment = try Wine.assembleEnvironmentVariables(forContainerAtURL: containerURL)
+        Wine.transformProcess(process, containerURL: containerURL)
+        _ = try? await process.runWrapped()
+
+        let deadline: ContinuousClock.Instant = .now.advanced(by: .seconds(20))
+        while .now < deadline {
+            if await !isClientRunning() { return }
+            try? await Task.sleep(for: .seconds(2))
+        }
+
+        log.notice("Steam ignored the shutdown request; shutting the container down instead.")
+        await Wine.shutdownPrefix(at: containerURL)
     }
 
     struct NotInstalledError: LocalizedError {

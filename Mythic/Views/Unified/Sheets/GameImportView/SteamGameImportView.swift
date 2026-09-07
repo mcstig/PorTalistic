@@ -29,6 +29,8 @@ struct SteamGameImportView: View {
     @State private var isScanning = false
     @State private var openErrorDescription: String?
     @State private var isClientStarting = false
+    @State private var isClientAlreadyRunning = false
+    @State private var isRestartingClient = false
     @State private var scanErrorDescription: String?
     @State private var importedGames: [SteamGame] = []
 
@@ -80,8 +82,16 @@ struct SteamGameImportView: View {
                         Button("Open Steam…") {
                             Task { await openClient() }
                         }
-                        .disabled(isClientStarting)
+                        .disabled(isClientStarting || isRestartingClient)
                         .help("Sign in and install/update games from within the real Steam client.")
+
+                        if isClientAlreadyRunning {
+                            Button("Restart Steam") {
+                                Task { await restartClient() }
+                            }
+                            .disabled(isRestartingClient)
+                            .help("Shut Steam down and start it again.")
+                        }
 
                         Button {
                             Task { await scanLibrary() }
@@ -95,13 +105,21 @@ struct SteamGameImportView: View {
                         .disabled(isScanning)
                     }
 
-                    if isClientStarting {
+                    if isClientStarting || isRestartingClient {
                         HStack(spacing: 8) {
                             ProgressView().controlSize(.small)
-                            Text("Steam is starting. The first launch after an update can take a couple of minutes, and its window won't appear until it's finished.")
+                            Text(isRestartingClient
+                                 ? "Shutting Steam down…"
+                                 : "Steam is starting. The first launch after an update can take a couple of minutes, and its window won't appear until it's finished.")
                                 .foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
+                    }
+
+                    if isClientAlreadyRunning, !isRestartingClient {
+                        Text("Steam is already running. If its window is missing or blank, restart it — closing Steam can leave part of it behind, and the next launch quietly hands over to that instead of opening.")
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
 
                     if let openErrorDescription {
@@ -156,6 +174,16 @@ struct SteamGameImportView: View {
     /// bootstrap log back and say why.
     private func openClient() async {
         openErrorDescription = nil
+
+        // Pressing Open when Steam is already up would spawn a bootstrapper that hands off
+        // to the running instance and exits, which looks like nothing happening. Say so, and
+        // offer the one thing that actually helps.
+        if await Steam.isClientRunning() {
+            isClientAlreadyRunning = true
+            return
+        }
+
+        isClientAlreadyRunning = false
         isClientStarting = true
         defer { isClientStarting = false }
 
@@ -196,6 +224,27 @@ struct SteamGameImportView: View {
                 localized: "Steam didn't come up, and left nothing in its logs explaining why. Export Steam diagnostics from Settings for the full picture."
             )
         }
+    }
+
+    /// Shuts Steam down and starts it again.
+    ///
+    /// The recovery path for the state where Steam is "running" only in the sense that
+    /// something of it is still resident — no window, and every attempt to open it hands
+    /// off to that remnant.
+    private func restartClient() async {
+        openErrorDescription = nil
+        isRestartingClient = true
+
+        do {
+            try await Steam.quitClient()
+        } catch {
+            openErrorDescription = error.localizedDescription
+        }
+
+        isRestartingClient = false
+        isClientAlreadyRunning = false
+
+        await openClient()
     }
 
     private func refreshStage() async {
