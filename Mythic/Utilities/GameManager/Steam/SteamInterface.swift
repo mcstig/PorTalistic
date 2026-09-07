@@ -219,15 +219,9 @@ final class Steam {
             // Chromium then has no usable GPU context and paints nothing. Software
             // rendering costs a little smoothness in the store and is the difference
             // between a usable client and an empty window.
-            "-cef-disable-gpu",
-
-            // Run the UI on Steam's 32-bit CEF build rather than the 64-bit one. The 64-bit
-            // steamwebhelper starts its child processes and then never reaches its message
-            // loop, which is what Steam reports as "steamwebhelper is not responding" — the
-            // client is fine, its browser never comes up. Steam's own bootstrapper picked
-            // `-cef-force-32bit` unprompted on an earlier run here, which is a reasonable
-            // hint about which of the two it expects to work under this Wine.
-            "-cef-force-32bit"
+            "-cef-disable-gpu"
+            // Not `-cef-force-32bit`: Steam accepts the flag and ignores it. With it set,
+            // the webhelper log still shows `bin\\cef\\cef.win7x64\\steamwebhelper.exe`.
         ]
     }
 
