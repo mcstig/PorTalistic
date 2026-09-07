@@ -8,6 +8,7 @@
 // Copyright © 2023-2025 vapidinfinity
 
 import Foundation
+import CoreGraphics
 import OSLog
 
 /**
@@ -222,17 +223,17 @@ final class Steam {
             // Not `-cef-force-32bit` either: Steam accepts the flag and ignores it. With it
             // set, the webhelper log still shows `bin\\cef\\cef.win7x64\\steamwebhelper.exe`.
 
-            // Use Steam's older login window instead of the React one.
-            //
-            // The React login page renders — its JavaScript runs and polls the auth session,
-            // which the CEF console shows — but Steam composites it into a window it asked
-            // to be transparent, and Wine answers "transparent background, but it is not
-            // supported". Content with no alpha channel to land in comes out black.
-            //
-            // A documented workaround for this exact symptom on Wine/macOS, with the honest
-            // caveat that reports of it are mixed; the thorough fix is the set of registry
-            // tweaks and font installs CrossOver applies, which is a larger job.
-            "-noreactlogin"
+            // A Wine virtual desktop (`explorer /desktop=Steam,WxH`) was tried too, on the
+            // theory that Steam composing its window at 0x2FFF0000 — some eight hundred
+            // million pixels out — was why nothing reached the screen. It made things
+            // strictly worse: steamwebhelper reached its message loop and quit five seconds
+            // later, with no login window created at all.
+
+            // Not `-noreactlogin` either. It is a widely cited workaround for the black
+            // login window on Wine, and here it stopped Steam starting at all. Every flag
+            // tried in this file beyond `-no-cef-sandbox` has either done nothing or made
+            // things worse; the remaining lead is container preparation — the registry
+            // values and fonts CrossOver installs before Steam ever runs — not arguments.
         ]
     }
 
