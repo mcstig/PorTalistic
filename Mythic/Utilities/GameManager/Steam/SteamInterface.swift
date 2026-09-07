@@ -207,21 +207,32 @@ final class Steam {
             // Steam's Chromium UI can't run its sandbox under Wine; always needed.
             "-no-cef-sandbox",
 
-            // Without this the client opens as a black rectangle. Steam's CEF drives ANGLE's
-            // Direct3D 11 backend, which under Wine can't get what it needs from the
-            // adapter and gives up half-initialised:
+            // Deliberately *not* `-cef-disable-gpu`.
             //
-            //     Renderer11::populateRenderer11DeviceCaps: Error querying driver version
-            //         from DXGI Adapter.
-            //     eglCreateContext: Requested GLES version (3.0) is greater than max
-            //         supported (2, 0).
+            // It was added because the client drew a black rectangle while CEF logged
+            // ANGLE failing to initialise its Direct3D 11 backend. That reasoning had a
+            // hole in it: on those runs Steam also had no working network, so the login
+            // page had nothing to display either way, and the GPU errors were the more
+            // visible of two causes rather than the operative one.
             //
-            // Chromium then has no usable GPU context and paints nothing. Software
-            // rendering costs a little smoothness in the store and is the difference
-            // between a usable client and an empty window.
-            "-cef-disable-gpu"
-            // Not `-cef-force-32bit`: Steam accepts the flag and ignores it. With it set,
-            // the webhelper log still shows `bin\\cef\\cef.win7x64\\steamwebhelper.exe`.
+            // With networking fixed, software rendering still paints nothing — so the
+            // black window is not explained by the GPU path being unavailable, and
+            // disabling it costs smoothness for no demonstrated benefit.
+            //
+            // Not `-cef-force-32bit` either: Steam accepts the flag and ignores it. With it
+            // set, the webhelper log still shows `bin\\cef\\cef.win7x64\\steamwebhelper.exe`.
+
+            // Use Steam's older login window instead of the React one.
+            //
+            // The React login page renders — its JavaScript runs and polls the auth session,
+            // which the CEF console shows — but Steam composites it into a window it asked
+            // to be transparent, and Wine answers "transparent background, but it is not
+            // supported". Content with no alpha channel to land in comes out black.
+            //
+            // A documented workaround for this exact symptom on Wine/macOS, with the honest
+            // caveat that reports of it are mixed; the thorough fix is the set of registry
+            // tweaks and font installs CrossOver applies, which is a larger job.
+            "-noreactlogin"
         ]
     }
 
