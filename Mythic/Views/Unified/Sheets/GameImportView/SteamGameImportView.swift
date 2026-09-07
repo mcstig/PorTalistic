@@ -31,6 +31,10 @@ struct SteamGameImportView: View {
     @State private var isClientStarting = false
     @State private var isClientAlreadyRunning = false
     @State private var isRestartingClient = false
+    @State private var isPinningClient = false
+    @State private var pinStatusDescription: String?
+    @State private var availablePins: [SteamClientPin] = []
+    @State private var selectedPinID: String?
     @State private var scanErrorDescription: String?
     @State private var importedGames: [SteamGame] = []
 
@@ -120,6 +124,75 @@ struct SteamGameImportView: View {
                         Text("Steam is already running. If its window is missing or blank, restart it — closing Steam can leave part of it behind, and the next launch quietly hands over to that instead of opening.")
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    Divider()
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("Client version")
+                                .font(.headline)
+
+                            Spacer()
+
+                            if let pinned = Steam.pinnedClient {
+                                Text(pinned.name)
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                Text("Current")
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+
+                        Text("Today's Steam interface doesn't render under Wine — it connects and runs, but draws nothing and closes itself. Installing an older client from the Internet Archive is what Wine and CrossOver users use instead. Valve retires old clients eventually, so if sign-in stops working, try a newer one.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        HStack {
+                            Picker("Install", selection: $selectedPinID) {
+                                Text("Choose a build…").tag(String?.none)
+                                ForEach(availablePins) { pin in
+                                    Text(pin.name).tag(String?.some(pin.id))
+                                }
+                            }
+                            .labelsHidden()
+                            .frame(maxWidth: 220)
+                            .disabled(availablePins.isEmpty || isPinningClient)
+
+                            Button("Install") {
+                                guard let pin = availablePins.first(where: { $0.id == selectedPinID }) else { return }
+                                Task { await pinClient(to: pin) }
+                            }
+                            .disabled(selectedPinID == nil || isPinningClient || isClientStarting)
+
+                            if Steam.pinnedClient != nil {
+                                Button("Use Current") {
+                                    Task { await unpinClient() }
+                                }
+                                .help("Let Steam update itself back to the newest client.")
+                                .disabled(isPinningClient || isClientStarting)
+                            }
+                        }
+                        .task {
+                            guard availablePins.isEmpty else { return }
+                            availablePins = (try? await SteamClientPin.availableSnapshots()) ?? [.fallback]
+                        }
+
+                        if isPinningClient {
+                            HStack(spacing: 8) {
+                                ProgressView().controlSize(.small)
+                                Text("Downloading the archived client. This is a few hundred megabytes from the Internet Archive and is not quick.")
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+
+                        if let pinStatusDescription {
+                            Text(pinStatusDescription)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
 
                     if let openErrorDescription {
@@ -245,6 +318,39 @@ struct SteamGameImportView: View {
         isClientAlreadyRunning = false
 
         await openClient()
+    }
+
+    /// Replaces the installed client with an archived build.
+    private func pinClient(to pin: SteamClientPin) async {
+        openErrorDescription = nil
+        pinStatusDescription = nil
+        isPinningClient = true
+        defer { isPinningClient = false }
+
+        do {
+            try await Steam.installPinnedClient(pin)
+            pinStatusDescription = String(localized: "Steam is now on the \(pin.name) client. Open Steam to sign in.")
+        } catch {
+            openErrorDescription = [
+                error.localizedDescription,
+                (error as? LocalizedError)?.failureReason,
+                (error as? LocalizedError)?.recoverySuggestion
+            ].compactMap { $0 }.joined(separator: "\n")
+        }
+    }
+
+    private func unpinClient() async {
+        openErrorDescription = nil
+        pinStatusDescription = nil
+        isPinningClient = true
+        defer { isPinningClient = false }
+
+        do {
+            try await Steam.unpinClient()
+            pinStatusDescription = String(localized: "Steam will update itself to the current client the next time it opens.")
+        } catch {
+            openErrorDescription = error.localizedDescription
+        }
     }
 
     private func refreshStage() async {

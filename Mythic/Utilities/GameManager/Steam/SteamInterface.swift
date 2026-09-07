@@ -492,6 +492,118 @@ final class Steam {
         return await isClientRunning()
     }
 
+    /// Which pinned client build this container is on, if any.
+    ///
+    /// Plain `UserDefaults` rather than a property wrapper: this is read from wherever a
+    /// launch happens to be running, not from a view.
+    private static let pinnedClientDefaultsKey = "steamClientPinID"
+
+    private static var pinnedClientID: String? {
+        get { UserDefaults.standard.string(forKey: pinnedClientDefaultsKey) }
+        set { UserDefaults.standard.set(newValue, forKey: pinnedClientDefaultsKey) }
+    }
+
+    /// The pin currently applied to the Steam container.
+    ///
+    /// Reconstructed from the stored name rather than looked up in a table: the list of
+    /// builds comes from the Internet Archive at runtime, so there is no fixed catalogue to
+    /// look anything up in.
+    static var pinnedClient: SteamClientPin? {
+        guard let id = pinnedClientID else { return nil }
+        let name = UserDefaults.standard.string(forKey: pinnedClientNameDefaultsKey) ?? id
+        return .init(id: id, name: name, archiveTimestamp: id, summary: "")
+    }
+
+    private static let pinnedClientNameDefaultsKey = "steamClientPinName"
+
+    struct ClientPinFailedError: LocalizedError {
+        let pin: SteamClientPin
+
+        var errorDescription: String? {
+            String(localized: "Couldn't install the \(pin.name) Steam client.")
+        }
+
+        var failureReason: String? {
+            String(localized: "Steam's bootstrapper didn't fetch the archived packages. The Internet Archive may be unreachable, or may not have that snapshot.")
+        }
+    }
+
+    /// Replaces the installed client with an archived build, and holds it there.
+    ///
+    /// Steam's bootstrapper takes its package source from `-overridepackageurl`, so pointing
+    /// it at an Internet Archive snapshot of `media.steampowered.com/client` reinstalls the
+    /// client as it stood on that date. The sequence matters:
+    ///
+    /// 1. Lift the `steam.cfg` inhibit — it exists to stop the client updating itself, and
+    ///    a downgrade is an update. Leaving it on makes this silently do nothing.
+    /// 2. Run the bootstrapper with `-forcesteamupdate -forcepackagedownload` so it
+    ///    re-fetches everything rather than deciding it's already current, and `-exitsteam`
+    ///    so it stops once the packages are in place instead of starting the client.
+    /// 3. Put the inhibit back, or Steam updates itself to the broken build on next launch.
+    ///
+    /// - Parameter pin: The build to install.
+    static func installPinnedClient(_ pin: SteamClientPin) async throws {
+        try await Preflight.requireEngineAndRosetta()
+        let container = try await ensureContainer()
+        guard isClientInstalled else { throw NotInstalledError() }
+
+        if await !Wine.isPrefixServerCompatible(containerURL: container.url) {
+            await Wine.shutdownPrefix(at: container.url)
+        }
+
+        // Anything still running would fight the bootstrapper for the same files.
+        try? await quitClient()
+
+        try setBootstrapperUpdateInhibited(false, containerURL: container.url)
+
+        let process: Process = .init()
+        process.arguments = [
+            steamExecutableURL(containerURL: container.url).path,
+            "-forcesteamupdate",
+            "-forcepackagedownload",
+            "-overridepackageurl", pin.packageURL.absoluteString,
+            "-exitsteam"
+        ]
+        process.environment = try Wine.assembleEnvironmentVariables(forContainerAtURL: container.url)
+        Wine.transformProcess(process, containerURL: container.url)
+
+        let outputURL = clientOutputLogURL(containerURL: container.url)
+        FileManager.default.createFile(atPath: outputURL.path, contents: nil)
+        if let handle = try? FileHandle(forWritingTo: outputURL) {
+            process.standardOutput = handle
+            process.standardError = handle
+        }
+
+        log.notice("Pinning the Steam client to \(pin.name, privacy: .public) from \(pin.packageURL.absoluteString, privacy: .public)")
+        try process.run()
+
+        // The bootstrapper downloads a few hundred megabytes over the Internet Archive,
+        // which is not fast. Give it room, but don't hang forever if the archive is down.
+        let deadline: ContinuousClock.Instant = .now.advanced(by: .seconds(900))
+        while process.isRunning, .now < deadline {
+            try? await Task.sleep(for: .seconds(2))
+        }
+
+        if process.isRunning { process.terminate() }
+
+        try setBootstrapperUpdateInhibited(true, containerURL: container.url)
+
+        guard isClientFullyInstalled else { throw ClientPinFailedError(pin: pin) }
+
+        pinnedClientID = pin.archiveTimestamp
+        UserDefaults.standard.set(pin.name, forKey: pinnedClientNameDefaultsKey)
+        log.notice("Steam client pinned to \(pin.name, privacy: .public)")
+    }
+
+    /// Forgets the pin and lets Steam update itself back to current.
+    static func unpinClient() async throws {
+        guard let containerURL else { return }
+        try? await quitClient()
+        try setBootstrapperUpdateInhibited(false, containerURL: containerURL)
+        pinnedClientID = nil
+        UserDefaults.standard.removeObject(forKey: pinnedClientNameDefaultsKey)
+    }
+
     /// Shuts the Steam client down inside the container.
     ///
     /// Asks Steam to quit itself first — it owns its own bookkeeping and force-killing it
