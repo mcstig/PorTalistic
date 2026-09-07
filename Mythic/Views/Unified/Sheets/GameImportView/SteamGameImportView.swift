@@ -173,14 +173,17 @@ struct SteamGameImportView: View {
             return
         }
 
-        // Poll rather than using a termination handler: this stays on the main actor for
-        // the whole wait, so the non-Sendable Process never crosses an isolation boundary.
-        let deadline: Date = .now.addingTimeInterval(300)
+        // Wait for the bootstrapper we spawned to finish handing off. Polling rather than a
+        // termination handler keeps this on the main actor for the whole wait, so the
+        // non-Sendable Process never crosses an isolation boundary.
+        let deadline: Date = .now.addingTimeInterval(120)
         while process.isRunning, .now < deadline {
             try? await Task.sleep(for: .seconds(2))
         }
 
-        guard !process.isRunning else { return } // Still up after five minutes: it's fine.
+        // Its exit proves nothing: `steam.exe` starts the client and gets out of the way.
+        // Ask the container whether Steam is actually up before calling this a failure.
+        if await Steam.waitForClientToAppear() { return }
 
         if let containerURL = Steam.containerURL,
            let reason = Steam.lastClientError(containerURL: containerURL)
@@ -190,7 +193,7 @@ struct SteamGameImportView: View {
             )
         } else {
             openErrorDescription = String(
-                localized: "Steam closed before it finished starting, without recording why. Export Steam diagnostics from Settings for the full picture."
+                localized: "Steam didn't come up, and left nothing in its logs explaining why. Export Steam diagnostics from Settings for the full picture."
             )
         }
     }

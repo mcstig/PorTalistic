@@ -426,6 +426,42 @@ final class Steam {
     /// sheet sizes itself to its content — so an unbounded string doesn't produce an ugly
     /// label, it produces a window thousands of points tall that looks like the app has hung.
     private static let displayedReasonLimit = 400
+    /// Whether the real Steam client is up inside the container right now.
+    ///
+    /// `steam.exe` is a bootstrapper, not the client. It checks for updates, starts the
+    /// actual client, and exits — and when an instance is already running it simply signals
+    /// that one and exits within a second, logging a single line. So the process Mythic
+    /// spawned exiting says nothing whatsoever about whether Steam is running.
+    ///
+    /// Treating those as the same thing is how Mythic came to report "Steam closed before it
+    /// finished starting" about a client that had been up for ten hours, signed in and
+    /// connected. Ask the container what's running instead of inferring it from a pid we
+    /// happen to hold.
+    static func isClientRunning() async -> Bool {
+        guard let containerURL else { return false }
+        guard let tasks = try? await Wine.tasklist(for: containerURL) else { return false }
+
+        return tasks.contains { task in
+            let name = task.imageName.lowercased()
+            return name == "steamwebhelper.exe" || name == "steam.exe"
+        }
+    }
+
+    /// Waits for the client to appear in the container after a launch.
+    ///
+    /// - Parameter timeout: How long to keep looking before giving up.
+    /// - Returns: `true` once Steam is visibly running.
+    static func waitForClientToAppear(timeout: Duration = .seconds(45)) async -> Bool {
+        let deadline: ContinuousClock.Instant = .now.advanced(by: timeout)
+
+        while .now < deadline {
+            if await isClientRunning() { return true }
+            try? await Task.sleep(for: .seconds(3))
+        }
+
+        return await isClientRunning()
+    }
+
     struct NotInstalledError: LocalizedError {
         var errorDescription: String? = String(localized: "The Steam client hasn't been installed into Mythic's Steam container yet. Use Set Up Steam first.")
     }

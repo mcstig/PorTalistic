@@ -198,9 +198,14 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
         
         if let standardOutput = commandResult.standardOutput {
             let tasklistRegex: Regex<AnyRegexOutput>?
-            // wine above major version 7 has a new tasklist format
+            // wine above major version 7 has a new tasklist format.
+            // Ask the version of the runtime *this container* runs on, not the bundled
+            // engine's: with the container on Wine 11 and the engine still 7.7, the old
+            // comma-separated pattern was matched against new space-separated output, so
+            // every line was skipped and the container always looked empty. That is how
+            // Mythic concluded Steam wasn't running while it was.
             // swiftlint:disable force_try
-            if self.retrieveVersion()?.major ?? 0 > 7 {
+            if self.retrieveVersion(forContainerAtURL: containerURL)?.major ?? 0 > 7 {
                 tasklistRegex = try! Regex(#"^\s*(?<ImageName>.+?)\s+(?<PID>\d+)\s+(?<SessionName>\S+)\s+(?<SessionNum>\d+)\s+(?<MemUsage>[\d,]+ K)$"#)
             } else {
                 tasklistRegex = try! Regex(#"(?P<ImageName>[^,]+?),(?P<PID>\d+)"#)
