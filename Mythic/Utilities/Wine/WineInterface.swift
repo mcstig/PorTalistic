@@ -81,12 +81,29 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
     }
 
     private static func constructEnvironment(with containerURL: URL?, additionalVariables: [String: String] = .init()) -> [String: String] {
-        // Start from Mythic's own environment rather than an empty one. Setting
-        // `Process.environment` replaces it wholesale, so building from scratch handed every
-        // wine process a world with no HOME, no PATH and no TMPDIR — which is not a
-        // configuration anyone tests Wine in, and which quietly changes how it resolves
-        // helpers and where it puts its runtime state.
+        // Inherit the parts of Mythic's environment that Wine actually wants, and nothing
+        // else. Two failures bracket this:
+        //
+        // Building from an empty dictionary handed every wine process a world with no HOME,
+        // no PATH and no TMPDIR — not a configuration Wine is tested in, and the reason
+        // `wineserver -k` silently did nothing.
+        //
+        // Inheriting *everything* is worse. A debug session injects `DYLD_INSERT_LIBRARIES`
+        // and friends, those dylibs load into wine's preloader, and they take the low
+        // address space it needs to reserve for 32-bit Windows code:
+        //
+        //     preloader: Warning: failed to reserve range 0000000000010000-0000000000110000
+        //     wine: failed to start L"C:\\Program Files (x86)\\Steam\\steam.exe"
+        //
+        // So: an allowlist. Anything not named here is Mythic's business, not Wine's.
+        let inheritedKeys: Set<String> = [
+            "HOME", "USER", "LOGNAME", "SHELL", "PATH", "TMPDIR",
+            "LANG", "LC_ALL", "LC_CTYPE",
+            "CX_ROOT" // Set by Mythic itself; the engine is CrossOver-derived and looks for it.
+        ]
+
         var constructedEnvironment = ProcessInfo.processInfo.environment
+            .filter { inheritedKeys.contains($0.key) }
 
         if let containerURL {
             constructedEnvironment["WINEPREFIX"] = containerURL.path
@@ -196,29 +213,28 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
         var list: [Container.Process] = .init()
         
         let process: Process = .init()
-        process.arguments = ["tasklist"]
+        // Ask for CSV explicitly. Plain `tasklist` prints a human-readable table whose
+        // column layout changed between Wine 7 and Wine 11, and guessing which one you're
+        // going to get from the runtime's version number gets it wrong in both directions:
+        // the container looked empty on 7.7 *and* on 11, at different times, and everything
+        // built on top of it — "is Steam running?" included — silently answered no.
+        process.arguments = ["tasklist", "/fo", "csv"]
         transformProcess(process, containerURL: containerURL)
         
         let commandResult = try await process.runWrapped()
         
         if let standardOutput = commandResult.standardOutput {
-            let tasklistRegex: Regex<AnyRegexOutput>?
-            // wine above major version 7 has a new tasklist format.
-            // Ask the version of the runtime *this container* runs on, not the bundled
-            // engine's: with the container on Wine 11 and the engine still 7.7, the old
-            // comma-separated pattern was matched against new space-separated output, so
-            // every line was skipped and the container always looked empty. That is how
-            // Mythic concluded Steam wasn't running while it was.
+            // One shape for every Wine version, because we asked for one.
+            // The header row is quoted too, but its PID column isn't digits, so it simply
+            // doesn't match and needs no special case.
             // swiftlint:disable force_try
-            if self.retrieveVersion(forContainerAtURL: containerURL)?.major ?? 0 > 7 {
-                tasklistRegex = try! Regex(#"^\s*(?<ImageName>.+?)\s+(?<PID>\d+)\s+(?<SessionName>\S+)\s+(?<SessionNum>\d+)\s+(?<MemUsage>[\d,]+ K)$"#)
-            } else {
-                tasklistRegex = try! Regex(#"(?P<ImageName>[^,]+?),(?P<PID>\d+)"#)
-            }
+            let tasklistRegex: Regex<AnyRegexOutput> = try! Regex(
+                #"^"(?<ImageName>[^"]*)","(?<PID>\d+)","(?<SessionName>[^"]*)","(?<SessionNum>\d+)","(?<MemUsage>[^"]*)"$"#
+            )
             // swiftlint:enable force_try
             
             for line in standardOutput.split(whereSeparator: \.isNewline) {
-                guard let match = try tasklistRegex?.wholeMatch(in: line) else { continue }
+                guard let match = try tasklistRegex.wholeMatch(in: line.trimmingCharacters(in: .whitespaces)) else { continue }
                 
                 guard let extractedImageName = match["ImageName"]?.substring,
                       let extractedPID = match["PID"]?.substring,
