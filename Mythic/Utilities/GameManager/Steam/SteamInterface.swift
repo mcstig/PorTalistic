@@ -60,7 +60,14 @@ final class Steam {
               dxvkAsync: false,
 
               windowsVersion: .win10,
+
+              // Mythic's usual scaling. Steam logs its login window at 805240832, 805240832,
+              // which looks like a DPI overflow and was chased as one; it isn't. The value is
+              // identical on every run this container has ever had, including the ones where
+              // the window was plainly on screen, so it is an internal sentinel rather than a
+              // coordinate. Changing the DPI moves nothing.
               scaling: 192,
+
               avx2: true,
 
               // The newest runtime Mythic manages, with DXMT supplying Direct3D 11.
@@ -112,6 +119,13 @@ final class Steam {
         // Containers created before Mythic imported them have no root certificates, and the
         // symptom is Steam insisting it needs to be online while the network is fine.
         try? await Wine.Certificates.installIfMissing(inContainerAtURL: container.url)
+
+        // Apply the container's display settings, rather than only writing them when the
+        // container was created. A setting changed afterwards otherwise says one thing while
+        // the prefix's registry keeps doing another — which for DPI is the difference between
+        // a login window on screen and one at 805240832, 805240832.
+        try? await Wine.setDisplayScaling(containerURL: container.url, dpi: container.settings.scaling)
+        try? await Wine.toggleRetinaMode(containerURL: container.url, toggle: container.settings.retinaMode)
 
         // The client needs Direct3D 11, and on a managed runtime that means DXMT. Say so
         // rather than letting the window come up black with nothing to explain it.
@@ -307,20 +321,27 @@ final class Steam {
             // and it was — `strings steam.exe` has no such option.
             "-cef-disable-chrome-runtime",
 
-            // Keep Chromium on the GPU, against Steam's own judgement.
+
+            // No GPU swap chain for Chromium. This gets the window shown; it does not get it
+            // painted.
             //
-            // Steam recognises a CrossOver-derived Wine and responds by launching the
-            // webhelper with `--in-process-gpu --disable-gpu --use-gl=angle
-            // --use-angle=swiftshader-webgl`. That is a sensible default for a Wine with no
-            // Direct3D, and the wrong one here: SwiftShader is a software rasteriser that
-            // JIT-compiles x86, this is an Apple Silicon Mac, and every instruction it emits
-            // then goes through Rosetta. The renderer stops answering and the browser kills
-            // it:
+            // With DXMT in place ANGLE gets a real Direct3D 11 device — `ANGLE (Apple, Apple
+            // M4 Max ... vs_5_0 ps_5_0)` — and then cannot get a surface out of it:
             //
-            //     clienthandler.cpp (6514) : Assertion Failed: killing unresponsive browser
+            //     SwapChain11.cpp:636 (rx::SwapChain11::reset): Could not create additional
+            //         swap chains or offscreen surfaces
+            //     eglCreateWindowSurface failed with error EGL_BAD_ALLOC
             //
-            // The container has D3DMetal, so there is a real GPU path to use instead.
-            "-cef-force-gpu",
+            // Without this flag the login window is created and stays hidden. With it, CEF
+            // renders to software surfaces, which need no swap chain, and the window is shown
+            // with its page loaded — the title changes to "Sign in to". It is still black,
+            // because Steam's own compositor presents through Direct3D 11 and hits the same
+            // wall ANGLE did.
+            //
+            // So this is kept for the progress it does make, and the remaining problem is not
+            // in this list. See ``Wine/DXMT`` for what is actually missing.
+            "-cef-disable-gpu",
+
 
             // A Wine virtual desktop (`explorer /desktop=Steam,WxH`) was tried too, on the
             // theory that Steam composing its window at 0x2FFF0000 — some eight hundred

@@ -26,6 +26,18 @@ extension Wine {
     /// feature, which Metal does not have, so it rejects MoltenVK outright. DXMT does: it
     /// implements Direct3D 11 on Metal directly, and it targets current Wine.
     ///
+    /// - Important: DXMT wants a Wine that exposes particular `winemac.drv` entry points —
+    ///   its own guide asks for a CrossOver-derived Wine 24 or newer. Mythic's managed
+    ///   `wine-stable-11.0` is not one, and the result is a half-working DXMT rather than an
+    ///   error: adapter enumeration and device creation succeed, so Chromium reports
+    ///   `ANGLE (Apple, Apple M4 Max ... vs_5_0 ps_5_0)` and everything looks right, but
+    ///   nothing can attach a Metal layer to a Wine window, so every swap chain fails —
+    ///
+    ///       eglCreateWindowSurface failed with error EGL_BAD_ALLOC
+    ///
+    ///   — and every window that needs one comes up black. Making the Steam client actually
+    ///   draw needs a DXMT-supported Wine in ``Runtime``'s catalogue, not more launch flags.
+    ///
     /// - Note: Only runtimes Mythic manages are touched. The Game Porting Toolkit, Whisky and
     ///   Homebrew installs Mythic discovers belong to other applications, and writing into
     ///   them would be modifying software the user installed for something else.
