@@ -583,8 +583,38 @@ extension SettingsView {
         @State private var isAdvancedSectionExpanded: Bool = false
 
         @State private var engineVersion: SemanticVersion?
+
+        @State private var isDXMTInstalling: Bool = false
+        @State private var isDXMTInstallSuccessful: Bool?
+
+        /// The runtime DXMT would be installed into: the newest one Mythic manages.
+        ///
+        /// Deliberately not "the newest available" — that list includes the Game Porting
+        /// Toolkit, Whisky and Homebrew installs Mythic merely discovered, and those belong to
+        /// other applications.
+        private var dxmtTarget: Runtime? { .newestManagedByMythic() }
+
         var body: some View {
             if Engine.isInstalled {
+                if let dxmtTarget {
+                    OperationButton(
+                        Wine.DXMT.isInstalled(in: dxmtTarget)
+                            ? "Reinstall Direct3D 11 on Metal (DXMT) for \(dxmtTarget.name)"
+                            : "Install Direct3D 11 on Metal (DXMT) for \(dxmtTarget.name)",
+                        systemImage: "cpu",
+                        operating: $isDXMTInstalling,
+                        successful: $isDXMTInstallSuccessful
+                    ) {
+                        do {
+                            try await Wine.DXMT.install(into: dxmtTarget)
+                            isDXMTInstallSuccessful = true
+                        } catch {
+                            isDXMTInstallSuccessful = false
+                        }
+                    }
+                    .help("Newer Wine has working networking but no Direct3D 11 on macOS; DXMT supplies it, which is what the Steam client and most Direct3D 11 games need.")
+                }
+
                 OperationButton(
                     "Force Quit Running Windows® Applications",
                     systemImage: "xmark.app",

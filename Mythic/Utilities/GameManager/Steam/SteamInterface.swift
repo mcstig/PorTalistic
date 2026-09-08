@@ -63,32 +63,28 @@ final class Steam {
               scaling: 192,
               avx2: true,
 
-              // The bundled engine, deliberately, even though newer Wine is installed.
+              // The newest runtime Mythic manages, with DXMT supplying Direct3D 11.
               //
-              // This is the whole reason the client showed a black login window. The Steam
-              // client is Chromium, Chromium on Windows draws through ANGLE's Direct3D 11
-              // backend, and what backs Direct3D 11 is a property of the *engine*, not of
-              // Steam:
+              // Neither engine works for the Steam client on its own, and it took both
+              // failures to see why:
               //
-              //   - The bundled Mythic Engine is Game Porting Toolkit derived and ships
-              //     Apple's D3DMetal `d3d11.dll` and `dxgi.dll`, which run Direct3D 11 on
-              //     Metal.
-              //   - The managed upstream Wine builds ship wined3d, which on macOS has only
-              //     OpenGL 2.1 to work with. It answers `D3D11CreateDevice` with feature
-              //     level 9_3 and an adapter named "NVIDIA GeForce 6800". ANGLE caps GLES at
-              //     2.0 on 9_3, Steam concludes the GPU is unusable
-              //     ("Disabling GPU acceleration due to runtime detect") and never paints the
-              //     window.
+              //   - The bundled engine is Game Porting Toolkit derived and has Apple's
+              //     D3DMetal, so Direct3D 11 works and every Win32 window draws. It is also
+              //     Wine 7.7, and Steam trips over its socket layer continuously
+              //     (`getsockname failed in BGetBoundAddr with error: 10022`, IPv6 checks
+              //     timing out, a connectivity test taking a minute). The login page never
+              //     loads.
+              //   - The managed builds have working sockets and only wined3d, which on macOS
+              //     has OpenGL 2.1 underneath. Direct3D reports feature level 9_3 and an
+              //     "NVIDIA GeForce 6800" that is not in any Mac; ANGLE caps GLES at 2.0,
+              //     Steam concludes the GPU is unusable and paints nothing. That was the
+              //     black login window, unchanged across client builds from 2024 to 2026,
+              //     four launch flags and both runtimes, because none of them touched it.
               //
-              // Moving the container to Wine 11 fixed a wineserver problem and quietly caused
-              // this one. Nothing in the client's own logs points at the engine, which is why
-              // client builds from 2024 through 2026, four launch flags and both runtimes all
-              // produced exactly the same black rectangle.
-              //
-              // DXVK is not a way out on macOS: upstream DXVK 2.x requires the `geometryShader`
-              // Vulkan feature, which Metal does not have, so MoltenVK is rejected outright
-              // ("No adapters found"), and the last macOS DXVK build predates Wine 11.
-              runtimeID: Runtime.bundled.id)
+              // ``Wine/DXMT`` closes the gap by giving the newer Wine a real Direct3D 11 on
+              // Metal. DXVK cannot: upstream DXVK 2.x requires the Vulkan `geometryShader`
+              // feature, which Metal does not have, so it rejects MoltenVK outright.
+              runtimeID: Runtime.newestManagedByMythic()?.id ?? Runtime.bundled.id)
     }
 
     /// Creates the Steam container if it doesn't already exist, or returns the existing one.
@@ -117,6 +113,21 @@ final class Steam {
         // symptom is Steam insisting it needs to be online while the network is fine.
         try? await Wine.Certificates.installIfMissing(inContainerAtURL: container.url)
 
+        // The client needs Direct3D 11, and on a managed runtime that means DXMT. Say so
+        // rather than letting the window come up black with nothing to explain it.
+        let clientRuntime = Wine.runtime(forContainerAtURL: container.url)
+        if clientRuntime.isManagedByMythic {
+            if Wine.DXMT.isInstalled(in: clientRuntime) {
+                try? Wine.DXMT.prepareContainer(at: container.url, runtime: clientRuntime)
+            } else {
+                log.warning("""
+                    Steam container runs on \(clientRuntime.description, privacy: .public), which has no DXMT. \
+                    Direct3D 11 will fall back to wined3d at feature level 9_3 and the client's window will \
+                    stay black. Install DXMT from Settings › Engine.
+                    """)
+            }
+        }
+
         // A container that asked for DXVK but never received the DLLs. `createContainer` now
         // installs them, but containers made before it did are still out there, running on
         // builtin Direct3D while their settings claim otherwise.
@@ -125,18 +136,6 @@ final class Steam {
             try? await Wine.DXVK.install(toContainerAtURL: container.url)
         }
 
-        // A prefix cannot be moved back to an older Wine once a newer one has upgraded it, so
-        // there is nothing to repair here — only something to say. See
-        // ``recommendedContainerSettings`` for why the engine is what decides whether the
-        // client can draw at all.
-        let runtime = Wine.runtime(forContainerAtURL: container.url)
-        if runtime.origin != .bundledEngine {
-            log.warning("""
-                Steam container is on \(runtime.description, privacy: .public), not the bundled engine. \
-                Only the bundled engine provides Direct3D 11 on Metal; the client will connect and run \
-                but its window will stay black. Recreate the container to fix it.
-                """)
-        }
     }
 
     // MARK: - Client detection & installation

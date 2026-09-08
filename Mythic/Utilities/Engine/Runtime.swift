@@ -280,6 +280,18 @@ extension Runtime {
         return discovered
     }
 
+    /// The newest runtime Mythic installed itself.
+    ///
+    /// Separate from ``newestAvailable()`` because some things Mythic does — installing DXMT,
+    /// say — write into the runtime's own directory, and the Game Porting Toolkit, Whisky and
+    /// Homebrew builds it merely discovers belong to other applications.
+    static func newestManagedByMythic() -> Runtime? {
+        discoverAll()
+            .filter(\.isManagedByMythic)
+            .compactMap { runtime in runtime.version.map { (runtime, $0) } }
+            .max(by: { $0.1 < $1.1 })?.0
+    }
+
     /// The newest runtime available, which is the best default for anything that has no
     /// per-game preference of its own.
     static func newestAvailable() -> Runtime? {
