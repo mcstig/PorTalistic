@@ -768,6 +768,118 @@ final class Steam {
         var errorDescription: String? = String(localized: "The Steam client hasn't been installed into Mythic's Steam container yet. Use Set Up Steam first.")
     }
 
+    // MARK: - Signing in without the login window
+
+    /// Steam's own macOS install, if the user has one.
+    static var macClientDirectory: URL? {
+        FileLocations.userApplicationSupport?.appending(path: "Steam")
+    }
+
+    /// Whether there's a signed-in macOS Steam to take a session from.
+    static var canImportSignInFromMacClient: Bool {
+        guard let macClientDirectory else { return false }
+        return FileManager.default.fileExists(
+            atPath: macClientDirectory.appending(path: "config/loginusers.vdf").path
+        )
+    }
+
+    struct NoMacClientError: LocalizedError {
+        var errorDescription: String? = String(localized: "No signed-in Steam for macOS was found, so there's no session to import. Sign in to the normal Steam app first, or use text-mode sign-in.")
+    }
+
+    /// Copies the session out of the Mac's own Steam install and into the container.
+    ///
+    /// The client's login window is a *transparent* one — the webhelper log says
+    /// "Browser requested transparent background, but it is not supported" every time it makes
+    /// one — and Wine has no transparent windows, so it comes up black however well the rest
+    /// of the stack is working. The main client window isn't transparent. So the way past this
+    /// is to arrive already signed in, rather than to keep attacking the window.
+    ///
+    /// Steam keeps the session in `config/` and `userdata/`, in the same format on macOS and
+    /// on Windows. Steam Guard may still challenge the container as a new device, in which
+    /// case this doesn't help and ``openTextClient()`` is the fallback — but it costs one
+    /// directory copy to find out.
+    static func importSignInFromMacClient() async throws {
+        guard let macClientDirectory, canImportSignInFromMacClient else { throw NoMacClientError() }
+
+        let container = try await ensureContainer()
+        let destination = container.url.appending(path: "drive_c/Program Files (x86)/Steam")
+
+        // A running client would rewrite these on exit, undoing the import.
+        try? await quitClient()
+
+        for item in ["config", "userdata"] {
+            let source = macClientDirectory.appending(path: item)
+            guard FileManager.default.fileExists(atPath: source.path) else { continue }
+
+            let copy: Process = .init()
+            copy.executableURL = .init(filePath: "/bin/cp")
+            copy.arguments = ["-Rf", source.path, destination.path]
+            _ = try await copy.runWrapped()
+        }
+
+        if let account = mostRecentAccount(inLoginUsersAt: macClientDirectory.appending(path: "config/loginusers.vdf")) {
+            for (name, value) in [("AutoLoginUser", account), ("RememberPassword", "1")] {
+                let process: Process = .init()
+                process.arguments = ["reg", "add", #"HKCU\Software\Valve\Steam"#,
+                                     "/v", name, "/t", "REG_SZ", "/d", value, "/f"]
+                Wine.transformProcess(process, containerURL: container.url)
+                _ = try? await process.runWrapped()
+            }
+            log.notice("Imported a Steam session and set it to sign in automatically.")
+        } else {
+            log.notice("Imported Steam session files; couldn't tell which account was most recent.")
+        }
+    }
+
+    /// The account name Steam last signed in as, read out of `loginusers.vdf`.
+    private static func mostRecentAccount(inLoginUsersAt url: URL) -> String? {
+        guard let contents = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+
+        // Blocks look like `"7656…" { "AccountName" "…" … "MostRecent" "1" }`. Preferring the
+        // one marked most recent matters on a Mac with more than one account on it.
+        let blocks = contents.components(separatedBy: "}")
+        let preferred = blocks.first { $0.contains("\"MostRecent\"") && $0.contains("\"1\"") } ?? blocks.first
+
+        guard let preferred,
+              let match = try? Regex(#""AccountName"\s*"([^"]+)""#).firstMatch(in: preferred),
+              let name = match.last?.substring else { return nil }
+        return String(name)
+    }
+
+    /// Starts Steam's text-mode client, which has no browser UI at all.
+    ///
+    /// `steam.exe -textclient` is a console Steam: `login <name>` prompts for the password and
+    /// the Steam Guard code in its own window, and the session it writes is the one the
+    /// graphical client reads. Wine draws ordinary Win32 windows here perfectly well — the
+    /// updater, the error dialogs and the recovery dialog all render correctly — so this is a
+    /// way in that doesn't depend on the part that's broken.
+    ///
+    /// Mythic deliberately doesn't collect the credentials itself and pass them along.
+    /// `steam.exe` accepts `-login <user> <password>`, and putting a password on a command
+    /// line, where it sits in a process list, is not an improvement worth making.
+    @discardableResult
+    static func openTextClient() async throws -> Process {
+        try await Preflight.requireEngineAndRosetta()
+        let container = try await ensureContainer()
+        guard isClientInstalled else { throw NotInstalledError() }
+
+        // A running graphical client owns the session, and a second `steam.exe` hands over to
+        // it and exits rather than starting a console. So the client goes down first.
+        try? await quitClient()
+
+        try await ensureClientRegistryConfiguration(containerURL: container.url)
+        try? setBootstrapperUpdateInhibited(isClientFullyInstalled, containerURL: container.url)
+
+        let process: Process = .init()
+        process.arguments = [steamExecutableURL(containerURL: container.url).path, "-textclient"]
+        process.environment = try Wine.assembleEnvironmentVariables(forContainerAtURL: container.url)
+        Wine.transformProcess(process, containerURL: container.url)
+
+        try process.run()
+        return process
+    }
+
     // MARK: - Library scanning
 
     struct InstalledApp: Equatable {

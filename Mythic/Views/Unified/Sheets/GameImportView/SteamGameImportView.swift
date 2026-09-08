@@ -31,6 +31,9 @@ struct SteamGameImportView: View {
     @State private var isClientStarting = false
     @State private var isClientAlreadyRunning = false
     @State private var isRestartingClient = false
+    @State private var isOpeningTextClient = false
+    @State private var isImportingSignIn = false
+    @State private var importSignInStatus: String?
     @State private var isPinningClient = false
     @State private var pinStatusDescription: String?
     @State private var availablePins: [SteamClientPin] = []
@@ -104,6 +107,18 @@ struct SteamGameImportView: View {
                         .help("Shut the container down completely and start Steam again.")
 
                         Button {
+                            Task { await signInAsTextClient() }
+                        } label: {
+                            if isOpeningTextClient {
+                                ProgressView().controlSize(.small)
+                            } else {
+                                Text("Sign In (Text Mode)")
+                            }
+                        }
+                        .disabled(isOpeningTextClient)
+                        .help("Steam's console client. Its login has no browser UI, so it works even while the graphical one draws nothing.")
+
+                        Button {
                             Task { await scanLibrary() }
                         } label: {
                             if isScanning {
@@ -113,6 +128,26 @@ struct SteamGameImportView: View {
                             }
                         }
                         .disabled(isScanning)
+                    }
+
+                    if Steam.canImportSignInFromMacClient {
+                        HStack {
+                            Button("Use the Mac Steam App's Sign-In") {
+                                Task { await importSignIn() }
+                            }
+                            .disabled(isImportingSignIn)
+                            .help("Copies the session from Steam for macOS into this container, so the client starts already signed in.")
+
+                            if isImportingSignIn {
+                                ProgressView().controlSize(.small)
+                            }
+                        }
+                    }
+
+                    if let importSignInStatus {
+                        Text(importSignInStatus)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
 
                     if isClientStarting || isRestartingClient {
@@ -310,6 +345,32 @@ struct SteamGameImportView: View {
     /// The recovery path for the state where Steam is "running" only in the sense that
     /// something of it is still resident — no window, and every attempt to open it hands
     /// off to that remnant.
+    /// Brings the Mac Steam app's session into the container.
+    private func importSignIn() async {
+        isImportingSignIn = true
+        importSignInStatus = nil
+        defer { isImportingSignIn = false }
+
+        do {
+            try await Steam.importSignInFromMacClient()
+            importSignInStatus = String(localized: "Session imported. Open Steam — if it still asks you to sign in, Steam Guard treated this as a new device; use text-mode sign-in instead.")
+        } catch {
+            importSignInStatus = error.localizedDescription
+        }
+    }
+
+    /// Opens Steam's console client, whose sign-in doesn't involve the browser UI.
+    private func signInAsTextClient() async {
+        isOpeningTextClient = true
+        defer { isOpeningTextClient = false }
+
+        do {
+            try await Steam.openTextClient()
+        } catch {
+            openErrorDescription = error.localizedDescription
+        }
+    }
+
     private func restartClient() async {
         openErrorDescription = nil
         isRestartingClient = true
