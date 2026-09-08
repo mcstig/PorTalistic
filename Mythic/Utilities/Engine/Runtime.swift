@@ -280,16 +280,29 @@ extension Runtime {
         return discovered
     }
 
-    /// The newest runtime Mythic installed itself.
+    /// The runtime Mythic prefers among the ones it installed itself.
     ///
     /// Separate from ``newestAvailable()`` because some things Mythic does — installing DXMT,
     /// say — write into the runtime's own directory, and the Game Porting Toolkit, Whisky and
     /// Homebrew builds it merely discovers belong to other applications.
+    ///
+    /// Ordered by ``RuntimeRelease/catalogue`` rather than by version number, because version
+    /// number is the wrong comparison here: two builds of Wine 11 are not interchangeable when
+    /// one of them exposes the `winemac.drv` entry points DXMT needs and the other doesn't.
+    /// Sorting by version also quietly dropped any runtime whose `--version` output didn't
+    /// parse, which is not a property that should decide anything.
     static func newestManagedByMythic() -> Runtime? {
-        discoverAll()
-            .filter(\.isManagedByMythic)
-            .compactMap { runtime in runtime.version.map { (runtime, $0) } }
-            .max(by: { $0.1 < $1.1 })?.0
+        let managed = discoverAll().filter(\.isManagedByMythic)
+
+        for release in RuntimeRelease.catalogue {
+            if let match = managed.first(where: { $0.id == "managed:\(release.id)" }) {
+                return match
+            }
+        }
+
+        // Something installed outside the catalogue, or a catalogue entry that has since been
+        // renamed. Newest wins, and an unparsed version sorts last rather than disappearing.
+        return managed.max { ($0.version ?? .init(0, 0, 0)) < ($1.version ?? .init(0, 0, 0)) }
     }
 
     /// The newest runtime available, which is the best default for anything that has no

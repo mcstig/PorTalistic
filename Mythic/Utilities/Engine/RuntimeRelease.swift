@@ -53,10 +53,47 @@ struct RuntimeRelease: Identifiable, Hashable {
 extension RuntimeRelease {
     /// Runtimes Mythic can install on request.
     ///
+    /// The catalogue is ordered by preference, best first.
+    ///
+    /// "Best" here means the combination that actually works, which took a while to find.
+    /// Mainline Wine and the bundled engine each have half of what a Windows game needs on a
+    /// Mac and neither has both:
+    ///
+    ///   - The bundled engine is Game Porting Toolkit derived and carries Apple's D3DMetal, so
+    ///     Direct3D 11 works. It is also Wine 7.7, and its socket layer is old enough that the
+    ///     Steam client trips over it continuously.
+    ///   - Mainline Wine 11 has four years of fixes and working sockets, and only wined3d,
+    ///     which on macOS has OpenGL 2.1 underneath: Direct3D feature level 9_3 and an adapter
+    ///     that claims to be an NVIDIA GeForce 6800.
+    ///
+    /// DXMT closes that gap, but only on a Wine that exposes `winemac.drv`'s Metal entry
+    /// points — its own guide asks for a CrossOver-derived Wine 24+. On a Wine without them,
+    /// DXMT half-works in the worst way: adapter enumeration and device creation succeed, so
+    /// everything looks right, and then every swap chain fails with `EGL_BAD_ALLOC` and every
+    /// window that needs one is black.
+    ///
+    /// The Sikarugir build is that Wine. It ships a `dxmt_extescape` marker for the escape
+    /// interface DXMT needs and a `no_d3dmetal` one to say it doesn't carry Apple's
+    /// implementation, which is the pairing we want.
+    ///
     /// - Note: Currently compiled in. It wants to become a signed manifest fetched at
     ///   runtime so new builds don't require an app update — but a hardcoded list with
     ///   pinned digests is the safer starting point, and the shape won't change.
     static let catalogue: [RuntimeRelease] = [
+        .init(
+            id: "wine-sikarugir-11.0",
+            name: "Sikarugir Wine 11.0",
+            version: .init(11, 0, 0),
+            downloadURL: .init(string: "https://github.com/Sikarugir-App/Engines/releases/download/v1.0/WS11WineSikarugir11.0.tar.xz")!,
+            sha256: "d12fa09149b9afd3be349d726eecea6b2216ac574c91f93f56d872bb6ca7b795",
+            payloadSubpath: "wswine.bundle",
+            executableSubpath: "bin/wine",
+            summary: """
+                Wine 11 built for DXMT, which is what gives it Direct3D 11 on Metal. The one \
+                runtime here that has both modern Wine and working Direct3D — install DXMT \
+                from Settings › Engine after installing this.
+                """
+        ),
         .init(
             id: "wine-stable-11.0",
             name: "Wine Stable 11.0",
