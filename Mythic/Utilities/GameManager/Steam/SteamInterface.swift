@@ -808,7 +808,17 @@ final class Steam {
         // A running client would rewrite these on exit, undoing the import.
         try? await quitClient()
 
-        for item in ["config", "userdata"] {
+        var items = ["config", "userdata"]
+
+        // The `ssfn…` files in Steam's root are the Steam Guard sentries — they are what marks
+        // a machine as one this account has already authorised. Copying `config/` and
+        // `userdata/` without them hands over an account and no evidence of the machine, which
+        // is why the first version of this imported a session and still got asked to sign in.
+        if let sentries = try? FileManager.default.contentsOfDirectory(atPath: macClientDirectory.path) {
+            items += sentries.filter { $0.hasPrefix("ssfn") }
+        }
+
+        for item in items {
             let source = macClientDirectory.appending(path: item)
             guard FileManager.default.fileExists(atPath: source.path) else { continue }
 
@@ -871,8 +881,15 @@ final class Steam {
         try await ensureClientRegistryConfiguration(containerURL: container.url)
         try? setBootstrapperUpdateInhibited(isClientFullyInstalled, containerURL: container.url)
 
+        // Through `wineconsole`, which is the whole point.
+        //
+        // `-textclient` is a console program, and a console program started from a GUI process
+        // under Wine gets no window: its output goes to the parent's stdout and its input
+        // comes from the parent's stdin, neither of which anyone can see or type into. Run
+        // directly it appears to do nothing at all, which is exactly what it did.
+        // `wineconsole` gives it a real window.
         let process: Process = .init()
-        process.arguments = [steamExecutableURL(containerURL: container.url).path, "-textclient"]
+        process.arguments = ["wineconsole", #"C:\Program Files (x86)\Steam\steam.exe"#, "-textclient"]
         process.environment = try Wine.assembleEnvironmentVariables(forContainerAtURL: container.url)
         Wine.transformProcess(process, containerURL: container.url)
 
