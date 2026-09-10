@@ -56,11 +56,58 @@ extension Wine {
             runtime.executableURL.deletingLastPathComponent().deletingLastPathComponent()
         }
 
-        /// Whether this runtime has DXMT's libraries in place.
+        /// Whether this runtime already provides Direct3D 11 on Metal.
+        ///
+        /// Two shapes count, and telling them apart matters because installing over the second
+        /// one breaks it. DXMT's own `-builtin` release is a PE/unix pair: `winemetal.dll`
+        /// beside the other builtins and `winemetal.so` next to Wine's unix libraries, the
+        /// arrangement ``install(into:)`` produces. An engine built *for* DXMT instead has the
+        /// Metal entry points inside its own `winemac.so` and reaches them through
+        /// `ExtEscape`, so it carries `winemetal.dll` and no `winemetal.so` at all — the
+        /// Sikarugir engines advertise this with a `dxmt_extescape` marker in their bundle.
         static func isInstalled(in runtime: Runtime) -> Bool {
-            FileManager.default.fileExists(
-                atPath: wineRoot(of: runtime).appending(path: "lib/wine/x86_64-unix/winemetal.so").path
+            let root = wineRoot(of: runtime)
+            let candidates = [
+                "lib/wine/x86_64-unix/winemetal.so", // installed by Mythic
+                "lib/wine/x86_64-windows/winemetal.dll", // shipped by the engine
+                "dxmt_extescape" // Sikarugir's marker for a Wine with the Metal entry points
+            ]
+
+            return candidates.contains {
+                FileManager.default.fileExists(atPath: root.appending(path: $0).path)
+            }
+        }
+
+        /// Whether the runtime carries its own DXMT, rather than a copy Mythic installed.
+        ///
+        /// Kept apart from ``isInstalled(in:)`` so the answer to "should Mythic write into
+        /// this?" isn't the same as "does this work?".
+        static func isShippedByRuntime(_ runtime: Runtime) -> Bool {
+            let root = wineRoot(of: runtime)
+
+            // Mythic's own install always leaves the unix half behind; an engine that has the
+            // PE builtin without it built its own Metal path in.
+            let hasUnixHalf = FileManager.default.fileExists(
+                atPath: root.appending(path: "lib/wine/x86_64-unix/winemetal.so").path
             )
+            let marker = FileManager.default.fileExists(
+                atPath: root.appending(path: "dxmt_extescape").path
+            )
+            let builtin = FileManager.default.fileExists(
+                atPath: root.appending(path: "lib/wine/x86_64-windows/winemetal.dll").path
+            )
+
+            return marker || (builtin && !hasUnixHalf)
+        }
+
+        struct AlreadyShippedError: LocalizedError {
+            let runtimeName: String
+            var errorDescription: String? {
+                String(localized: "\(runtimeName) already comes with Direct3D 11 on Metal.")
+            }
+            var failureReason: String? {
+                String(localized: "Installing DXMT over it would replace the build the engine was made for with one that expects a different Wine.")
+            }
         }
 
         struct UnsupportedRuntimeError: LocalizedError {
@@ -108,6 +155,16 @@ extension Wine {
             guard runtime.isManagedByMythic else {
                 transcript.append("refused: not managed by Mythic")
                 throw UnsupportedRuntimeError(runtimeName: runtime.name)
+            }
+
+            // An engine built for DXMT pairs its `winemetal.dll` with Metal entry points in
+            // its own `winemac.so`. Dropping the `-builtin` release on top replaces that DLL
+            // with one that talks to a `winemetal.so` unix library compiled against a
+            // different Wine, and adds that library too — so both halves are present, both
+            // look right, and the engine no longer matches itself.
+            guard !isShippedByRuntime(runtime) else {
+                transcript.append("refused: runtime ships its own DXMT")
+                throw AlreadyShippedError(runtimeName: runtime.name)
             }
 
             let root = wineRoot(of: runtime)

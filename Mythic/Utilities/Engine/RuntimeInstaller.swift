@@ -68,6 +68,9 @@ enum RuntimeInstaller {
 
     // MARK: - Install
 
+    /// Where a runtime keeps the Unix libraries it links against, when it doesn't ship them.
+    static let supportLibrariesDirectoryName = "Frameworks"
+
     /// Fetches a runtime and installs it under `Runtimes/<id>/`.
     ///
     /// Every step happens in a temporary directory and only the final, verified payload is
@@ -119,6 +122,18 @@ enum RuntimeInstaller {
         onStage(.finalising)
         try FileManager.default.createDirectory(at: managedDirectory, withIntermediateDirectories: true)
         try FileManager.default.moveItem(at: payload, to: destination)
+
+        // 5. The Unix libraries the engine expects its wrapper to have provided.
+        if let support = release.supportLibraries {
+            do {
+                try await installSupportLibraries(support, for: release, into: destination, scratch: scratch)
+            } catch {
+                // Without them the engine cannot start a single Windows process, and says so
+                // only on a stderr nobody reads. Better to fail the install.
+                try? FileManager.default.removeItem(at: destination)
+                throw error
+            }
+        }
 
         try await clearQuarantine(at: destination)
 
@@ -258,4 +273,76 @@ enum RuntimeInstaller {
             log.warning("xattr exited with status \(process.terminationStatus) while clearing quarantine")
         }
     }
+
+    /// Whether a runtime that needs support libraries is missing them.
+    ///
+    /// Worth a dedicated check: an engine in this state is installed, reports its version
+    /// perfectly well, and cannot run a single Windows program. Nothing about it looks wrong
+    /// until a prefix silently fails to boot.
+    static func isMissingSupportLibraries(_ runtime: Runtime) -> Bool {
+        guard let release = RuntimeRelease.matching(runtime), release.supportLibraries != nil else {
+            return false
+        }
+
+        let frameworks = runtime.executableURL
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appending(path: supportLibrariesDirectoryName)
+
+        return !FileManager.default.fileExists(atPath: frameworks.path)
+    }
+
+    /// Adds the support libraries to a runtime installed before Mythic knew to fetch them.
+    static func repairSupportLibraries(for runtime: Runtime) async throws {
+        guard let release = RuntimeRelease.matching(runtime),
+              let support = release.supportLibraries else { return }
+
+        let destination = runtime.executableURL
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+
+        let scratch = FileManager.default.temporaryDirectory
+            .appending(path: "MythicRuntimeRepair-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: scratch) }
+
+        try await installSupportLibraries(support, for: release, into: destination, scratch: scratch)
+        try await clearQuarantine(at: destination.appending(path: supportLibrariesDirectoryName))
+        Runtime.invalidateDiscoveryCache()
+    }
+
+    /// Fetches and unpacks a runtime's support libraries beside it.
+    private static func installSupportLibraries(
+        _ support: RuntimeRelease.SupportLibraries,
+        for release: RuntimeRelease,
+        into destination: URL,
+        scratch: URL
+    ) async throws {
+        let archive = scratch.appending(path: "support-\(release.id).tar.xz")
+        let (downloaded, response) = try await URLSession.shared.download(from: support.downloadURL)
+        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            throw URLError(.badServerResponse)
+        }
+        try FileManager.default.moveItem(at: downloaded, to: archive)
+
+        let digest = try sha256(ofFileAt: archive)
+        guard digest.caseInsensitiveCompare(support.sha256) == .orderedSame else {
+            throw ChecksumMismatchError(expected: support.sha256, actual: digest)
+        }
+
+        let extracted = scratch.appending(path: "support-extracted")
+        try FileManager.default.createDirectory(at: extracted, withIntermediateDirectories: true)
+        try extract(archive: archive, into: extracted)
+
+        let payload = extracted.appending(path: support.payloadSubpath)
+        guard FileManager.default.fileExists(atPath: payload.path) else {
+            throw PayloadMissingError(expectedPath: support.payloadSubpath)
+        }
+
+        try FileManager.default.moveItem(
+            at: payload, to: destination.appending(path: supportLibrariesDirectoryName)
+        )
+        log.notice("Installed support libraries for \(release.name, privacy: .public)")
+    }
+
 }

@@ -330,6 +330,30 @@ extension SettingsView {
         @State private var installingRuntimeID: String?
         @State private var installStage: RuntimeInstaller.Stage?
         @State private var runtimeInstallError: String?
+        @State private var repairingRuntimeID: String?
+        @State private var runtimePendingRemoval: Runtime?
+
+        private func remove(_ runtime: Runtime) {
+            do {
+                try RuntimeInstaller.remove(runtime)
+                installedRuntimes = Runtime.discoverAll()
+            } catch {
+                runtimeInstallError = error.localizedDescription
+            }
+        }
+
+        /// Adds the support libraries to a runtime installed before Mythic fetched them.
+        private func repairRuntime(_ runtime: Runtime) async {
+            repairingRuntimeID = runtime.id
+            defer { repairingRuntimeID = nil }
+
+            do {
+                try await RuntimeInstaller.repairSupportLibraries(for: runtime)
+                installedRuntimes = Runtime.discoverAll()
+            } catch {
+                runtimeInstallError = error.localizedDescription
+            }
+        }
 
         @State private var isCleaning: Bool = false
         @State private var isCleanupSuccessful: Bool?
@@ -484,8 +508,44 @@ extension SettingsView {
                             Text("Installed separately")
                                 .font(.caption)
                                 .foregroundStyle(.tertiary)
+                        } else {
+                            if RuntimeInstaller.isMissingSupportLibraries(runtime) {
+                                if repairingRuntimeID == runtime.id {
+                                    ProgressView().controlSize(.small)
+                                } else {
+                                    Button("Repair") {
+                                        Task { await repairRuntime(runtime) }
+                                    }
+                                    .help("This runtime is missing the Unix libraries it links against, so it can't start Windows programs. Downloads and installs them.")
+                                }
+                            }
+
+                            // Reinstalling is the only way back from a runtime that's been
+                            // written into — by Mythic or by hand — so being able to install
+                            // one without being able to remove it is a dead end.
+                            Button("Remove", systemImage: "trash") {
+                                runtimePendingRemoval = runtime
+                            }
+                            .labelStyle(.iconOnly)
+                            .buttonStyle(.borderless)
+                            .foregroundStyle(.secondary)
+                            .help("Deletes this runtime. Containers using it fall back to the bundled engine until you install it again.")
                         }
                     }
+                }
+                .alert("Remove \(runtimePendingRemoval?.name ?? String(localized: "this runtime"))?",
+                       isPresented: .init(get: { runtimePendingRemoval != nil },
+                                          set: { if !$0 { runtimePendingRemoval = nil } })) {
+                    Button("Cancel", role: .cancel) { runtimePendingRemoval = nil }
+                    Button("Remove", role: .destructive) {
+                        if let runtimePendingRemoval { remove(runtimePendingRemoval) }
+                        runtimePendingRemoval = nil
+                    }
+                } message: {
+                    Text("""
+                    Containers set to use it will run on the bundled engine until it's installed \
+                    again. Nothing inside those containers is deleted.
+                    """)
                 }
 
                 ForEach(RuntimeRelease.catalogue.filter { release in
@@ -597,22 +657,30 @@ extension SettingsView {
         var body: some View {
             if Engine.isInstalled {
                 if let dxmtTarget {
-                    OperationButton(
-                        Wine.DXMT.isInstalled(in: dxmtTarget)
-                            ? "Reinstall Direct3D 11 on Metal (DXMT) for \(dxmtTarget.name)"
-                            : "Install Direct3D 11 on Metal (DXMT) for \(dxmtTarget.name)",
-                        systemImage: "cpu",
-                        operating: $isDXMTInstalling,
-                        successful: $isDXMTInstallSuccessful
-                    ) {
-                        do {
-                            try await Wine.DXMT.install(into: dxmtTarget)
-                            isDXMTInstallSuccessful = true
-                        } catch {
-                            isDXMTInstallSuccessful = false
+                    if Wine.DXMT.isShippedByRuntime(dxmtTarget) {
+                        // Nothing to offer, and offering it anyway invites replacing a working
+                        // engine's own DXMT with one built against a different Wine.
+                        Label("\(dxmtTarget.name) already has Direct3D 11 on Metal (DXMT).",
+                              systemImage: "checkmark.circle")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        OperationButton(
+                            Wine.DXMT.isInstalled(in: dxmtTarget)
+                                ? "Reinstall Direct3D 11 on Metal (DXMT) for \(dxmtTarget.name)"
+                                : "Install Direct3D 11 on Metal (DXMT) for \(dxmtTarget.name)",
+                            systemImage: "cpu",
+                            operating: $isDXMTInstalling,
+                            successful: $isDXMTInstallSuccessful
+                        ) {
+                            do {
+                                try await Wine.DXMT.install(into: dxmtTarget)
+                                isDXMTInstallSuccessful = true
+                            } catch {
+                                isDXMTInstallSuccessful = false
+                            }
                         }
+                        .help("Newer Wine has working networking but no Direct3D 11 on macOS; DXMT supplies it, which is what the Steam client and most Direct3D 11 games need.")
                     }
-                    .help("Newer Wine has working networking but no Direct3D 11 on macOS; DXMT supplies it, which is what the Steam client and most Direct3D 11 games need.")
                 }
 
                 OperationButton(

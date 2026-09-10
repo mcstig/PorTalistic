@@ -48,6 +48,29 @@ struct RuntimeRelease: Identifiable, Hashable {
 
     /// Shown to the user when choosing between runtimes.
     let summary: String
+
+    /// A second archive carrying the Unix libraries the engine links against, if it doesn't
+    /// carry its own.
+    ///
+    /// Wineskin-style engines are built to sit inside a wrapper application that supplies
+    /// these, so on their own they don't start at all — and they fail in a way that names
+    /// neither the engine nor the wrapper:
+    ///
+    ///     dyld: Library not loaded: @rpath/libinotify.0.dylib
+    ///       Referenced from: .../bin/wineserver
+    ///       Reason: no LC_RPATH's found
+    ///
+    /// Mythic fetches the wrapper too and keeps its `Frameworks` directory beside the engine,
+    /// pinned by its own digest like everything else here.
+    var supportLibraries: SupportLibraries?
+
+    struct SupportLibraries: Hashable {
+        let downloadURL: URL
+        let sha256: String
+
+        /// Path within the extracted archive to the directory of dylibs.
+        let payloadSubpath: String
+    }
 }
 
 extension RuntimeRelease {
@@ -92,7 +115,12 @@ extension RuntimeRelease {
                 Wine 11 built for DXMT, which is what gives it Direct3D 11 on Metal. The one \
                 runtime here that has both modern Wine and working Direct3D — install DXMT \
                 from Settings › Engine after installing this.
-                """
+                """,
+            supportLibraries: .init(
+                downloadURL: .init(string: "https://github.com/Sikarugir-App/Wrapper/releases/download/v1.0/Template-1.0.14.tar.xz")!,
+                sha256: "f35b11837c79ca5ca23a0190784b44a5dd40deacf59bae4366e6032dcd4998fa",
+                payloadSubpath: "Template-1.0.14.app/Contents/Frameworks"
+            )
         ),
         .init(
             id: "wine-stable-11.0",

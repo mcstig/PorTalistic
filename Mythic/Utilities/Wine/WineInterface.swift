@@ -98,9 +98,11 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
         // So: an allowlist. Anything not named here is Mythic's business, not Wine's.
         let inheritedKeys: Set<String> = [
             "HOME", "USER", "LOGNAME", "SHELL", "PATH", "TMPDIR",
-            "LANG", "LC_ALL", "LC_CTYPE",
-            "CX_ROOT" // Set by Mythic itself; the engine is CrossOver-derived and looks for it.
+            "LANG", "LC_ALL", "LC_CTYPE"
         ]
+
+        // `CX_ROOT` is deliberately absent: Mythic sets it to its own bundle for the bundled
+        // engine's sake, and it is added back per-runtime in ``transformProcess(_:containerURL:)``.
 
         var constructedEnvironment = ProcessInfo.processInfo.environment
             .filter { inheritedKeys.contains($0.key) }
@@ -135,10 +137,50 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
     }
 
     static func transformProcess(_ process: Process, containerURL: URL) {
-        process.executableURL = runtime(forContainerAtURL: containerURL).executableURL
+        let runtime = runtime(forContainerAtURL: containerURL)
+        process.executableURL = runtime.executableURL
 
-        let capturedEnvironment = process.environment
-        process.environment = constructEnvironment(with: containerURL, additionalVariables: capturedEnvironment ?? [:])
+        var capturedEnvironment = process.environment ?? [:]
+
+        // Where a runtime keeps the Unix libraries it links against, if it doesn't carry them
+        // itself. Wineskin-derived engines are built to sit inside a wrapper application that
+        // supplies these; installed on their own they can't start a single Windows process,
+        // and the only sign of it is a dyld message on a stderr the caller turns into a
+        // generic "couldn't boot":
+        //
+        //     dyld: Library not loaded: @rpath/libinotify.0.dylib
+        //       Referenced from: .../bin/wineserver
+        //       Reason: no LC_RPATH's found
+        //
+        // Fallback rather than `DYLD_LIBRARY_PATH`, so a runtime that does ship its own
+        // libraries, or finds them on the system, still prefers those.
+        let root = runtime.executableURL.deletingLastPathComponent().deletingLastPathComponent()
+        capturedEnvironment.merge(supportLibraryEnvironment(forRuntimeAt: root), uniquingKeysWith: { $1 })
+
+        // A CrossOver-derived Wine resolves its own tree from `CX_ROOT`, and Mythic sets that
+        // to Mythic.app at launch for the bundled engine. Handing it to any *other* runtime
+        // points that runtime at a tree with no Wine in it, and the failure is silent in the
+        // worst way: `wine --version` answers fine, because it needs nothing from the tree,
+        // while every attempt to start a Windows process ends as a loader Wine forked, could
+        // not exec, and reported only as
+        //
+        //     err:environ:run_wineboot failed to start wineboot 1
+        //
+        // So each runtime gets its own root, and only the bundled engine keeps Mythic's.
+        if case .bundledEngine = runtime.origin, let cxRoot = ProcessInfo.processInfo.environment["CX_ROOT"] {
+            capturedEnvironment["CX_ROOT"] = cxRoot
+        }
+
+        process.environment = constructEnvironment(with: containerURL, additionalVariables: capturedEnvironment)
+    }
+
+    /// The variables a runtime needs regardless of which of its binaries is being run.
+    private static func supportLibraryEnvironment(forRuntimeAt runtimeRoot: URL) -> [String: String] {
+        let frameworks = runtimeRoot.appending(path: RuntimeInstaller.supportLibrariesDirectoryName)
+        guard FileManager.default.fileExists(atPath: frameworks.path) else { return [:] }
+
+        return ["DYLD_FALLBACK_LIBRARY_PATH":
+                    [frameworks.path, "/usr/local/lib", "/usr/lib"].joined(separator: ":")]
     }
 
     /// Whether the container's selected runtime can actually talk to the `wineserver` that
@@ -257,8 +299,158 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
     static func boot(at containerURL: URL, parameters: BootParameter...) async throws -> Process.CommandResult {
         let process: Process = .init()
         process.arguments = ["wineboot"] + parameters.map(\.rawValue)
+
+        // Creating a prefix is the one boot whose failure leaves nothing to inspect, and the
+        // errors are all about how the engine was built and where it looks for things — a
+        // missing unix library, a loader that can't find the builtin it needs to start. Wine
+        // will say which, but only if asked, so ask on this boot alone: it happens once per
+        // container and the answer goes in the transcript below.
+        if parameters.contains(.prefixInit) {
+            process.environment = ["WINEDEBUG": "+environ,+process,+loaddll"]
+        }
+
         transformProcess(process, containerURL: containerURL)
-        return try await process.runWrapped()
+        let result = try await process.runWrapped()
+
+        // Kept next to the container, because a prefix that fails to boot is the one case
+        // where there's no prefix to look inside afterwards, and the reason only ever appears
+        // on a stderr the caller turns into `UnableToBootError`.
+        // Wine's debug channels are chatty enough to bury the failure they were turned on to
+        // find, and the interesting lines are always the last ones.
+        func tail(_ output: String?, _ limit: Int = 60_000) -> String {
+            guard let output, output.count > limit else { return output ?? "" }
+            return "…(first \(output.count - limit) characters omitted)…\n"
+                + String(output.suffix(limit))
+        }
+
+        let transcript = """
+            wine: \(process.executableURL?.path ?? "?")
+            arguments: \(process.arguments ?? [])
+            environment: \(process.environment?.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" } ?? [])
+            exit: \(process.terminationStatus)
+
+            stdout:
+            \(tail(result.standardOutput))
+
+            stderr:
+            \(tail(result.standardError))
+            """
+        var report = transcript
+        if process.terminationStatus != 0 {
+            let diagnostics = await runtimeDiagnostics(for: containerURL)
+            report += "\n\n" + diagnostics
+        }
+
+        try? report.write(to: containerURL.appending(path: "wineboot.log"),
+                          atomically: true, encoding: .utf8)
+
+        return result
+    }
+
+    /// What a failed boot needs to say about the engine that failed it.
+    ///
+    /// Wine reports a loader it couldn't start as `failed to start wineboot 1` and nothing
+    /// else — the exit code of a grandchild whose `execv` never returned. The interesting
+    /// facts are all about the engine's own files, so gather them: which binary Wine derives
+    /// as its loader (the directory holding `ntdll.so`, not `bin/wine`), whether that binary
+    /// can run at all, and what it says when it can't.
+    private static func runtimeDiagnostics(for containerURL: URL) async -> String {
+        let runtime = runtime(forContainerAtURL: containerURL)
+        let root = runtime.executableURL.deletingLastPathComponent().deletingLastPathComponent()
+
+        var lines = ["--- runtime diagnostics ---",
+                     "runtime: \(runtime.name) [\(runtime.id)]",
+                     "root: \(root.path)"]
+
+        for relative in ["bin", "lib/wine/x86_64-unix", "lib/wine/x86_64-windows", "Frameworks"] {
+            let directory = root.appending(path: relative)
+            let contents = try? FileManager.default.contentsOfDirectory(atPath: directory.path)
+            lines.append("\(relative): \(contents.map { "\($0.count) entries" } ?? "missing")")
+        }
+
+        // Wine 11 ignores `WINELOADER`: it derives the loader from wherever `ntdll.so` sits,
+        // so this — not the executable Mythic invokes — is what has to be able to start.
+        let loader = root.appending(path: "lib/wine/x86_64-unix/wine")
+        lines.append("derived loader: \(loader.path)")
+        lines.append("  exists=\(FileManager.default.fileExists(atPath: loader.path))"
+                     + " executable=\(FileManager.default.isExecutableFile(atPath: loader.path))")
+
+        if FileManager.default.isExecutableFile(atPath: loader.path) {
+            let probe: Process = .init()
+            probe.executableURL = loader
+            probe.arguments = ["--version"]
+            probe.environment = supportLibraryEnvironment(forRuntimeAt: root)
+
+            if let output = try? await probe.runWrapped() {
+                lines.append("  --version exit=\(probe.terminationStatus)")
+                lines.append("  stdout: \(output.standardOutput ?? "")")
+                lines.append("  stderr: \(output.standardError ?? "")")
+            } else {
+                lines.append("  couldn't be run at all")
+            }
+
+            // The failure above is a loader that Wine forked and exec'd and that died before
+            // it could report anything. Run the same boot through that loader ourselves: it
+            // is the one process in the chain whose output nothing swallows.
+            let direct: Process = .init()
+            direct.executableURL = loader
+            direct.arguments = ["wineboot", "--init"]
+            direct.environment = constructEnvironment(
+                with: containerURL,
+                additionalVariables: supportLibraryEnvironment(forRuntimeAt: root)
+                    .merging(["WINEDEBUG": "+server,+seh,+process"], uniquingKeysWith: { $1 })
+            )
+
+            if let output = try? await direct.runWrapped() {
+                lines.append("derived loader, wineboot --init: exit=\(direct.terminationStatus)")
+                lines.append("  stdout: \(String((output.standardOutput ?? "").suffix(4_000)))")
+                lines.append("  stderr: \(String((output.standardError ?? "").suffix(40_000)))")
+            } else {
+                lines.append("derived loader, wineboot --init: couldn't be run at all")
+            }
+        }
+
+        lines.append(contentsOf: recentCrashReports(matching: ["wine", "wineboot", "wineserver"]))
+
+        return lines.joined(separator: "\n")
+    }
+
+    /// The headline of any crash report macOS wrote for the engine in the last few minutes.
+    ///
+    /// A Wine process that dies inside its own start-up says nothing at all — the traces stop
+    /// mid-sentence and the parent reports an exit code. macOS, meanwhile, has already written
+    /// down the signal, the fault address and the library it came from. Reading the first
+    /// dozen lines back turns "it exited 1" into something diagnosable.
+    private static func recentCrashReports(matching names: [String]) -> [String] {
+        let directory = URL(filePath: NSHomeDirectory())
+            .appending(path: "Library/Logs/DiagnosticReports")
+
+        guard let entries = try? FileManager.default.contentsOfDirectory(
+            at: directory, includingPropertiesForKeys: [.contentModificationDateKey]
+        ) else { return ["crash reports: \(directory.path) isn't readable"] }
+
+        let cutoff: Date = .now.addingTimeInterval(-600)
+        let recent = entries
+            .filter { entry in names.contains { entry.lastPathComponent.lowercased().hasPrefix($0) } }
+            .compactMap { entry -> (URL, Date)? in
+                guard let date = try? entry.resourceValues(forKeys: [.contentModificationDateKey])
+                    .contentModificationDate, date > cutoff else { return nil }
+                return (entry, date)
+            }
+            .sorted { $0.1 > $1.1 }
+
+        guard let newest = recent.first?.0 else {
+            return ["crash reports: none for \(names.joined(separator: ", ")) in the last 10 minutes"]
+        }
+
+        var report = ["crash report: \(newest.lastPathComponent)"]
+        if let contents = try? String(contentsOf: newest, encoding: .utf8) {
+            report.append(contentsOf: contents.split(separator: "\n", omittingEmptySubsequences: false)
+                .prefix(60)
+                .map { "  " + $0 })
+        }
+
+        return report
     }
 
     /**
