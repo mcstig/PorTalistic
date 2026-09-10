@@ -76,7 +76,9 @@ struct RuntimeRelease: Identifiable, Hashable {
 extension RuntimeRelease {
     /// Runtimes Mythic can install on request.
     ///
-    /// The catalogue is ordered by preference, best first.
+    /// The catalogue is ordered by preference, best first — where "best" means the one a
+    /// new container should default to, so a runtime that can't boot one doesn't lead the
+    /// list however good its graphics story is.
     ///
     /// "Best" here means the combination that actually works, which took a while to find.
     /// Mainline Wine and the bundled engine each have half of what a Windows game needs on a
@@ -104,25 +106,6 @@ extension RuntimeRelease {
     ///   pinned digests is the safer starting point, and the shape won't change.
     static let catalogue: [RuntimeRelease] = [
         .init(
-            id: "wine-sikarugir-11.0",
-            name: "Sikarugir Wine 11.0",
-            version: .init(11, 0, 0),
-            downloadURL: .init(string: "https://github.com/Sikarugir-App/Engines/releases/download/v1.0/WS11WineSikarugir11.0.tar.xz")!,
-            sha256: "d12fa09149b9afd3be349d726eecea6b2216ac574c91f93f56d872bb6ca7b795",
-            payloadSubpath: "wswine.bundle",
-            executableSubpath: "bin/wine",
-            summary: """
-                Wine 11 built for DXMT, which is what gives it Direct3D 11 on Metal. The one \
-                runtime here that has both modern Wine and working Direct3D — install DXMT \
-                from Settings › Engine after installing this.
-                """,
-            supportLibraries: .init(
-                downloadURL: .init(string: "https://github.com/Sikarugir-App/Wrapper/releases/download/v1.0/Template-1.0.14.tar.xz")!,
-                sha256: "f35b11837c79ca5ca23a0190784b44a5dd40deacf59bae4366e6032dcd4998fa",
-                payloadSubpath: "Template-1.0.14.app/Contents/Frameworks"
-            )
-        ),
-        .init(
             id: "wine-stable-11.0",
             name: "Wine Stable 11.0",
             version: .init(11, 0, 0),
@@ -138,7 +121,28 @@ extension RuntimeRelease {
                 so it isn't the right choice for demanding games — but it's the current \
                 reference point for anything the older engine can't run, the Steam client above all.
                 """
-        )
+        ),
+        .init(
+            id: "wine-sikarugir-11.0",
+            name: "Sikarugir Wine 11.0",
+            version: .init(11, 0, 0),
+            downloadURL: .init(string: "https://github.com/Sikarugir-App/Engines/releases/download/v1.0/WS11WineSikarugir11.0.tar.xz")!,
+            sha256: "d12fa09149b9afd3be349d726eecea6b2216ac574c91f93f56d872bb6ca7b795",
+            payloadSubpath: "wswine.bundle",
+            executableSubpath: "bin/wine",
+            summary: """
+                Wine 11 built for DXMT, so it has both modern Wine and Direct3D 11 on Metal — \
+                the combination nothing else here has. Installs and reports its version, but \
+                on some Macs cannot create a container at all: every Windows process it starts \
+                is killed by macOS the moment Wine hands control to Windows code. Try it, and \
+                keep Wine Stable if it can't boot.
+                """,
+            supportLibraries: .init(
+                downloadURL: .init(string: "https://github.com/Sikarugir-App/Wrapper/releases/download/v1.0/Template-1.0.14.tar.xz")!,
+                sha256: "f35b11837c79ca5ca23a0190784b44a5dd40deacf59bae4366e6032dcd4998fa",
+                payloadSubpath: "Template-1.0.14.app/Contents/Frameworks"
+            )
+        ),
     ]
 
     /// The catalogue entry matching an installed runtime, if it came from here.
