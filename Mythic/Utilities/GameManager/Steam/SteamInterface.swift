@@ -338,9 +338,31 @@ final class Steam {
             // because Steam's own compositor presents through Direct3D 11 and hits the same
             // wall ANGLE did.
             //
-            // So this is kept for the progress it does make, and the remaining problem is not
-            // in this list. See ``Wine/DXMT`` for what is actually missing.
+            // So this is kept for the progress it does make.
             "-cef-disable-gpu",
+
+            // How the client gets a rendered browser view onto its own window, which is the
+            // step that is failing.
+            //
+            // Worth being clear about what is and isn't broken. With `-cef-disable-gpu` above,
+            // Chromium renders through SwiftShader in software:
+            //
+            //     GL_RENDERER: ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero)),
+            //         SwiftShader driver-5.0.0)
+            //
+            // No swap chain, no `EGL_BAD_ALLOC`, a live GPU process and a live renderer — and
+            // `steamui_login.txt` shows the login page running (`SetLoginState:
+            // WaitingForCredentials`). The page is drawn. It just never reaches the window,
+            // which is the client's own compositing layer rather than Chromium's, and which
+            // `webhelper.txt` says it cannot do the way it wants to:
+            //
+            //     Browser requested transparent background, but it is not supported
+            //
+            // Wine has no transparent windows, so a view that composites itself over one
+            // shows what is behind it: nothing. `steamui.dll` documents this option as "Force
+            // the use of the system browser composer", which is the other path — and the same
+            // knob the registry exposes as `OverrideBrowserComposerMode`.
+            "-system-composer",
 
 
             // A Wine virtual desktop (`explorer /desktop=Steam,WxH`) was tried too, on the
@@ -741,11 +763,29 @@ final class Steam {
         process.arguments = [steamExecutableURL(containerURL: containerURL).path, "-shutdown"]
         process.environment = try Wine.assembleEnvironmentVariables(forContainerAtURL: containerURL)
         Wine.transformProcess(process, containerURL: containerURL)
-        _ = try? await process.runWrapped()
 
-        let deadline: ContinuousClock.Instant = .now.advanced(by: .seconds(20))
+        // `steam.exe -shutdown` is the bootstrapper asking the running client to quit, and it
+        // waits for an answer. A client wedged before its UI came up never answers, and then
+        // this call never returns either — which is how "Restart Steam" came to hang on
+        // "Shutting Steam down" with no way out. Ask politely, but on a clock.
+        let asked: Task<Void, Never> = .init {
+            _ = try? await process.runWrapped()
+        }
+
+        let politeDeadline: ContinuousClock.Instant = .now.advanced(by: .seconds(10))
+        while .now < politeDeadline, asked.isCancelled == false, process.isRunning {
+            try? await Task.sleep(for: .milliseconds(500))
+        }
+
+        if process.isRunning {
+            log.notice("Steam didn't answer -shutdown in time; taking the container down instead.")
+            process.terminate()
+        }
+        asked.cancel()
+
+        let deadline: ContinuousClock.Instant = .now.advanced(by: .seconds(10))
         while .now < deadline, await isClientRunning() {
-            try? await Task.sleep(for: .seconds(2))
+            try? await Task.sleep(for: .seconds(1))
         }
 
         // The container goes down either way, rather than only when Steam refuses to.
