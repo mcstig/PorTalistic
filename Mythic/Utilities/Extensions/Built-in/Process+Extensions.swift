@@ -86,6 +86,94 @@ extension Process {
     func runWrappedAsync() async throws -> CommandResult {
         try await runWrapped()
     }
+
+    // MARK: - Bounded execution
+
+    /// Whether the process has exited by `deadline`, without blocking a thread while waiting.
+    ///
+    /// Deliberately polling rather than `waitUntilExit()`. That call blocks whichever thread
+    /// it lands on, including a cooperative-pool one, and the processes this exists for are
+    /// precisely the ones that never exit.
+    private func hasExited(by deadline: ContinuousClock.Instant) async -> Bool {
+        while .now < deadline {
+            if !isRunning { return true }
+            try? await Task.sleep(for: .milliseconds(200))
+        }
+
+        return !isRunning
+    }
+
+    /// Runs the process, and kills it at `timeout` rather than waiting forever.
+    ///
+    /// ``runWrapped()`` cannot be used for anything in a Wine container, and the reason isn't
+    /// obvious: it collects output through a `Pipe` and reads to end-of-file, but the write
+    /// end of that pipe is inherited by the wineserver and by every Windows process under it.
+    /// EOF therefore doesn't arrive when the process we launched exits — it arrives when the
+    /// last of its unrelated descendants does. `steam.exe -shutdown` against a client wedged
+    /// before its UI came up never reaches that point, which is how "Restart Steam" came to
+    /// sit on "Shutting Steam down" forever.
+    ///
+    /// - Returns: `true` if the process exited on its own, `false` if it had to be killed.
+    @discardableResult
+    func runBounded(timeout: Duration) async -> Bool {
+        standardInput = FileHandle.nullDevice
+        if standardOutput == nil { standardOutput = FileHandle.nullDevice }
+        if standardError == nil { standardError = FileHandle.nullDevice }
+
+        do {
+            try run()
+        } catch {
+            Logger.app.error("Couldn't start \(self.executableURL?.lastPathComponent ?? "process"): \(error.localizedDescription)")
+            return false
+        }
+
+        if await hasExited(by: .now.advanced(by: timeout)) { return true }
+
+        Logger.app.notice("\(self.executableURL?.lastPathComponent ?? "process", privacy: .public) outlived its \(timeout, privacy: .public) budget; terminating it.")
+        terminate()
+
+        if await hasExited(by: .now.advanced(by: .seconds(2))) { return false }
+        kill(processIdentifier, SIGKILL)
+
+        return false
+    }
+
+    /// ``runBounded(timeout:)``, keeping the output.
+    ///
+    /// Output goes to files rather than pipes, so reading it never waits on anyone: whatever
+    /// was written by the deadline is what comes back, and descendants still holding the
+    /// handles are free to keep writing into a file nobody is waiting on.
+    ///
+    /// - Returns: `nil` if the process had to be killed.
+    func runWrapped(timeout: Duration) async -> CommandResult? {
+        let scratch = FileManager.default.temporaryDirectory
+            .appending(path: "MythicProcess-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: scratch) }
+
+        let outputURL = scratch.appending(path: "stdout")
+        let errorURL = scratch.appending(path: "stderr")
+
+        for url in [outputURL, errorURL] {
+            FileManager.default.createFile(atPath: url.path, contents: nil)
+        }
+
+        guard let outputHandle = try? FileHandle(forWritingTo: outputURL),
+              let errorHandle = try? FileHandle(forWritingTo: errorURL) else { return nil }
+
+        standardOutput = outputHandle
+        standardError = errorHandle
+
+        let exited = await runBounded(timeout: timeout)
+
+        try? outputHandle.close()
+        try? errorHandle.close()
+
+        guard exited else { return nil }
+
+        return .init(standardOutput: try? String(contentsOf: outputURL, encoding: .utf8),
+                     standardError: try? String(contentsOf: errorURL, encoding: .utf8))
+    }
     
     func runStreamed(throwsOnChunkError: Bool = true) -> AsyncThrowingStream<OutputChunk, Error> {
         AsyncThrowingStream { continuation in

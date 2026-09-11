@@ -230,9 +230,11 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
             process.environment = environment
             process.qualityOfService = .utility
 
-            let result = try? await process.runWrapped()
+            let result = await process.runWrapped(timeout: .seconds(8))
             if let stderr = result?.standardError, !stderr.isEmpty {
                 log.debug("wineserver -k (\(runtime.name, privacy: .public)): \(stderr, privacy: .public)")
+            } else if result == nil {
+                log.warning("wineserver -k (\(runtime.name, privacy: .public)) had to be killed.")
             }
         }
 
@@ -263,8 +265,13 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
         process.arguments = ["tasklist", "/fo", "csv"]
         transformProcess(process, containerURL: containerURL)
         
-        let commandResult = try await process.runWrapped()
-        
+        // Bounded: `tasklist` is a Windows process, so asking a broken prefix what is running
+        // in it can hang exactly as hard as the thing we're asking about.
+        guard let commandResult = await process.runWrapped(timeout: .seconds(15)) else {
+            log.warning("tasklist didn't answer for \(containerURL.lastPathComponent, privacy: .public)")
+            return list
+        }
+
         if let standardOutput = commandResult.standardOutput {
             // One shape for every Wine version, because we asked for one.
             // The header row is quoted too, but its PID column isn't digits, so it simply

@@ -765,27 +765,20 @@ final class Steam {
         Wine.transformProcess(process, containerURL: containerURL)
 
         // `steam.exe -shutdown` is the bootstrapper asking the running client to quit, and it
-        // waits for an answer. A client wedged before its UI came up never answers, and then
-        // this call never returns either — which is how "Restart Steam" came to hang on
-        // "Shutting Steam down" with no way out. Ask politely, but on a clock.
-        let asked: Task<Void, Never> = .init {
-            _ = try? await process.runWrapped()
-        }
-
-        let politeDeadline: ContinuousClock.Instant = .now.advanced(by: .seconds(10))
-        while .now < politeDeadline, asked.isCancelled == false, process.isRunning {
-            try? await Task.sleep(for: .milliseconds(500))
-        }
-
-        if process.isRunning {
+        // waits for an answer. A client wedged before its UI came up never answers, so this
+        // gets a budget rather than a promise — see ``Process/runBounded(timeout:)`` for why
+        // waiting on it at all was the bug behind "Restart Steam" hanging on "Shutting Steam
+        // down".
+        if await process.runBounded(timeout: .seconds(8)) == false {
             log.notice("Steam didn't answer -shutdown in time; taking the container down instead.")
-            process.terminate()
         }
-        asked.cancel()
 
-        let deadline: ContinuousClock.Instant = .now.advanced(by: .seconds(10))
+        // Give it a moment to go on its own, but don't insist: `isClientRunning()` runs
+        // `tasklist` *inside* the container, and a prefix in this state is exactly where that
+        // can't answer either.
+        let deadline: ContinuousClock.Instant = .now.advanced(by: .seconds(6))
         while .now < deadline, await isClientRunning() {
-            try? await Task.sleep(for: .seconds(1))
+            try? await Task.sleep(for: .seconds(2))
         }
 
         // The container goes down either way, rather than only when Steam refuses to.
