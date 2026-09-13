@@ -420,72 +420,74 @@ extension SettingsView {
                 // TODO: potenially add manual cloud save deletion
             }
 
-            Section("Steam", isExpanded: $isServicesSteamSectionExpanded) {
-                if Steam.isClientInstalled {
-                    OperationButton(
-                        "Open Steam Client",
-                        systemImage: "storefront",
-                        operating: $isOpeningSteam,
-                        successful: $isOpeningSteamSuccessful
-                    ) {
-                        do {
-                            try await Steam.openClient()
-                            isOpeningSteamSuccessful = true
-                        } catch {
-                            isOpeningSteamSuccessful = false
-                        }
-                    }
-
-                    OperationButton(
-                        "Export Steam Diagnostics",
-                        systemImage: "stethoscope",
-                        operating: $isExportingSteamDiagnostics,
-                        successful: $isExportingSteamDiagnosticsSuccessful
-                    ) {
-                        do {
-                            let destination = try await Steam.exportDiagnostics()
-                            isExportingSteamDiagnosticsSuccessful = true
-                            NSWorkspace.shared.activateFileViewerSelecting([destination])
-                        } catch {
-                            isExportingSteamDiagnosticsSuccessful = false
-                        }
-                    }
-                    .help("Collects the Steam container's logs and install state into a folder, for diagnosing launch failures.")
-
-                    OperationButton(
-                        "Reset Steam Container",
-                        systemImage: "trash",
-                        operating: $isResettingSteamContainer,
-                        successful: $isResettingSteamContainerSuccessful
-                    ) {
-                        isResetSteamContainerAlertPresented = true
-                    }
-                    .alert("Reset the Steam container?", isPresented: $isResetSteamContainerAlertPresented) {
-                        Button("Cancel", role: .cancel) { }
-                        Button("Reset", role: .destructive) {
-                            Task {
-                                do {
-                                    if let containerURL = Steam.containerURL {
-                                        try Wine.deleteContainer(containerURL: containerURL)
-                                    }
-                                    isResettingSteamContainerSuccessful = true
-                                } catch {
-                                    isResettingSteamContainerSuccessful = false
-                                }
+            if Game.Storefront.steam.isAvailable {
+                Section("Steam", isExpanded: $isServicesSteamSectionExpanded) {
+                    if Steam.isClientInstalled {
+                        OperationButton(
+                            "Open Steam Client",
+                            systemImage: "storefront",
+                            operating: $isOpeningSteam,
+                            successful: $isOpeningSteamSuccessful
+                        ) {
+                            do {
+                                try await Steam.openClient()
+                                isOpeningSteamSuccessful = true
+                            } catch {
+                                isOpeningSteamSuccessful = false
                             }
                         }
-                    } message: {
-                        Text("""
-                        This deletes Steam's dedicated container, including the Steam client itself \
-                        and every game installed inside it. Your Steam library and cloud saves aren't \
-                        affected — reinstalling games afterward just re-downloads them through Steam. \
-                        Use this if Steam or a game inside it becomes unreliable and reinstalling \
-                        normally hasn't helped.
-                        """)
+
+                        OperationButton(
+                            "Export Steam Diagnostics",
+                            systemImage: "stethoscope",
+                            operating: $isExportingSteamDiagnostics,
+                            successful: $isExportingSteamDiagnosticsSuccessful
+                        ) {
+                            do {
+                                let destination = try await Steam.exportDiagnostics()
+                                isExportingSteamDiagnosticsSuccessful = true
+                                NSWorkspace.shared.activateFileViewerSelecting([destination])
+                            } catch {
+                                isExportingSteamDiagnosticsSuccessful = false
+                            }
+                        }
+                        .help("Collects the Steam container's logs and install state into a folder, for diagnosing launch failures.")
+
+                        OperationButton(
+                            "Reset Steam Container",
+                            systemImage: "trash",
+                            operating: $isResettingSteamContainer,
+                            successful: $isResettingSteamContainerSuccessful
+                        ) {
+                            isResetSteamContainerAlertPresented = true
+                        }
+                        .alert("Reset the Steam container?", isPresented: $isResetSteamContainerAlertPresented) {
+                            Button("Cancel", role: .cancel) { }
+                            Button("Reset", role: .destructive) {
+                                Task {
+                                    do {
+                                        if let containerURL = Steam.containerURL {
+                                            try Wine.deleteContainer(containerURL: containerURL)
+                                        }
+                                        isResettingSteamContainerSuccessful = true
+                                    } catch {
+                                        isResettingSteamContainerSuccessful = false
+                                    }
+                                }
+                            }
+                        } message: {
+                            Text("""
+                            This deletes Steam's dedicated container, including the Steam client itself \
+                            and every game installed inside it. Your Steam library and cloud saves aren't \
+                            affected — reinstalling games afterward just re-downloads them through Steam. \
+                            Use this if Steam or a game inside it becomes unreliable and reinstalling \
+                            normally hasn't helped.
+                            """)
+                        }
+                    } else {
+                        Text("Steam hasn't been set up yet. Use Import Game > Steam from your library to set it up.")
+                            .foregroundStyle(.secondary)
                     }
-                } else {
-                    Text("Steam hasn't been set up yet. Use Import Game > Steam from your library to set it up.")
-                        .foregroundStyle(.secondary)
                 }
             }
 

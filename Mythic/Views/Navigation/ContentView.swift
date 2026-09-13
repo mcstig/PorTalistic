@@ -41,7 +41,7 @@ struct ContentView: View {
                         }
                     }
 
-                    // One shelf per storefront. Epic and Steam are installed, updated,
+                    // One shelf per storefront. They are installed, updated,
                     // launched and broken in completely different ways, so a single list
                     // that mixes them means every action has to be qualified by "…but which
                     // kind of game is this?" — for the user and for the code.
@@ -56,9 +56,11 @@ struct ContentView: View {
                                 .help("Games from your Epic Games library")
                         }
 
-                        NavigationLink(destination: LibraryView(storefront: .steam)) {
-                            Label("Steam", systemImage: "cloud")
-                                .help("Games installed through the Steam client")
+                        if Game.Storefront.steam.isAvailable {
+                            NavigationLink(destination: LibraryView(storefront: .steam)) {
+                                Label("Steam", systemImage: "cloud")
+                                    .help("Games installed through the Steam client")
+                            }
                         }
 
                         NavigationLink(destination: LibraryView(storefront: .local)) {

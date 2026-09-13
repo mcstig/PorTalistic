@@ -31,6 +31,32 @@ import OSLog
    is fragile, whereas reading Steam's own manifests after the fact is not.
  */
 final class Steam {
+    /// Whether Steam is offered to the user at all.
+    ///
+    /// Off, and everything behind it is intact. Running the real Windows Steam client in a
+    /// container is blocked on things outside Mythic, each established rather than guessed:
+    ///
+    ///   - The client composites its UI over a transparent window (`webhelper.txt`: "Browser
+    ///     requested transparent background, but it is not supported"). Wine has no
+    ///     transparent windows, so the login window is drawn, alive and clickable, and never
+    ///     reaches the screen. No composer mode, GPU flag or engine changes that.
+    ///   - The Wine that would have fixed it — one built for DXMT, with both modern Wine and
+    ///     Direct3D 11 on Metal — cannot start a Windows process at all on some Macs, with
+    ///     Mythic nowhere in the picture.
+    ///   - Every way of signing in without the window is retired: `-textclient` exits in the
+    ///     same second it starts, and `-login`/`-accesscode` reach Valve's servers but never
+    ///     complete, because Steam Guard accounts now need the auth-session flow the login
+    ///     *page* drives. A session minted by `steamcmd` doesn't transplant either.
+    ///
+    /// So the storefront is hidden rather than half-working. Flip this to `true` to bring it
+    /// back — every surface that mentions Steam is gated on it, and nothing was deleted.
+    ///
+    /// - Note: When it does come back, it should probably come back as `steamcmd` — which
+    ///   authenticates this account in seconds, natively, including the phone confirmation —
+    ///   downloading Windows depots directly, with Mythic launching the game executables. No
+    ///   client, no UI, and no Steamworks features for games that hard-require a live client.
+    static let isEnabled: Bool = false
+
     static let log: Logger = .custom(category: "SteamInterface")
 
     /// The fixed name given to Mythic's dedicated Steam container.
@@ -363,6 +389,30 @@ final class Steam {
             // the use of the system browser composer", which is the other path — and the same
             // knob the registry exposes as `OverrideBrowserComposerMode`.
             "-system-composer",
+
+            // Without these two the client cannot reach a connection manager at all, and says
+            // so in a way that looks like a dead network rather than a fixable problem:
+            //
+            //     PingWebSocketCM() (cmp1-fra1.steamserver.net:27019) failed talking to cm
+            //         (timeout/neterror - Invalid)
+            //
+            // — every host, including ones macOS itself connects to in 40ms, while Steam gives
+            // up and picks Singapore from Romania because it couldn't reach the directory
+            // either. With them, the same pings answer in 36-45ms and Steam picks Frankfurt.
+            //
+            // `-noipv6` is the one to believe in: every run's IPv6 connectivity test times
+            // out, and Steam's ping budget is 400ms, so an AAAA record it can't reach spends
+            // the whole allowance before the A record is tried.
+            //
+            // - Important: `-websocketignorecertissues` turns off certificate validation for
+            //   that connection. It is here provisionally — it was added alongside `-noipv6`
+            //   to clear the wall in one step, and which of the two actually mattered has not
+            //   been separated yet. If it turns out to be the certificates, the fix belongs in
+            //   ``Wine/Certificates`` and this comes out. Steam authenticates its own protocol
+            //   inside the tunnel, so the exposure is narrower than it sounds, but it should
+            //   not outlive being tested properly.
+            "-noipv6",
+            "-websocketignorecertissues",
 
 
             // A Wine virtual desktop (`explorer /desktop=Steam,WxH`) was tried too, on the

@@ -14,12 +14,15 @@ struct GameImportView: View {
     @Binding var isPresented: Bool
 
     /// Which storefront to open on. Passed in from the library you asked from, so importing
-    /// into the Steam library doesn't begin by asking which storefront you meant.
+    /// into a particular library doesn't begin by asking which storefront you meant.
     @State private var selection: Game.Storefront
 
     init(isPresented: Binding<Bool>, storefront: Game.Storefront? = nil) {
         self._isPresented = isPresented
-        self._selection = .init(initialValue: storefront ?? .epicGames)
+        // A hidden storefront asked for by name still can't be opened on: the tab it would
+        // select doesn't exist, and `TabView` with a selection nothing matches shows nothing.
+        let requested = storefront.flatMap { $0.isAvailable ? $0 : nil }
+        self._selection = .init(initialValue: requested ?? .epicGames)
     }
 
     var body: some View {
@@ -30,8 +33,10 @@ struct GameImportView: View {
                         EpicGamesGameImportView(isPresented: $isPresented)
                     }
 
-                    Tab("Steam", systemImage: "storefront", value: Game.Storefront.steam) {
-                        SteamGameImportView(isPresented: $isPresented)
+                    if Game.Storefront.steam.isAvailable {
+                        Tab("Steam", systemImage: "storefront", value: Game.Storefront.steam) {
+                            SteamGameImportView(isPresented: $isPresented)
+                        }
                     }
 
                     Tab("Local", systemImage: "storefront", value: Game.Storefront.local) {
@@ -48,11 +53,13 @@ struct GameImportView: View {
                         }
                         .tag(Game.Storefront.epicGames)
 
-                    SteamGameImportView(isPresented: $isPresented)
-                        .tabItem {
-                            Label("Steam", systemImage: "storefront")
-                        }
-                        .tag(Game.Storefront.steam)
+                    if Game.Storefront.steam.isAvailable {
+                        SteamGameImportView(isPresented: $isPresented)
+                            .tabItem {
+                                Label("Steam", systemImage: "storefront")
+                            }
+                            .tag(Game.Storefront.steam)
+                    }
 
                     LocalGameImportView(isPresented: $isPresented)
                         .tabItem {

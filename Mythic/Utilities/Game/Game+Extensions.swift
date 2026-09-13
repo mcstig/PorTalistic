@@ -50,6 +50,19 @@ extension Game {
             case .local:        String(localized: "Local")
             }
         }
+
+        /// Whether this storefront is offered to the user.
+        ///
+        /// `allCases` stays complete so games already in the library keep decoding and
+        /// describing themselves; this is what anything user-facing should iterate instead.
+        var isAvailable: Bool {
+            switch self {
+            case .steam: Steam.isEnabled
+            default: true
+            }
+        }
+
+        static var available: [Self] { allCases.filter(\.isAvailable) }
     }
 
     enum Compatibility: CustomStringConvertible, CaseIterable {
