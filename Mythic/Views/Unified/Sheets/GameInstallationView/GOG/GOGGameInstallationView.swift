@@ -24,14 +24,18 @@ struct GOGGameInstallationView: View {
     @State private var supportedPlatforms: [Game.Platform]?
 
     /// What GOG says about this game for the chosen platform — the size, and the folder it
-    /// wants to live in. Fetched rather than guessed, because `gogdl` is the only thing that
-    /// knows, and asking it now means the sheet can refuse an impossible install instead of
-    /// queueing one that fails.
+    /// wants to live in.
+    ///
+    /// Shown when it arrives, never waited on. Answering costs GOG a fetch and a decompress of
+    /// every depot manifest the game and its DLC use, which for a large title is a minute or
+    /// two; the install asks the same question again (and gets a cached answer if this got
+    /// there first), so there is nothing to gain by making someone watch a spinner for it.
     @State private var metadata: GOGDL.Metadata?
     @State private var metadataError: Error?
     @State private var isFetchingMetadata: Bool = false
 
     @State private var isFreeSpaceAlertPresented: Bool = false
+    @State private var installationError: Error?
 
     private var installSizeInBytes: Int64? {
         guard let metadata else { return nil }
@@ -140,6 +144,15 @@ struct GOGGameInstallationView: View {
                             .font(.footnote)
                             .foregroundStyle(.red)
                             .multilineTextAlignment(.center)
+                    } else if isFetchingMetadata {
+                        HStack(spacing: 6) {
+                            ProgressView()
+                                .controlSize(.small)
+
+                            Text("Asking GOG how big this download is…")
+                        }
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                     }
                 }
             }
@@ -174,23 +187,20 @@ struct GOGGameInstallationView: View {
                         }
                 }
 
-                OperationButton(
-                    "Install",
-                    operating: $isFetchingMetadata,
-                    successful: .constant(nil),
-                    placement: .leading
-                ) {
+                Button("Install") {
                     Task { @MainActor [game, platform, baseURL] in
-                        _ = try? await GOGGameManager.install(game: game,
-                                                              platform: platform,
-                                                              qualityOfService: .default,
-                                                              baseDirectoryURL: baseURL)
-                        isPresented = false
+                        do {
+                            _ = try await GOGGameManager.install(game: game,
+                                                                 platform: platform,
+                                                                 qualityOfService: .default,
+                                                                 baseDirectoryURL: baseURL)
+                            isPresented = false
+                        } catch {
+                            installationError = error
+                        }
                     }
                 }
                 .disabled(supportedPlatforms == nil)
-                .disabled(isFetchingMetadata)
-                .disabled(metadata == nil)
                 .disabled(!FileManager.default.isWritableFile(atPath: baseURL.path))
                 .onAppear(perform: { spawnMetadataFetchTask() })
                 .onChange(of: platform, { spawnMetadataFetchTask() })
@@ -199,6 +209,14 @@ struct GOGGameInstallationView: View {
             .padding(.top)
         }
         .navigationTitle("Install \(game.description)")
+        .alert("Couldn't start the download.",
+               isPresented: .init(get: { installationError != nil },
+                                  set: { if !$0 { installationError = nil } }),
+               presenting: installationError) { _ in
+            Button("OK", role: .cancel, action: {})
+        } message: { error in
+            Text(error.localizedDescription)
+        }
     }
 
     /// Shows where the game will actually land once GOG has named the folder, and the base

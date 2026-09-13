@@ -103,6 +103,24 @@ extension GameCard {
 
                 @State private var isInstallSheetPresented = false
 
+                /// Why the button won't respond, for the tooltip — a disabled control that
+                /// can't say why is indistinguishable from a broken one.
+                private var unavailabilityReason: String? {
+                    if operationManager.queue.contains(where: { $0.game == game && $0.type == .install }) {
+                        return String(localized: "\(game.description) is already queued to install.")
+                    }
+
+                    if !networkMonitor.isReachable(for: game.storefront) {
+                        return String(localized: "Mythic can't reach \(game.storefront?.description ?? String(localized: "this storefront")) right now.")
+                    }
+
+                    if game.storefront == .local {
+                        return String(localized: "\(game.description) was added from a folder, so there's nothing to download.")
+                    }
+
+                    return nil
+                }
+
                 var body: some View {
                     Button {
                         isInstallSheetPresented = true
@@ -119,7 +137,7 @@ extension GameCard {
                     .disabled(!networkMonitor.isReachable(for: game.storefront))
                     .disabled(game.storefront == .local)
                     .disabled(operationManager.queue.contains(where: { $0.game == game && $0.type == .install }))
-                    .help("Install \(game.description)")
+                    .help(unavailabilityReason ?? String(localized: "Install \(game.description)"))
 
                     .sheet(isPresented: $isInstallSheetPresented) {
                         switch game {
@@ -386,7 +404,15 @@ extension GameCard {
         @EnvironmentObject var networkMonitor: NetworkMonitor
 
         var body: some View {
-            if let operation = operationManager.queue.first(where: { $0.isExecuting && $0.game == game }) {
+            // Queued counts, not just executing. An operation that's waiting — on a
+            // dependency, or on Legendary's data lock — used to leave the card showing an
+            // ordinary Install or Play button that silently did nothing when pressed, because
+            // every one of those buttons disables itself while its game has work outstanding.
+            // `StatusView` already knows how to render a pending operation, and offers to
+            // cancel it, which is the answer to "why can't I click this".
+            if let operation = operationManager.queue.first(where: {
+                $0.game == game && ($0.isExecuting || $0.type.modifiesFiles)
+            }) {
                 OperationCard.StatusView(operation: .constant(operation), withLabel: withLabel)
             } else if case .installed = game.installationState {
                 Buttons.Prominent.PlayButton(game: $game, withLabel: withLabel)

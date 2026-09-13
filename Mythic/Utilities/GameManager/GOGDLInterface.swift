@@ -109,8 +109,20 @@ enum GOGDL {
     /// would drift out of date.
     private nonisolated(unsafe) static var memoizedLanguage: String?
 
+    /// Cached across launches, not just in memory: resolving it costs a whole process spawn,
+    /// and a PyInstaller binary unpacks ~11MB of itself before it will answer anything. The
+    /// locale would have to change for the answer to, and that invalidates it below.
+    private static let languageDefaultsKey = "gogInstallLanguage"
+
     static func installLanguage() async -> String {
         if let memoizedLanguage { return memoizedLanguage }
+
+        let storedLocale = UserDefaults.standard.string(forKey: "\(languageDefaultsKey).locale")
+        if storedLocale == Locale.current.identifier,
+           let stored = UserDefaults.standard.string(forKey: languageDefaultsKey) {
+            memoizedLanguage = stored
+            return stored
+        }
 
         let fallback = "en-US"
         var candidates: [String] = [Locale.current.identifier(.bcp47)]
@@ -125,12 +137,18 @@ enum GOGDL {
                   let matched = try? JSONDecoder().decode(MatchedLanguage.self, from: output),
                   let code = matched.code else { continue }
 
-            memoizedLanguage = code
+            remember(language: code)
             return code
         }
 
-        memoizedLanguage = fallback
+        remember(language: fallback)
         return fallback
+    }
+
+    private static func remember(language: String) {
+        memoizedLanguage = language
+        UserDefaults.standard.set(language, forKey: languageDefaultsKey)
+        UserDefaults.standard.set(Locale.current.identifier, forKey: "\(languageDefaultsKey).locale")
     }
 
     private struct MatchedLanguage: Decodable {
@@ -169,8 +187,22 @@ enum GOGDL {
         }
     }
 
+    /// Answers are kept for a few minutes, because getting one is expensive and the same
+    /// question gets asked twice in a row: once by the installation sheet to show a size, and
+    /// again by the install itself to learn the folder name.
+    private struct CachedMetadata {
+        let metadata: Metadata
+        let fetched: Date
+        var isFresh: Bool { Date().timeIntervalSince(fetched) < 300 }
+    }
+
+    private nonisolated(unsafe) static var memoizedMetadata: [String: CachedMetadata] = .init()
+
     static func metadata(for game: GOGGame, platform: Game.Platform) async throws -> Metadata {
         guard GOG.isSignedIn else { throw GOG.NotSignedInError() }
+
+        let key = "\(game.id)|\(platformArgument(for: platform))"
+        if let cached = memoizedMetadata[key], cached.isFresh { return cached.metadata }
 
         let process = try makeProcess(arguments: [
             "info", game.id,
@@ -205,11 +237,14 @@ enum GOGDL {
         // answers depends on how old the game is rather than on anything the caller chose.
         let buildID: String? = (root["buildId"] as? String) ?? (root["buildId"] as? NSNumber)?.stringValue
 
-        return .init(sizes: sizes,
-                     folderName: folderName,
-                     buildID: buildID,
-                     versionName: root["versionName"] as? String,
-                     availableLanguages: root["languages"] as? [String] ?? .init())
+        let metadata: Metadata = .init(sizes: sizes,
+                                       folderName: folderName,
+                                       buildID: buildID,
+                                       versionName: root["versionName"] as? String,
+                                       availableLanguages: root["languages"] as? [String] ?? .init())
+
+        memoizedMetadata[key] = .init(metadata: metadata, fetched: .now)
+        return metadata
     }
 
     // MARK: - Install records
@@ -225,6 +260,9 @@ enum GOGDL {
         let versionName: String?
         let folderName: String
         let platform: Game.Platform
+        /// Optional because records written before this existed don't have it; those are
+        /// reconstructed from the install base directory, which is where they'd have gone.
+        var location: URL?
     }
 
     private static var installRecordsURL: URL { GOG.configurationFolder.appending(path: "installed.json") }
@@ -242,6 +280,44 @@ enum GOGDL {
     }
 
     static func installRecord(forGameID id: String) -> InstallRecord? { installRecords()[id] }
+
+    /// Where a recorded install should be, whether or not the record says so outright.
+    private static func recordedLocation(_ record: InstallRecord) -> URL? {
+        record.location
+            ?? UserDefaults.standard.url(forKey: "installBaseURL")?.appending(path: record.folderName)
+    }
+
+    /// Puts a game's installation state back in step with what's actually on disk.
+    ///
+    /// The library lives in `UserDefaults` and the files don't, so the two can disagree — a
+    /// game deleted in Finder still reads as installed, and a library entry lost to a failed
+    /// write orphans a download that's sitting right there. gogdl's own record is the third
+    /// opinion that settles it, which is the same reason legendary keeps `installed.json`.
+    ///
+    /// - Returns: `true` if the game's state was changed.
+    @discardableResult
+    @MainActor static func reconcileInstallationState(of game: GOGGame) -> Bool {
+        let record = installRecord(forGameID: game.id)
+        let recordedURL = record.flatMap(recordedLocation)
+
+        switch game.installationState {
+        case .installed(let location, _):
+            guard !FileManager.default.fileExists(atPath: location.path) else { return false }
+
+            log.notice("\(game.title, privacy: .public) is recorded as installed but isn't on disk; marking it uninstalled")
+            game.installationState = .uninstalled
+            forgetInstall(ofGameID: game.id)
+            return true
+
+        case .uninstalled:
+            guard let record, let recordedURL,
+                  FileManager.default.fileExists(atPath: recordedURL.path) else { return false }
+
+            log.notice("Recovering \(game.title, privacy: .public) from its install record")
+            game.installationState = .installed(location: recordedURL, platform: record.platform)
+            return true
+        }
+    }
 
     private static func setInstallRecord(_ record: InstallRecord?, forGameID id: String) {
         var records = installRecords()
@@ -459,31 +535,51 @@ enum GOGDL {
             throw CocoaError(.fileReadUnknown)
         }
 
-        // Asked before queueing rather than inside the operation, so a game that can't be
-        // installed says so on the sheet instead of failing silently in the queue.
-        let gameMetadata = try await metadata(for: game, platform: platform)
-        let destination = baseDirectoryURL.appending(path: gameMetadata.folderName)
-        let language = await installLanguage()
+        // Everything that can be checked instantly is checked here; asking GOG what the
+        // download involves happens *inside* the operation. It takes a minute or two for a
+        // game with DLC — every depot manifest has to be fetched and decompressed to answer —
+        // and a sheet that sits on a spinner for that long reads as broken, while a queued
+        // operation that says "Installing" reads as exactly what it is.
+        let operation = makeInstallOperation(game: game, platform: platform, baseDirectoryURL: baseDirectoryURL)
 
-        let arguments: [String] = [
-            "download", game.id,
-            "--platform", platformArgument(for: platform),
-            "--path", baseDirectoryURL.path,
-            "--lang", language,
-            "--with-dlcs"
-        ]
+        operation.qualityOfService = qualityOfService
+        Game.operationManager.queueOperation(operation)
+        return operation
+    }
 
-        return try await run(game: game,
-                             type: .install,
-                             arguments: arguments,
-                             qualityOfService: qualityOfService) {
-            game.installationState = .installed(location: destination, platform: platform)
-            setInstallRecord(.init(buildID: gameMetadata.buildID,
-                                   versionName: gameMetadata.versionName,
-                                   folderName: gameMetadata.folderName,
-                                   platform: platform),
-                             forGameID: game.id)
-            memoizedUpdateAvailability[game.id] = false
+    private nonisolated static func makeInstallOperation(game: GOGGame,
+                                                         platform: Game.Platform,
+                                                         baseDirectoryURL: URL) -> GameOperation {
+        makeOperation(game: game, type: .install) { progress in
+            let gameMetadata = try await metadata(for: game, platform: platform)
+
+            // gogdl appends the game's own folder name to `--path` for `download` (and only
+            // for `download`), so it is handed the base directory and this is where it lands.
+            let destination = baseDirectoryURL.appending(path: gameMetadata.folderName)
+
+            try await runGOGDL(arguments: [
+                "download", game.id,
+                "--platform", platformArgument(for: platform),
+                "--path", baseDirectoryURL.path,
+                "--lang", await installLanguage(),
+                "--with-dlcs"
+            ], reporting: progress)
+
+            await MainActor.run {
+                game.installationState = .installed(location: destination, platform: platform)
+                setInstallRecord(.init(buildID: gameMetadata.buildID,
+                                       versionName: gameMetadata.versionName,
+                                       folderName: gameMetadata.folderName,
+                                       platform: platform,
+                                       location: destination),
+                                 forGameID: game.id)
+                memoizedUpdateAvailability[game.id] = false
+
+                // Mutating the game isn't enough to save it: the library persists itself from
+                // its own `didSet`, and changing an object already inside the set doesn't fire
+                // that. Without this the game shows as installed only until the app restarts.
+                GameDataStore.shared.library.update(with: game)
+            }
         }
     }
 
@@ -495,27 +591,34 @@ enum GOGDL {
             throw CocoaError(.fileNoSuchFile)
         }
 
-        let gameMetadata = try await metadata(for: game, platform: platform)
+        let operation = makeOperation(game: game, type: .update) { progress in
+            let gameMetadata = try await metadata(for: game, platform: platform)
 
-        let arguments: [String] = [
-            "update", game.id,
-            "--platform", platformArgument(for: platform),
-            "--path", location.path,
-            "--lang", await installLanguage(),
-            "--with-dlcs"
-        ]
+            // `update` and `repair`, unlike `download`, take the game's own directory rather
+            // than the one above it: only `download` appends the folder name itself.
+            try await runGOGDL(arguments: [
+                "update", game.id,
+                "--platform", platformArgument(for: platform),
+                "--path", location.path,
+                "--lang", await installLanguage(),
+                "--with-dlcs"
+            ], reporting: progress)
 
-        return try await run(game: game,
-                             type: .update,
-                             arguments: arguments,
-                             qualityOfService: qualityOfService) {
-            setInstallRecord(.init(buildID: gameMetadata.buildID,
-                                   versionName: gameMetadata.versionName,
-                                   folderName: gameMetadata.folderName,
-                                   platform: platform),
-                             forGameID: game.id)
-            memoizedUpdateAvailability[game.id] = false
+            await MainActor.run {
+                setInstallRecord(.init(buildID: gameMetadata.buildID,
+                                       versionName: gameMetadata.versionName,
+                                       folderName: gameMetadata.folderName,
+                                       platform: platform,
+                                       location: location),
+                                 forGameID: game.id)
+                memoizedUpdateAvailability[game.id] = false
+                GameDataStore.shared.library.update(with: game)
+            }
         }
+
+        operation.qualityOfService = qualityOfService
+        Game.operationManager.queueOperation(operation)
+        return operation
     }
 
     /// Re-checks every file against the manifest and refetches whatever doesn't match.
@@ -526,58 +629,59 @@ enum GOGDL {
             throw CocoaError(.fileNoSuchFile)
         }
 
-        let arguments: [String] = [
-            "repair", game.id,
-            "--platform", platformArgument(for: platform),
-            "--path", location.path,
-            "--lang", await installLanguage(),
-            "--with-dlcs"
-        ]
-
-        return try await run(game: game,
-                             type: .repair,
-                             arguments: arguments,
-                             qualityOfService: qualityOfService)
-    }
-
-    /// The shape all three share: queue it, stream its progress, and only then believe it.
-    @MainActor private static func run(game: GOGGame,
-                                       type: GameOperation.ActiveOperationType,
-                                       arguments: [String],
-                                       qualityOfService: QualityOfService,
-                                       onSuccess: @escaping @MainActor () -> Void = {}) async throws -> GameOperation {
-        let operation: GameOperation = .init(game: game, type: type) { progress in
-            progress.totalUnitCount = 100
-            progress.fileOperationKind = .downloading
-
-            let process = try makeProcess(arguments: arguments)
-
-            try await withTaskCancellationHandler {
-                try await process.runStreamed(throwsOnChunkError: false) { chunk in
-                    if case .standardError = chunk.stream {
-                        updateProgress(progress, from: chunk.output)
-                    }
-
-                    return nil
-                }
-            } onCancel: {
-                // Interrupt rather than terminate: gogdl writes out what it has finished, and
-                // a download killed outright starts again from nothing.
-                process.interrupt()
-            }
-
-            try Task.checkCancellation()
-
-            guard process.terminationStatus == 0 else {
-                throw OperationFailedError(terminationStatus: process.terminationStatus)
-            }
-
-            await MainActor.run { onSuccess() }
+        let operation = makeOperation(game: game, type: .repair) { progress in
+            try await runGOGDL(arguments: [
+                "repair", game.id,
+                "--platform", platformArgument(for: platform),
+                "--path", location.path,
+                "--lang", await installLanguage(),
+                "--with-dlcs"
+            ], reporting: progress)
         }
 
         operation.qualityOfService = qualityOfService
         Game.operationManager.queueOperation(operation)
         return operation
+    }
+
+    /// Wraps a body in an operation, outside the main actor deliberately.
+    ///
+    /// A closure that isn't `@Sendable` inherits the isolation of wherever it was written, and
+    /// `GameOperation`'s is neither — so building one inside a `@MainActor` method would pin
+    /// an hour-long download to the main actor. Nothing in these bodies wants to be there.
+    private nonisolated static func makeOperation(game: GOGGame,
+                                                  type: GameOperation.ActiveOperationType,
+                                                  body: @escaping (Progress) async throws -> Void) -> GameOperation {
+        .init(game: game, type: type) { progress in
+            progress.totalUnitCount = 100
+            progress.fileOperationKind = .downloading
+            try await body(progress)
+        }
+    }
+
+    /// Runs gogdl to completion, reporting as it goes, and refuses to call a failure a success.
+    private nonisolated static func runGOGDL(arguments: [String], reporting progress: Progress) async throws {
+        let process = try makeProcess(arguments: arguments)
+
+        try await withTaskCancellationHandler {
+            try await process.runStreamed(throwsOnChunkError: false) { chunk in
+                if case .standardError = chunk.stream {
+                    updateProgress(progress, from: chunk.output)
+                }
+
+                return nil
+            }
+        } onCancel: {
+            // Interrupt rather than terminate: gogdl writes out what it has finished, and a
+            // download killed outright starts again from nothing.
+            process.interrupt()
+        }
+
+        try Task.checkCancellation()
+
+        guard process.terminationStatus == 0 else {
+            throw OperationFailedError(terminationStatus: process.terminationStatus)
+        }
     }
 
     /// Forgets that a game was ever installed. Removing files is the caller's business.

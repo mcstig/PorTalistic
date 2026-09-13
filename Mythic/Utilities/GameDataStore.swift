@@ -131,6 +131,20 @@ import OSLog
                 log.error("Unable to refresh game data from GOG: \(error.localizedDescription)")
             }
 
+            // GOG says what's owned, not what's installed — that's Mythic's own bookkeeping,
+            // and bookkeeping drifts. A game deleted in Finder still reads as installed; a
+            // library entry lost to a failed write orphans a download that's sitting right
+            // there. gogdl's install record is the third opinion that settles both.
+            var reconciled = false
+            for game in library.compactMap({ $0 as? GOGGame }) where GOGDL.reconcileInstallationState(of: game) {
+                reconciled = true
+                library.update(with: game)
+            }
+
+            if reconciled {
+                log.notice("Brought GOG installation states back in step with what's on disk")
+            }
+
             // Whether an installed GOG game has a newer build is a question only GOG can
             // answer, and `Game.isUpdateAvailable` is read synchronously while cards are
             // drawn — so the answers are collected here, once per refresh, and read from the
