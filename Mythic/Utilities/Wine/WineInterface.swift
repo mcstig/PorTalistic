@@ -700,6 +700,41 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
         }
     }
 
+    /// Turns wined3d's command-stream thread on or off for a container.
+    ///
+    /// wined3d hands GL work to a worker thread by default, which is usually faster and is
+    /// also where a good share of wined3d's crashes live. It matters more here than on Linux:
+    /// a 32-bit game runs through 32-on-64, every call into the host costs extra stack, and a
+    /// thread that blows its 1MB leaves exactly the wreckage Blades of Time did —
+    ///
+    ///     err:seh:call_stack_handlers invalid frame 0012EDF0 (00132000-0022FD20)
+    ///     err:seh:NtRaiseException Exception frame is not in stack limits
+    ///
+    /// — an SEH chain pointing below the stack it belongs to, which is a stack overflow that
+    /// couldn't even report itself.
+    static func setCommandStreamThread(containerURL: URL, enabled: Bool) async throws {
+        do {
+            try await addRegistryKey(containerURL: containerURL,
+                                     key: RegistryKey.direct3D.rawValue,
+                                     name: "csmt",
+                                     data: enabled ? "1" : "0",
+                                     type: .dword)
+        } catch {
+            log.error("\(formatLog(containerURL: containerURL, description: "Unable to set CSMT to \(enabled)", error: error))")
+            throw error
+        }
+    }
+
+    static func getCommandStreamThread(containerURL: URL) async throws -> Bool {
+        // Absent means Wine's default, which is on.
+        guard let result = try? await queryRegistryKey(containerURL: containerURL,
+                                                       key: RegistryKey.direct3D.rawValue,
+                                                       name: "csmt",
+                                                       type: .dword) else { return true }
+
+        return Int(result.trimmingPrefix("0x"), radix: 16).map { $0 != 0 } ?? true
+    }
+
     static func getRetinaMode(containerURL: URL) async throws -> Bool {
         let result = try await queryRegistryKey(containerURL: containerURL,
                                key: RegistryKey.macDriver.rawValue,

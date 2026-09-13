@@ -108,6 +108,14 @@ extension Wine.Container {
         var scaling: Int
         var avx2: Bool
 
+        /// wined3d's command-stream thread, which Wine calls CSMT.
+        ///
+        /// On by default because that is Wine's default and it is usually faster. Off is the
+        /// first thing to try when a game using wined3d crashes or hangs: it moves the GL
+        /// work back onto the thread that asked for it, which both shortens the call chains
+        /// through 32-on-64's thunks and removes a whole class of races.
+        var commandStreamThread: Bool
+
         /// Which Wine build runs this container, as a ``Runtime/id``.
         ///
         /// `nil` means the bundled engine, which is what every container created before
@@ -127,6 +135,7 @@ extension Wine.Container {
              windowsVersion: Wine.WindowsVersion = .win11,
              scaling: Int = 192,
              avx2: Bool = true,
+             commandStreamThread: Bool = true,
              runtimeID: String? = nil) {
             self.runtimeID = runtimeID
             self.metalHUD = metalHUD
@@ -136,6 +145,7 @@ extension Wine.Container {
             self.dxvkAsync = dxvkAsync
             self.windowsVersion = windowsVersion
             self.scaling = scaling
+            self.commandStreamThread = commandStreamThread
             self.avx2 = {
                 if #available(macOS 15.0, *) {
                     return avx2
@@ -162,6 +172,7 @@ extension Wine.Container.Settings: Codable {
         case windowsVersion
         case scaling
         case avx2
+        case commandStreamThread
         case runtimeID
     }
 
@@ -177,6 +188,7 @@ extension Wine.Container.Settings: Codable {
         self.windowsVersion = try container.decodeIfPresent(Wine.WindowsVersion.self, forKey: .windowsVersion) ?? self.windowsVersion
         self.scaling = try container.decodeIfPresent(Int.self, forKey: .scaling) ?? self.scaling
         self.avx2 = try container.decodeIfPresent(Bool.self, forKey: .avx2) ?? self.avx2
+        self.commandStreamThread = try container.decodeIfPresent(Bool.self, forKey: .commandStreamThread) ?? self.commandStreamThread
         self.runtimeID = try container.decodeIfPresent(String.self, forKey: .runtimeID)
     }
 }

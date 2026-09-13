@@ -21,6 +21,10 @@ struct ContainerSettingsView: View {
     @State private var modifyingRetinaMode: Bool = true // keep progressview displayed until async fetching is complete
     @State private var retinaModeSuccess: Bool?
 
+    @State private var commandStreamThread: Bool = true
+    @State private var modifyingCommandStreamThread: Bool = true // keep the progressview up until the fetch lands
+    @State private var commandStreamThreadSuccess: Bool?
+
     @State private var isDXVKDisclaimerPresented: Bool = false
     @State private var modifyingDXVK: Bool = false
     @State private var dxvkSuccess: Bool?
@@ -30,6 +34,16 @@ struct ContainerSettingsView: View {
     @State private var windowsVersion: Wine.WindowsVersion = Wine.Container.Settings().windowsVersion
     @State private var modifyingWindowsVersion: Bool = true // keep progressview displayed until async fetching is complete
     @State private var windowsVersionSuccess: Bool?
+
+    private func fetchCommandStreamThreadStatus() async {
+        guard let selectedContainerURL else { return }
+
+        let fetched = try? await Wine.getCommandStreamThread(containerURL: selectedContainerURL)
+
+        // Separated, as above, so both updates don't land in one render pass.
+        await MainActor.run { commandStreamThread = fetched ?? true }
+        await MainActor.run { withAnimation { modifyingCommandStreamThread = false } }
+    }
 
     private func fetchRetinaModeStatus() async {
         guard let selectedContainerURL else { return }
@@ -117,6 +131,26 @@ struct ContainerSettingsView: View {
                     set: { container.settings.msync = $0 }
                 ))
                 .disabled(variables.getVariable("booting") == true)
+
+                Toggle("Direct3D Command Stream (CSMT)", isOn: $commandStreamThread)
+                    .disabled(variables.getVariable("booting") == true)
+                    .task(priority: .high) { await fetchCommandStreamThreadStatus() }
+                    .withOperationStatus(
+                        operating: $modifyingCommandStreamThread,
+                        successful: $commandStreamThreadSuccess,
+                        observing: $commandStreamThread,
+                        placement: .leading
+                    ) {
+                        try? await Wine.setCommandStreamThread(containerURL: container.url,
+                                                               enabled: commandStreamThread)
+                        container.settings.commandStreamThread = commandStreamThread
+                        commandStreamThreadSuccess = true
+                    }
+                    .help("""
+                        Lets wined3d do its graphics work on its own thread. Usually faster, \
+                        and the first thing to turn off when a game that uses wined3d crashes \
+                        or hangs. Games running through DXVK or D3DMetal aren't affected.
+                        """)
 
                 Toggle("Advanced Vector Extensions (AVX2)", isOn: Binding(
                     get: { container.settings.avx2 },

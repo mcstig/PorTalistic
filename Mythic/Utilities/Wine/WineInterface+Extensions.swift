@@ -31,6 +31,7 @@ extension Wine {
     internal enum RegistryKey: String {
         case currentVersion = #"HKLM\Software\Microsoft\Windows NT\CurrentVersion"#
         case macDriver = #"HKCU\Software\Wine\Mac Driver"#
+        case direct3D = #"HKCU\Software\Wine\Direct3D"#
         case desktop = #"HKCU\Control Panel\Desktop"#
     }
 
