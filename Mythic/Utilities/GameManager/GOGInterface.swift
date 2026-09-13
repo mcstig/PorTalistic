@@ -236,13 +236,21 @@ final class GOG {
             let refreshed = StoredCredentials(from: try await decode(TokenResponse.self, from: .init(url: components.url!)))
             try store(refreshed)
             return refreshed.accessToken
-        } catch {
-            // A refresh token GOG no longer accepts means the account is signed out, whatever
-            // the file on disk says. Saying so beats every later call failing for a reason
-            // that looks like a network problem.
+        } catch let error as RequestError where (400...401).contains(error.statusCode) {
+            // GOG *rejected* the refresh token. The account is signed out whatever the file on
+            // disk says, and saying so beats every later call failing for a reason that looks
+            // like a network problem.
             log.warning("GOG refused to refresh the session; signing out. \(error.localizedDescription)")
             try? signOut()
             throw NotSignedInError()
+        } catch {
+            // Anything else — no network, a timeout, GOG having a bad afternoon — is not an
+            // answer about the account, and this used to treat it as one. `signOut()` deletes
+            // the product cache along with the credentials, so a dropped connection at the
+            // wrong moment silently emptied the library's artwork and platform data and left
+            // a refresh that could no longer repair it. Fail the call; keep the session.
+            log.warning("Couldn't reach GOG to refresh the session: \(error.localizedDescription)")
+            throw error
         }
     }
 
