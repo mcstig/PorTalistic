@@ -88,10 +88,41 @@ aside and brings the game forward. Still to do:
   - Local Windows games, which share `LocalGameManager.launch` and the same
     misplaced `defer` that raised Mythic's own window immediately after
     queueing rather than after the game exited.
-  - The related question of what resolution a game *should* run at. With
-    Retina Mode on, Wine reports the display at its backing resolution, so a
-    game left at half of that renders a quarter of the pixels and is upscaled
-    by the display. Mythic can read what a game last ran at from its own
-    config and say something useful about it. Belongs with automatic runtime
-    selection above: both are the launcher taking a decision the player
-    shouldn't have to research.
+  - Matching the container's desktop resolution to what games actually ask
+    for, which turns out to matter far more than sharpness. See below.
+
+## Don't let a fullscreen game black out the other monitors
+
+Once games started reaching fullscreen properly, a second monitor went black
+for as long as the game ran. That is `winemac.drv` doing exactly what it is
+written to do. In `cocoa_app.m`, `-setMode:forDisplay:`:
+
+    if ([self mode:mode matchesMode:currentMode]) // Already there!
+        return TRUE;
+    ...
+    if ([originalDisplayModes count] || displaysCapturedForFullscreen ||
+        !active || CGCaptureAllDisplays() == CGDisplayNoErr)
+
+A display-mode change by an active Wine process captures *every* display, not
+the one being changed — and a captured display nothing is drawing to is black.
+This is unconditional; `CaptureDisplaysForFullscreen` is a different lever and
+doesn't turn it off.
+
+The escape is the line above it: if the mode a game asks for already matches
+the display's current mode, Wine returns before capturing anything. So the fix
+is not a Wine setting, it's making those two numbers agree:
+
+  - Retina Mode on puts the Wine desktop at the display's backing resolution
+    (4096×2660 here). A game set to the point resolution (2048×1330) is asking
+    for a different mode, so every display gets captured.
+  - Retina Mode off puts the Wine desktop at 2048×1330, which is what games
+    pick by default, so there is usually no mode change at all — fullscreen
+    fills the screen, the other monitors stay lit, and nothing is captured.
+
+Which suggests Mythic's default is wrong: Retina Mode defaults on, and the
+cost of that is not softness, it's blanked monitors and a game that doesn't
+fill the screen. At minimum the setting should say what it actually trades.
+Better: before launching, compare the resolution the game last ran at (it is
+in the game's own config — Prey's is `r_Width`/`r_Height` in `game.cfg`) with
+the container's desktop mode, and offer to reconcile them. Belongs with
+automatic runtime selection above.
