@@ -64,3 +64,36 @@ natively in seconds (including the phone confirmation), lists the library, and d
 Windows depots directly, leaving Mythic to launch the game executables. The cost is
 Steamworks — cloud saves, achievements, the overlay and some multiplayer — for games that
 hard-require a running client.
+
+## Fullscreen that actually fills the screen
+
+Confirmed on Prey (2017), from the game's own `Game.log`:
+
+    Current display mode is 4096x2660x32
+    Current Resolution: 2048x1330x32 Full Screen
+
+The game is genuinely in fullscreen. Wine, with Retina Mode on, reports the
+display at its backing resolution — 4096×2660 — so a 2048×1330 fullscreen mode
+is a quarter of the screen's area, and Wine doesn't scale a smaller fullscreen
+mode up to fill. Every game whose resolution is set below the backing
+resolution looks like this, which is most of them, because the resolution list
+a game shows is usually the one it saw first.
+
+Three ways out, and the launcher should be choosing between them rather than
+the player:
+
+  - Set the game's own resolution to the backing resolution. Sharpest, and on
+    a 4K/5K display that is a 10+ megapixel render target — often the reason
+    someone turns the settings down in the first place.
+  - Turn Retina Mode off for the container. Wine then reports the display in
+    points, the game's existing setting becomes the full desktop, and macOS
+    scales the result. Softer, much cheaper, and what most people actually
+    want.
+  - Leave Retina Mode on and have the container's display mode follow the
+    game — this is the one worth building.
+
+Mythic can detect the mismatch without being told: the resolution a game last
+ran at is in its own config, and the container's reported display size is
+knowable. A card that says "this game won't fill your screen — fix it?" beats
+a forum post. Belongs with automatic runtime selection above: both are the
+launcher taking a decision the player shouldn't have to research.

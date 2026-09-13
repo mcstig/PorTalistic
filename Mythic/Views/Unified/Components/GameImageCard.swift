@@ -18,6 +18,13 @@ struct GameImageCard: View {
     
     var withBlur: Bool
     @AppStorage("gameImageCardBlur") private var imageCardBlur: Double = 0.0
+
+    /// Changing this gives `AsyncImage` a new identity, which is the only way to make it try
+    /// again: it loads once per identity and keeps a failure forever. One dropped request
+    /// otherwise leaves a card reading "Unable to load the image." for the rest of the
+    /// session, which is how a whole library can look broken because the network blinked.
+    @State private var attempt: Int = 0
+    @State private var isRetrying: Bool = false
     
     /// - Note: `game` must be passed as a parameter in order to include fallback image URLs.
     init(game: Game? = nil, url: URL?, isImageEmpty: Binding<Bool>, withBlur: Bool = true) {
@@ -73,13 +80,17 @@ struct GameImageCard: View {
                         .frame(width: geometry.size.width,
                                height: geometry.size.height)
                     case .failure(let error):
-                        ContentUnavailableView(
-                            "Unable to load the image.",
-                            systemImage: "photo.badge.exclamationmark",
-                            description: .init(error.localizedDescription)
-                        )
+                        ContentUnavailableView {
+                            Label("Unable to load the image.", systemImage: "photo.badge.exclamationmark")
+                        } description: {
+                            Text(error.localizedDescription)
+                        } actions: {
+                            Button("Try Again") { attempt += 1 }
+                                .disabled(isRetrying)
+                        }
                         .onAppear {
                             withAnimation { isImageEmpty = true }
+                            scheduleRetry()
                         }
                     @unknown default:
                         ContentUnavailableView(
@@ -92,6 +103,7 @@ struct GameImageCard: View {
                         }
                     }
                 }
+                .id(attempt)
                 .frame(width: geometry.size.width,
                        height: geometry.size.height)
             } else if let game, game.isFallbackImageAvailable {
@@ -113,6 +125,21 @@ struct GameImageCard: View {
         }
         .background(.quinary)
         .clipShape(.rect(cornerRadius: 20))
+    }
+
+    /// Retries a failure a couple of times, spaced out, before leaving it to the button.
+    ///
+    /// Bounded rather than indefinite: a URL that 404s will 404 forever, and a grid of cards
+    /// quietly retrying one of those in a loop is worse than a card that says it failed.
+    private func scheduleRetry() {
+        guard attempt < 2, !isRetrying else { return }
+        isRetrying = true
+
+        Task {
+            try? await Task.sleep(for: .seconds(2 << attempt))
+            isRetrying = false
+            attempt += 1
+        }
     }
 }
 

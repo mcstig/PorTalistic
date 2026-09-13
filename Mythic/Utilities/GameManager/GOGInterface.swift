@@ -312,7 +312,7 @@ final class GOG {
     /// The owned library as games Mythic can show.
     static func getInstallableGames() async throws -> [GOGGame] {
         let products = try await getOwnedProducts().filter { $0.isGame ?? true }
-        cache(products)
+        await cache(products)
         return products.map(GOGGame.init(product:))
     }
 
@@ -330,6 +330,11 @@ final class GOG {
         let imagePath: String?
         let windows: Bool
         let mac: Bool
+        /// Artwork as GOG's own games database describes it, when it has an entry. Optional
+        /// because it's fetched separately and because caches written before this existed
+        /// don't have it — both cases fall back to ``imagePath``.
+        var verticalCover: String?
+        var horizontalCover: String?
     }
 
     static var cacheURL: URL { configurationFolder.appending(path: "products.json") }
@@ -337,17 +342,58 @@ final class GOG {
     /// Read once, then kept — this is consulted for every card in the library grid.
     private nonisolated(unsafe) static var memoizedCache: [String: CachedProduct]?
 
-    static func cache(_ products: [Product]) {
+    static func cache(_ products: [Product]) async {
+        let existing = loadCache()
         var cached: [String: CachedProduct] = .init()
 
         for product in products {
-            cached[String(product.id)] = .init(imagePath: product.image,
-                                               windows: product.worksOn?.windows ?? false,
-                                               mac: product.worksOn?.mac ?? false)
+            let id = String(product.id)
+
+            // Artwork already looked up is carried over rather than re-fetched: it's a
+            // request per game, and a cover doesn't change.
+            cached[id] = .init(imagePath: product.image,
+                               windows: product.worksOn?.windows ?? false,
+                               mac: product.worksOn?.mac ?? false,
+                               verticalCover: existing[id]?.verticalCover,
+                               horizontalCover: existing[id]?.horizontalCover)
+        }
+
+        let missing = cached.filter { $0.value.verticalCover == nil }.map(\.key)
+
+        // A handful at a time. This is a request per game against GOG's games database, and
+        // firing two hundred of them at once is how an account with a large library gets
+        // rate-limited into having no artwork at all.
+        for batch in stride(from: 0, to: missing.count, by: 8).map({ Array(missing[$0..<min($0 + 8, missing.count)]) }) {
+            let fetched = await withTaskGroup(of: (String, Artwork?).self) { group in
+                for id in batch {
+                    group.addTask { (id, await artwork(forProductID: id)) }
+                }
+
+                var results: [String: Artwork] = .init()
+                for await (id, artwork) in group {
+                    if let artwork { results[id] = artwork }
+                }
+                return results
+            }
+
+            for (id, artwork) in fetched {
+                cached[id]?.verticalCover = artwork.vertical
+                cached[id]?.horizontalCover = artwork.horizontal
+            }
         }
 
         memoizedCache = cached
+        write(cached)
+    }
 
+    private static func loadCache() -> [String: CachedProduct] {
+        if let memoizedCache { return memoizedCache }
+
+        return (try? Data(contentsOf: cacheURL))
+            .flatMap { try? JSONDecoder().decode([String: CachedProduct].self, from: $0) } ?? .init()
+    }
+
+    private static func write(_ cached: [String: CachedProduct]) {
         do {
             try FileManager.default.createDirectory(at: configurationFolder, withIntermediateDirectories: true)
             try JSONEncoder().encode(cached).write(to: cacheURL, options: [.atomic])
@@ -357,12 +403,55 @@ final class GOG {
         }
     }
 
-    static func cachedProduct(id: String) -> CachedProduct? {
-        if memoizedCache == nil {
-            memoizedCache = (try? Data(contentsOf: cacheURL))
-                .flatMap { try? JSONDecoder().decode([String: CachedProduct].self, from: $0) } ?? .init()
+    // MARK: - Artwork lookup
+
+    struct Artwork {
+        let vertical: String?
+        let horizontal: String?
+    }
+
+    /// Artwork as GOG's own games database has it.
+    ///
+    /// The `image` on a library entry is the *store tile* — a wide crop, and the only shape
+    /// on offer there. This endpoint is where the portrait cover lives, which is the shape
+    /// Mythic's cards are actually cut for, and it's what GOG Galaxy and Heroic both use.
+    /// Unauthenticated it still answers; the token is sent because it answers better.
+    private static func artwork(forProductID id: String) async -> Artwork? {
+        guard let url: URL = .init(string: "https://gamesdb.gog.com/platforms/gog/external_releases/\(id)") else {
+            return nil
         }
 
+        var request: URLRequest = .init(url: url)
+        request.timeoutInterval = 15
+        if let token = try? await accessToken() {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              let http = response as? HTTPURLResponse, http.statusCode == 200,
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let game = root["game"] as? [String: Any] else { return nil }
+
+        // Each entry is a template — `https://images.gog-statics.com/<hash>{formatter}.{ext}`
+        // — rather than a URL, so that a caller can ask for a size. Mythic wants the original.
+        func templatedURL(_ key: String) -> String? {
+            guard let entry = game[key] as? [String: Any],
+                  let format = entry["url_format"] as? String else { return nil }
+
+            return format
+                .replacingOccurrences(of: "{formatter}", with: "")
+                .replacingOccurrences(of: "{ext}", with: "jpg")
+        }
+
+        let vertical = templatedURL("vertical_cover")
+        let horizontal = templatedURL("logo") ?? templatedURL("background")
+
+        guard vertical != nil || horizontal != nil else { return nil }
+        return .init(vertical: vertical, horizontal: horizontal)
+    }
+
+    static func cachedProduct(id: String) -> CachedProduct? {
+        if memoizedCache == nil { memoizedCache = loadCache() }
         return memoizedCache?[id]
     }
 
@@ -386,7 +475,18 @@ final class GOG {
     }
 
     static func imageURL(forProductID id: String, variant: ImageVariant) -> URL? {
-        imageURL(fromCDNPath: cachedProduct(id: id)?.imagePath, variant: variant)
+        guard let product = cachedProduct(id: id) else { return nil }
+
+        // The games-database cover first, because it's the right shape and a plain URL rather
+        // than a hash plus a size suffix that GOG may or may not have generated for it.
+        let lookedUp = switch variant {
+        case .vertical: product.verticalCover
+        case .horizontal: product.horizontalCover
+        }
+
+        if let lookedUp = lookedUp, let url: URL = .init(string: lookedUp) { return url }
+
+        return imageURL(fromCDNPath: product.imagePath, variant: variant)
     }
 
     static func imageURL(fromCDNPath path: String?, variant: ImageVariant) -> URL? {
