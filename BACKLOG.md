@@ -126,3 +126,38 @@ Better: before launching, compare the resolution the game last ran at (it is
 in the game's own config — Prey's is `r_Width`/`r_Height` in `game.cfg`) with
 the container's desktop mode, and offer to reconcile them. Belongs with
 automatic runtime selection above.
+
+## These settings are per-container. The right value is per-game.
+
+Demonstrated, not theorised, in one evening on one machine with two games:
+
+  - **Prey** wants Retina Mode off. On, its 2048×1330 fullscreen is a quarter
+    of a 4096×2660 desktop and every display gets captured.
+  - **Blades of Time** ran — windowed, wrongly sized, blanking the second
+    monitor — with Retina Mode on, and started crashing with it off. Same
+    container, same change, opposite outcome. Turning it off is what finally
+    let it reach wined3d's fullscreen path, which is different code from the
+    windowed one, and that is where it dies.
+
+So the container is the wrong place for this. Two games in the same prefix
+wanted opposite settings within an hour of each other, and a player who fixes
+one breaks the other with no way to tell which change did it. The same will be
+true of CSMT, MSync, and DXVK.
+
+What this needs:
+
+  - Per-game overrides layered over the container's settings, applied at
+    launch and reverted after, so a container stays a container and a game's
+    quirks travel with the game.
+  - Somewhere to record *why* an override exists. "Retina Mode off" is
+    meaningless in six months; "off, because on it renders a quarter of the
+    screen" is not.
+  - A shipped set of them for games known to need one, which is what every
+    other launcher eventually grows and what the automatic runtime selection
+    item above is really asking for.
+
+And a rule for the launcher's own behaviour, learned the hard way: a container
+setting that changes how games render is not a preference, it is a change of
+environment. Changing one should say what it may affect and be easy to put
+back, because the failure it causes will show up in a different game than the
+one it was changed for.
