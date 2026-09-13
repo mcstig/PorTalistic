@@ -648,6 +648,14 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
         try process.checkTerminationStatus()
     }
 
+    /// The value of a registry entry, as `reg query` reports it.
+    ///
+    /// Returns the value alone, not the line it sits on. `reg query` answers with a header
+    /// and then a row — `    RetinaMode    REG_SZ    y` — and this used to hand back that
+    /// whole row. Every caller then compared it against what it expected the value to be, so
+    /// every caller was wrong in the same silent way: ``getRetinaMode(containerURL:)`` always
+    /// answered `false`, and the container settings sheet has been showing Retina Mode as off
+    /// on prefixes where it is on, which makes the toggle write the value it already has.
     static func queryRegistryKey(containerURL: URL, key: String, name: String, type: RegistryType) async throws -> String {
         let process: Process = .init()
         process.arguments = ["reg", "query", key, "-v", name]
@@ -657,17 +665,23 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
 
         try process.checkTerminationStatus()
 
-        // Gather non-empty, trimmed lines; return the last occurrence
-        let lines = commandResult.standardOutput?
+        // The row naming the value, which is the last non-empty line reg query prints.
+        let row = commandResult.standardOutput?
             .split(separator: "\n", omittingEmptySubsequences: true)
             .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
+            .last(where: { !$0.isEmpty && $0.contains(type.rawValue) })
 
-        if let last = lines?.last {
-            return last
-        } else {
+        // Name, type, value — separated by runs of whitespace. The value is what's left after
+        // the type, which keeps this correct for a value that itself contains spaces.
+        guard let row,
+              let typeRange = row.range(of: type.rawValue) else {
             throw UnableToQueryRegistryError()
         }
+
+        let value = row[typeRange.upperBound...].trimmingCharacters(in: .whitespaces)
+        guard !value.isEmpty else { throw UnableToQueryRegistryError() }
+
+        return value
     }
 
     static func toggleRetinaMode(containerURL: URL, toggle: Bool) async throws {
