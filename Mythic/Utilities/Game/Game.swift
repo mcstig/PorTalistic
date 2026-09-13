@@ -287,6 +287,7 @@ struct AnyGame: Codable, Equatable {
         self.base = try {
             switch storefront {
             case .epicGames:    try EpicGamesGame(from: decoder)
+            case .gog:          try GOGGame(from: decoder)
             case .steam:        try SteamGame(from: decoder)
             case .local:        try LocalGame(from: decoder)
             case nil:           try Game(from: decoder)

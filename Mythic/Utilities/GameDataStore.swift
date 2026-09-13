@@ -109,6 +109,29 @@ import OSLog
             }
         }
         
+        // gog
+        //
+        // Owned, not installed: GOG answers what the account has, and whether any of it is on
+        // disk is Mythic's own bookkeeping. So the fetched games are merged into what's
+        // already known rather than replacing it, or an installed game would be demoted to
+        // uninstalled on every refresh.
+        if storefronts.contains(.gog), GOG.isSignedIn {
+            do {
+                for fetchedGame in try await GOG.getInstallableGames() {
+                    if let existing = library.first(where: { $0 == fetchedGame }) {
+                        try existing.merge(with: fetchedGame, requiring: .identicalIgnoredKeys)
+                        library.update(with: existing)
+                    } else {
+                        library.update(with: fetchedGame)
+                    }
+                }
+            } catch {
+                // Not fatal, and not worth failing the whole refresh over: Epic's games are
+                // already in by this point and an expired GOG session shouldn't hide them.
+                log.error("Unable to refresh game data from GOG: \(error.localizedDescription)")
+            }
+        }
+
         // steam
         if storefronts.contains(.steam), Steam.isClientInstalled {
             do {

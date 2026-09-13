@@ -28,6 +28,7 @@
 		6A11927A2EC8C1DA005A3E05 /* Game.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A1192792EC8C1DA005A3E05 /* Game.swift */; };
 		6A11927C2EC8C1F0005A3E05 /* EpicGamesGame.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A11927B2EC8C1E8005A3E05 /* EpicGamesGame.swift */; };
 		6A11927E2EC8C1FA005A3E05 /* LocalGame.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A11927D2EC8C1F5005A3E05 /* LocalGame.swift */; };
+		0989CE4FE30D4F678498D9E0 /* GOGGame.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08E6E58A02ED4AB990E96F42 /* GOGGame.swift */; };
 		6A1192802EC8C208005A3E05 /* SteamGame.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A11927F2EC8C205005A3E05 /* SteamGame.swift */; };
 		6A1192822EC8C2D7005A3E05 /* Game+Extensions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A1192812EC8C2D4005A3E05 /* Game+Extensions.swift */; };
 		6A1192852EC8D4FD005A3E05 /* GameManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A1192842EC8D4FB005A3E05 /* GameManager.swift */; };
@@ -80,6 +81,7 @@
 		6A2935682BFCFAFD0035CE4B /* Credits.rtf in Resources */ = {isa = PBXBuildFile; fileRef = 6A2934F22BFCFAFD0035CE4B /* Credits.rtf */; };
 		6A29356A2BFCFAFD0035CE4B /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = 6A2934F42BFCFAFD0035CE4B /* Localizable.xcstrings */; };
 		6A29356B2BFCFAFD0035CE4B /* MythicApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A2934F62BFCFAFD0035CE4B /* MythicApp.swift */; };
+		CA56524DF7124234A5B15075 /* GOGWebAuthView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A2078B55D9A45FB83B9301A /* GOGWebAuthView.swift */; };
 		6A2960FC2CE0ED0D00917E90 /* EpicWebAuthView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A2960FB2CE0ED0700917E90 /* EpicWebAuthView.swift */; };
 		6A2960FE2CE1017900917E90 /* NSApplication+Extensions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A2960FD2CE1017700917E90 /* NSApplication+Extensions.swift */; };
 		6A2961002CE1033200917E90 /* NSWindow+Extensions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A2960FF2CE1033000917E90 /* NSWindow+Extensions.swift */; };
@@ -140,10 +142,13 @@
 		6AFC027E2ABDB5D40004AB77 /* SwiftyJSON in Frameworks */ = {isa = PBXBuildFile; productRef = 6AFC027D2ABDB5D40004AB77 /* SwiftyJSON */; };
 		6AFC02812ABE02970004AB77 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 6AFC02802ABE02970004AB77 /* Sparkle */; };
 		BDC3930E304AD61F009AA2DB /* Preflight.swift in Sources */ = {isa = PBXBuildFile; fileRef = BDC3930D304AD61F009AA2DB /* Preflight.swift */; };
+		A731963E02534858ADCF9EAC /* GOGInterface.swift in Sources */ = {isa = PBXBuildFile; fileRef = 762823C4A15F4FC29E72B71F /* GOGInterface.swift */; };
 		BDC39312304AD74D009AA2DB /* SteamInterface.swift in Sources */ = {isa = PBXBuildFile; fileRef = BDC3930F304AD74D009AA2DB /* SteamInterface.swift */; };
 		C1A0PIN0000000000000002 /* SteamClientPin.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A0PIN0000000000000001 /* SteamClientPin.swift */; };
 		BDC39313304AD74D009AA2DB /* VDF.swift in Sources */ = {isa = PBXBuildFile; fileRef = BDC39310304AD74D009AA2DB /* VDF.swift */; };
+		63C7CCACDB4A4B02BF08158F /* GOGGameManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4DF0347C63A340A487965742 /* GOGGameManager.swift */; };
 		BDC39315304AD76B009AA2DB /* SteamGameManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = BDC39314304AD76B009AA2DB /* SteamGameManager.swift */; };
+		C6291EA8CB774D53B9F85A79 /* GOGGameImportView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 713159445AE144399F070CEC /* GOGGameImportView.swift */; };
 		BDC39317304AD7CD009AA2DB /* SteamGameImportView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BDC39316304AD7CD009AA2DB /* SteamGameImportView.swift */; };
 /* End PBXBuildFile section */
 
@@ -181,6 +186,7 @@
 		6A1192792EC8C1DA005A3E05 /* Game.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Game.swift; sourceTree = "<group>"; };
 		6A11927B2EC8C1E8005A3E05 /* EpicGamesGame.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EpicGamesGame.swift; sourceTree = "<group>"; };
 		6A11927D2EC8C1F5005A3E05 /* LocalGame.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalGame.swift; sourceTree = "<group>"; };
+		08E6E58A02ED4AB990E96F42 /* GOGGame.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GOGGame.swift; sourceTree = "<group>"; };
 		6A11927F2EC8C205005A3E05 /* SteamGame.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SteamGame.swift; sourceTree = "<group>"; };
 		6A1192812EC8C2D4005A3E05 /* Game+Extensions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Game+Extensions.swift"; sourceTree = "<group>"; };
 		6A1192842EC8D4FB005A3E05 /* GameManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameManager.swift; sourceTree = "<group>"; };
@@ -234,6 +240,7 @@
 		6A2934F42BFCFAFD0035CE4B /* Localizable.xcstrings */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.json.xcstrings; path = Localizable.xcstrings; sourceTree = "<group>"; };
 		6A2934F52BFCFAFD0035CE4B /* Mythic.entitlements */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.entitlements; path = Mythic.entitlements; sourceTree = "<group>"; };
 		6A2934F62BFCFAFD0035CE4B /* MythicApp.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = MythicApp.swift; sourceTree = "<group>"; };
+		5A2078B55D9A45FB83B9301A /* GOGWebAuthView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GOGWebAuthView.swift; sourceTree = "<group>"; };
 		6A2960FB2CE0ED0700917E90 /* EpicWebAuthView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EpicWebAuthView.swift; sourceTree = "<group>"; };
 		6A2960FD2CE1017700917E90 /* NSApplication+Extensions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "NSApplication+Extensions.swift"; sourceTree = "<group>"; };
 		6A2960FF2CE1033000917E90 /* NSWindow+Extensions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "NSWindow+Extensions.swift"; sourceTree = "<group>"; };
@@ -284,10 +291,13 @@
 		6AFB7CD12EDF154E00C53213 /* GameDataStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameDataStore.swift; sourceTree = "<group>"; };
 		6AFBCE1A2EBECFA100EF179D /* GameCard+ImageCard+.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "GameCard+ImageCard+.swift"; sourceTree = "<group>"; };
 		BDC3930D304AD61F009AA2DB /* Preflight.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Preflight.swift; sourceTree = "<group>"; };
+		762823C4A15F4FC29E72B71F /* GOGInterface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GOGInterface.swift; sourceTree = "<group>"; };
 		BDC3930F304AD74D009AA2DB /* SteamInterface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SteamInterface.swift; sourceTree = "<group>"; };
 		C1A0PIN0000000000000001 /* SteamClientPin.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = SteamClientPin.swift; sourceTree = "<group>"; };
 		BDC39310304AD74D009AA2DB /* VDF.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VDF.swift; sourceTree = "<group>"; };
+		4DF0347C63A340A487965742 /* GOGGameManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GOGGameManager.swift; sourceTree = "<group>"; };
 		BDC39314304AD76B009AA2DB /* SteamGameManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SteamGameManager.swift; sourceTree = "<group>"; };
+		713159445AE144399F070CEC /* GOGGameImportView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GOGGameImportView.swift; sourceTree = "<group>"; };
 		BDC39316304AD7CD009AA2DB /* SteamGameImportView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SteamGameImportView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -353,6 +363,7 @@
 				6A1192812EC8C2D4005A3E05 /* Game+Extensions.swift */,
 				6A11927D2EC8C1F5005A3E05 /* LocalGame.swift */,
 				6A11927B2EC8C1E8005A3E05 /* EpicGamesGame.swift */,
+				08E6E58A02ED4AB990E96F42 /* GOGGame.swift */,
 				6A11927F2EC8C205005A3E05 /* SteamGame.swift */,
 			);
 			path = Game;
@@ -361,6 +372,8 @@
 		6A1192832EC8D4F5005A3E05 /* GameManager */ = {
 			isa = PBXGroup;
 			children = (
+				4DF0347C63A340A487965742 /* GOGGameManager.swift */,
+				762823C4A15F4FC29E72B71F /* GOGInterface.swift */,
 				BDC39314304AD76B009AA2DB /* SteamGameManager.swift */,
 				BDC39311304AD74D009AA2DB /* Steam */,
 				6A1192842EC8D4FB005A3E05 /* GameManager.swift */,
@@ -374,6 +387,7 @@
 		6A18E6722EE6748400AA3B15 /* GameImportView */ = {
 			isa = PBXGroup;
 			children = (
+				713159445AE144399F070CEC /* GOGGameImportView.swift */,
 				BDC39316304AD7CD009AA2DB /* SteamGameImportView.swift */,
 				6A18E66F2EE6748400AA3B15 /* EpicGamesGameImportView.swift */,
 				6A18E6702EE6748400AA3B15 /* GameImportView.swift */,
@@ -543,6 +557,7 @@
 				6AE18E092EBE104000766258 /* Components */,
 				6A0CB9842EAD0FDB00757AC5 /* SettingsView.swift */,
 				6A2C28612DBBA3F3005CD5A4 /* AboutView.swift */,
+				5A2078B55D9A45FB83B9301A /* GOGWebAuthView.swift */,
 				6A2960FB2CE0ED0700917E90 /* EpicWebAuthView.swift */,
 			);
 			path = Windows;
@@ -842,6 +857,7 @@
 				6A2935562BFCFAFD0035CE4B /* GameCard.swift in Sources */,
 				6A2935612BFCFAFD0035CE4B /* GameListView.swift in Sources */,
 				6A29354F2BFCFAFD0035CE4B /* OperationsView.swift in Sources */,
+				63C7CCACDB4A4B02BF08158F /* GOGGameManager.swift in Sources */,
 				BDC39315304AD76B009AA2DB /* SteamGameManager.swift in Sources */,
 				6A08A29B2D36E0B800E6AEFB /* FileManager+Extensions.swift in Sources */,
 				6A2935602BFCFAFD0035CE4B /* ContainerListView.swift in Sources */,
@@ -887,6 +903,7 @@
 				6A6EE1872DBA651700870AC4 /* Migrator.swift in Sources */,
 				6A2935442BFCFAFD0035CE4B /* Global.swift in Sources */,
 				6A2935632BFCFAFD0035CE4B /* WebView.swift in Sources */,
+				C6291EA8CB774D53B9F85A79 /* GOGGameImportView.swift in Sources */,
 				BDC39317304AD7CD009AA2DB /* SteamGameImportView.swift in Sources */,
 				6AFBCE1B2EBECFA700EF179D /* GameCard+ImageCard+.swift in Sources */,
 				6ABEA9102ECB5895006F5182 /* GameOperationManager.swift in Sources */,
@@ -894,6 +911,7 @@
 				6A2935582BFCFAFD0035CE4B /* SubscriptedTextView.swift in Sources */,
 				6A2935542BFCFAFD0035CE4B /* SupportView.swift in Sources */,
 				6A29354E2BFCFAFD0035CE4B /* ContainersView.swift in Sources */,
+				A731963E02534858ADCF9EAC /* GOGInterface.swift in Sources */,
 				BDC39312304AD74D009AA2DB /* SteamInterface.swift in Sources */,
 				C1A0PIN0000000000000002 /* SteamClientPin.swift in Sources */,
 				BDC39313304AD74D009AA2DB /* VDF.swift in Sources */,
@@ -902,7 +920,9 @@
 				6A2935362BFCFAFD0035CE4B /* Color+Extensions.swift in Sources */,
 				6A2935512BFCFAFD0035CE4B /* ContentView.swift in Sources */,
 				6A29353E2BFCFAFD0035CE4B /* LegendaryInterface+Extensions.swift in Sources */,
+				CA56524DF7124234A5B15075 /* GOGWebAuthView.swift in Sources */,
 				6A2960FC2CE0ED0D00917E90 /* EpicWebAuthView.swift in Sources */,
+				0989CE4FE30D4F678498D9E0 /* GOGGame.swift in Sources */,
 				6A1192802EC8C208005A3E05 /* SteamGame.swift in Sources */,
 				6A2935432BFCFAFD0035CE4B /* FileLocations.swift in Sources */,
 				6A2961002CE1033200917E90 /* NSWindow+Extensions.swift in Sources */,
@@ -1095,7 +1115,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 4566;
+				CURRENT_PROJECT_VERSION = 4567;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_ASSET_PATHS = "\"Mythic/Preview Content\"";
@@ -1143,7 +1163,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 4566;
+				CURRENT_PROJECT_VERSION = 4567;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_ASSET_PATHS = "\"Mythic/Preview Content\"";

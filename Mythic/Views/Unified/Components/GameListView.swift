@@ -110,6 +110,8 @@ struct GameListView: View {
         switch storefront {
         case .epicGames:
             return String(localized: "Sign in to Epic Games and your library will appear here.")
+        case .gog:
+            return String(localized: "Sign in to GOG and your library will appear here.")
         case .steam:
             return String(localized: "Set up Steam, sign in to the Steam client, and the games you've installed will appear here.")
         case .local:

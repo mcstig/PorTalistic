@@ -33,6 +33,10 @@ struct GameImportView: View {
                         EpicGamesGameImportView(isPresented: $isPresented)
                     }
 
+                    Tab("GOG", systemImage: "storefront", value: Game.Storefront.gog) {
+                        GOGGameImportView(isPresented: $isPresented)
+                    }
+
                     if Game.Storefront.steam.isAvailable {
                         Tab("Steam", systemImage: "storefront", value: Game.Storefront.steam) {
                             SteamGameImportView(isPresented: $isPresented)
@@ -52,6 +56,12 @@ struct GameImportView: View {
                             Label("Epic", systemImage: "storefront")
                         }
                         .tag(Game.Storefront.epicGames)
+
+                    GOGGameImportView(isPresented: $isPresented)
+                        .tabItem {
+                            Label("GOG", systemImage: "storefront")
+                        }
+                        .tag(Game.Storefront.gog)
 
                     if Game.Storefront.steam.isAvailable {
                         SteamGameImportView(isPresented: $isPresented)

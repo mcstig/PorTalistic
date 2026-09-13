@@ -56,6 +56,11 @@ struct ContentView: View {
                                 .help("Games from your Epic Games library")
                         }
 
+                        NavigationLink(destination: LibraryView(storefront: .gog)) {
+                            Label("GOG", systemImage: "building.columns")
+                                .help("Games from your GOG library")
+                        }
+
                         if Game.Storefront.steam.isAvailable {
                             NavigationLink(destination: LibraryView(storefront: .steam)) {
                                 Label("Steam", systemImage: "cloud")
