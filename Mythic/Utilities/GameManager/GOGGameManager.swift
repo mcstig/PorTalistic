@@ -194,13 +194,44 @@ class GOGGameManager {
 
                 let process: Process = .init()
                 process.arguments = [target.executable.path] + target.arguments + game.launchArguments
-                process.environment = try Wine.assembleEnvironmentVariables(forContainerAtURL: container.url)
+
+                var environment = try Wine.assembleEnvironmentVariables(forContainerAtURL: container.url)
+
+                // Wine's default channels print a `fixme` for every Direct3D present — two
+                // per frame, each a formatted write to stderr. Blades of Time's first two
+                // minutes produced 23,000 of them and 1.4MB of log, and that is time the
+                // frame isn't getting. Errors and every other channel are kept; only the
+                // per-frame D3D chatter is dropped, because it says the same thing 11,000
+                // times and buries the one line that matters.
+                environment["WINEDEBUG"] = "fixme-d3d,fixme-d3d9"
+
+                process.environment = environment
 
                 // GOG games routinely load their data by relative path, so starting one from
                 // the wrong directory looks like missing assets rather than like a mistake here.
                 process.currentDirectoryURL = target.workingDirectory
 
                 Wine.transformProcess(process, containerURL: containerURL)
+
+                // Everything Wine and the game print, kept where it can be read afterwards.
+                //
+                // Until now a Windows game's entire output went to Mythic's own stderr, which
+                // means nowhere unless Mythic happened to be running from Xcode. A game that
+                // crashes on someone else's machine left nothing behind to look at, and the
+                // reason is almost always in the last few lines Wine printed.
+                //
+                // A file handle rather than a `Pipe`: the wineserver and every Windows process
+                // under it inherit the write end, so a pipe's reader waits for the last of
+                // them rather than for the game. See ``Process/runBounded(timeout:)``.
+                let logURL = Wine.logURL(forGameTitled: game.title, inContainerAtURL: containerURL)
+                let logHandle = Wine.beginLogging(to: logURL, describing: target.executable)
+
+                if let logHandle {
+                    process.standardOutput = logHandle
+                    process.standardError = logHandle
+                }
+
+                defer { try? logHandle?.close() }
 
                 try process.run()
 

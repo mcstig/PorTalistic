@@ -885,6 +885,44 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
         }
     }
 
+    // MARK: - Game logs
+
+    /// Where a game's output is kept: beside the container it ran in, so it goes when the
+    /// container does and is one "Open…" away from the person who needs to send it to you.
+    static func logURL(forGameTitled title: String, inContainerAtURL containerURL: URL) -> URL {
+        let name = title
+            .replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: ":", with: "-")
+
+        return containerURL.appending(path: "logs/\(name).log")
+    }
+
+    /// Opens `logURL` for writing, truncated, with a header saying what is about to run.
+    ///
+    /// Truncated rather than appended: the interesting log is always the last run's, and a
+    /// file that only grows is one nobody scrolls to the bottom of.
+    static func beginLogging(to logURL: URL, describing executable: URL) -> FileHandle? {
+        do {
+            try FileManager.default.createDirectory(at: logURL.deletingLastPathComponent(),
+                                                    withIntermediateDirectories: true)
+
+            let header = """
+                \(executable.path)
+                \(Date.now.formatted(date: .abbreviated, time: .standard))
+
+                """
+
+            try header.data(using: .utf8)?.write(to: logURL, options: [.atomic])
+
+            let handle = try FileHandle(forWritingTo: logURL)
+            try handle.seekToEnd()
+            return handle
+        } catch {
+            log.warning("Couldn't open a log for \(executable.lastPathComponent, privacy: .public): \(error.localizedDescription)")
+            return nil
+        }
+    }
+
     // MARK: - Foreground
 
     /// Hands the foreground to a Windows game that has just been started.
