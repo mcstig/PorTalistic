@@ -130,6 +130,21 @@ import OSLog
                 // already in by this point and an expired GOG session shouldn't hide them.
                 log.error("Unable to refresh game data from GOG: \(error.localizedDescription)")
             }
+
+            // Whether an installed GOG game has a newer build is a question only GOG can
+            // answer, and `Game.isUpdateAvailable` is read synchronously while cards are
+            // drawn — so the answers are collected here, once per refresh, and read from the
+            // memo afterwards.
+            let installedGOGGames = library.compactMap { game -> GOGGame? in
+                guard let gogGame = game as? GOGGame, case .installed = game.installationState else { return nil }
+                return gogGame
+            }
+
+            await withTaskGroup(of: Void.self) { group in
+                for game in installedGOGGames {
+                    group.addTask { _ = await GOGDL.refreshUpdateAvailability(for: game) }
+                }
+            }
         }
 
         // steam

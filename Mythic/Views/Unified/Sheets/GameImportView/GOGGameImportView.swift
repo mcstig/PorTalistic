@@ -12,10 +12,10 @@ import OSLog
 
 /// The GOG tab of Import Game.
 ///
-/// Epic's tab is an installer — pick a game, pick a platform, pick a folder — because
-/// `legendary` can fetch the game. This one can't yet, so it's about the account: sign in,
-/// see what arrived, and be told plainly where installing currently comes from instead of
-/// being offered a button that would fail.
+/// Epic's tab imports a game that's already on disk, because `legendary` keeps its own record
+/// of what it installed and needs to be told. GOG's doesn't: the account *is* the library, so
+/// this is about the account — sign in, and every game you own appears with an Install button
+/// of its own.
 struct GOGGameImportView: View {
     @Binding var isPresented: Bool
 
@@ -43,10 +43,9 @@ struct GOGGameImportView: View {
                     .foregroundStyle(.secondary)
 
                 Text("""
-                    GOG games are DRM-free, so Mythic can run them without anything else \
-                    running alongside. Downloading them from GOG isn't built yet — install a \
-                    game with GOG Galaxy or an offline installer, then add it from the Local \
-                    tab, and it'll launch from here.
+                    GOG games are DRM-free, so Mythic downloads and runs them without anything \
+                    else having to be running alongside. They're all in your library — install \
+                    any of them from there.
                     """)
                 .font(.callout)
                 .foregroundStyle(.secondary)

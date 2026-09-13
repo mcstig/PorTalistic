@@ -68,30 +68,45 @@ final class GOG {
 
     // MARK: - Session
 
-    struct Session: Codable {
+    /// One stored credential, in the shape gogdl writes.
+    ///
+    /// Deliberately gogdl's format rather than a format of Mythic's own. Both sides refresh
+    /// tokens — GOG's last an hour — and two stores that each believe they own the account
+    /// drift apart within a day: a downloader that's authenticated and a library that isn't,
+    /// or the reverse, with no way to tell which is right. So there is one file, either side
+    /// may rewrite it, and whoever notices the expiry first does the refresh.
+    struct StoredCredentials: Codable {
         let accessToken: String
         let refreshToken: String
         let userID: String
-        /// When `accessToken` stops being accepted. GOG's tokens last an hour.
-        let expiry: Date
+        let expiresIn: Int
+        let sessionID: String?
+        /// Unix seconds. gogdl's own name for it, and the reason expiry is computed rather
+        /// than stored — the two processes don't share a clock reading, only this.
+        let loginTime: Double
 
-        var isExpired: Bool { Date() >= expiry }
+        var expiry: Date { .init(timeIntervalSince1970: loginTime + Double(expiresIn)) }
+
+        /// A minute short of the deadline, so a request that takes a moment to send doesn't
+        /// arrive with a token that expired in flight.
+        var isExpired: Bool { Date() >= expiry.addingTimeInterval(-60) }
 
         enum CodingKeys: String, CodingKey {
             case accessToken = "access_token"
             case refreshToken = "refresh_token"
             case userID = "user_id"
-            case expiry
+            case expiresIn = "expires_in"
+            case sessionID = "session_id"
+            case loginTime
         }
 
-        /// GOG's token response, which reports a lifetime rather than a deadline.
         init(from response: TokenResponse) {
             self.accessToken = response.accessToken
             self.refreshToken = response.refreshToken
             self.userID = response.userID
-            // A minute short, so a request that takes a moment to send doesn't arrive with a
-            // token that expired in flight.
-            self.expiry = Date().addingTimeInterval(TimeInterval(response.expiresIn) - 60)
+            self.expiresIn = response.expiresIn
+            self.sessionID = response.sessionID
+            self.loginTime = Date().timeIntervalSince1970
         }
     }
 
@@ -100,33 +115,57 @@ final class GOG {
         let refreshToken: String
         let userID: String
         let expiresIn: Int
+        let sessionID: String?
 
         enum CodingKeys: String, CodingKey {
             case accessToken = "access_token"
             case refreshToken = "refresh_token"
             case userID = "user_id"
             case expiresIn = "expires_in"
+            case sessionID = "session_id"
         }
     }
 
-    private static var sessionURL: URL { configurationFolder.appending(path: "session.json") }
+    /// The file both Mythic and gogdl read and write. gogdl is pointed at it by
+    /// `--auth-config-path`.
+    static var authConfigURL: URL { configurationFolder.appending(path: "auth.json") }
 
-    /// The stored session, if there is one. Not necessarily still valid — see ``accessToken()``.
-    static var session: Session? {
-        guard let data = try? Data(contentsOf: sessionURL) else { return nil }
-        return try? JSONDecoder().decode(Session.self, from: data)
+    /// The file's contents as written, untyped.
+    ///
+    /// Kept untyped on purpose: gogdl adds its own entries here — a game-scoped token for
+    /// every game whose secure download links it fetches — and those don't have the shape of
+    /// a sign-in. Decoding the file as a whole would fail on the first one and read as "not
+    /// signed in"; rewriting it from a decoded copy would delete them.
+    private static func readRawCredentialStore() -> [String: Any] {
+        guard let data = try? Data(contentsOf: authConfigURL),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return .init() }
+
+        return root
     }
+
+    /// gogdl keys credentials by client id: the Galaxy client's entry is the sign-in.
+    private static func readCredentials(forClientID id: String) -> StoredCredentials? {
+        guard let entry = readRawCredentialStore()[id],
+              let data = try? JSONSerialization.data(withJSONObject: entry) else { return nil }
+
+        return try? JSONDecoder().decode(StoredCredentials.self, from: data)
+    }
+
+    static var session: StoredCredentials? { readCredentials(forClientID: Client.id) }
 
     static var isSignedIn: Bool { session != nil }
 
-    private static func store(_ session: Session) throws {
+    private static func store(_ credentials: StoredCredentials) throws {
         try FileManager.default.createDirectory(at: configurationFolder, withIntermediateDirectories: true)
-        let data = try JSONEncoder().encode(session)
 
-        // Readable only by this user: it's a bearer token for their whole GOG account, and
-        // the default for a new file in Application Support is not that.
-        try data.write(to: sessionURL, options: [.atomic])
-        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: sessionURL.path)
+        var storeContents = readRawCredentialStore()
+        storeContents[Client.id] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(credentials))
+
+        try JSONSerialization.data(withJSONObject: storeContents).write(to: authConfigURL, options: [.atomic])
+
+        // Readable only by this user: it's a bearer token for their whole GOG account, and the
+        // default for a new file in Application Support is not that.
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: authConfigURL.path)
     }
 
     // MARK: - Errors
@@ -153,7 +192,7 @@ final class GOG {
 
     /// Exchanges the code a successful sign-in produced for a session.
     @discardableResult
-    static func signIn(authorizationCode code: String) async throws -> Session {
+    static func signIn(authorizationCode code: String) async throws -> StoredCredentials {
         var components: URLComponents = .init(string: "https://auth.gog.com/token")!
         components.queryItems = [
             .init(name: "client_id", value: Client.id),
@@ -163,15 +202,15 @@ final class GOG {
             .init(name: "redirect_uri", value: Client.redirectURI)
         ]
 
-        let session = Session(from: try await decode(TokenResponse.self, from: .init(url: components.url!)))
-        try store(session)
+        let credentials = StoredCredentials(from: try await decode(TokenResponse.self, from: .init(url: components.url!)))
+        try store(credentials)
 
         log.notice("Signed in to GOG")
-        return session
+        return credentials
     }
 
     static func signOut() throws {
-        try? FileManager.default.removeItem(at: sessionURL)
+        try? FileManager.default.removeItem(at: authConfigURL)
         try? FileManager.default.removeItem(at: cacheURL)
         memoizedCache = nil
         log.notice("Signed out of GOG")
@@ -179,9 +218,8 @@ final class GOG {
 
     /// A token that will still be accepted, refreshing first if the stored one won't be.
     ///
-    /// GOG's access tokens last an hour and its refresh tokens last much longer, so in
-    /// practice this is what keeps a signed-in account signed in across weeks of not opening
-    /// the app.
+    /// GOG's access tokens last an hour and its refresh tokens last far longer, so in practice
+    /// this is what keeps an account signed in across weeks of not opening the app.
     static func accessToken() async throws -> String {
         guard let session else { throw NotSignedInError() }
         guard session.isExpired else { return session.accessToken }
@@ -195,7 +233,7 @@ final class GOG {
         ]
 
         do {
-            let refreshed = Session(from: try await decode(TokenResponse.self, from: .init(url: components.url!)))
+            let refreshed = StoredCredentials(from: try await decode(TokenResponse.self, from: .init(url: components.url!)))
             try store(refreshed)
             return refreshed.accessToken
         } catch {
@@ -294,7 +332,7 @@ final class GOG {
         let mac: Bool
     }
 
-    private static var cacheURL: URL { configurationFolder.appending(path: "products.json") }
+    static var cacheURL: URL { configurationFolder.appending(path: "products.json") }
 
     /// Read once, then kept — this is consulted for every card in the library grid.
     private nonisolated(unsafe) static var memoizedCache: [String: CachedProduct]?

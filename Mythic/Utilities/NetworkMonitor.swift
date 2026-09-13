@@ -45,6 +45,21 @@ final class NetworkMonitor: ObservableObject, @unchecked Sendable {
          monitor.start(queue: queue)
     }
 
+    /// Whether the storefront a game came from can be reached right now.
+    ///
+    /// Epic gets a real reachability check because `legendary` fails opaquely without one.
+    /// Everything else is asked the only question that can be answered without a probe per
+    /// storefront — is there a network at all — rather than being gated on Epic's answer,
+    /// which is what used to happen and which made a GOG download impossible whenever
+    /// epicgames.com was slow.
+    @MainActor func isReachable(for storefront: Game.Storefront?) -> Bool {
+        switch storefront {
+        case .some(.epicGames): epicAccessibilityState == .accessible
+        case .some(.local):     true
+        default:                isConnected
+        }
+    }
+
     private func checkEpicAccessibility() async throws {
         await MainActor.run {
             self.epicAccessibilityState = .checking

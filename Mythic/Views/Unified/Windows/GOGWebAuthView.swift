@@ -131,7 +131,10 @@ private struct GOGInterceptorWebView: NSViewRepresentable {
     let completion: (String) -> Void
     let failure: () -> Void
 
-    final class Coordinator: NSObject, WKNavigationDelegate {
+    /// Main-actor isolated because `WKNavigationDelegate` is: without it the delegate methods
+    /// below only *nearly* match their requirements and WebKit never calls them, which is a
+    /// warning rather than an error and so exactly the kind of thing that gets shipped.
+    @MainActor final class Coordinator: NSObject, WKNavigationDelegate {
         let completion: (String) -> Void
         let failure: () -> Void
 
@@ -158,7 +161,9 @@ private struct GOGInterceptorWebView: NSViewRepresentable {
         /// delegate methods as extra chances. ``handle(_:)`` only acts once.
         func observe(_ webView: WKWebView) {
             urlObservation = webView.observe(\.url, options: [.initial, .new]) { [weak self] view, _ in
-                self?.handle(view.url)
+                // WebKit changes `url` on the main thread, so this is already there — but the
+                // observation closure is `@Sendable` and has to be told.
+                MainActor.assumeIsolated { self?.handle(view.url) }
             }
         }
 
@@ -183,7 +188,7 @@ private struct GOGInterceptorWebView: NSViewRepresentable {
 
         func webView(_ webView: WKWebView,
                      decidePolicyFor navigationAction: WKNavigationAction,
-                     decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+                     decisionHandler: @escaping @MainActor (WKNavigationActionPolicy) -> Void) {
             guard let url = navigationAction.request.url,
                   GOG.authorizationCode(from: url) != nil else {
                 decisionHandler(.allow)
@@ -227,7 +232,7 @@ private struct GOGInterceptorWebView: NSViewRepresentable {
 
     func updateNSView(_ nsView: WKWebView, context: Context) {}
 
-    static func dismantleNSView(_ nsView: WKWebView, coordinator: Coordinator) {
+    @MainActor static func dismantleNSView(_ nsView: WKWebView, coordinator: Coordinator) {
         coordinator.urlObservation = nil
         nsView.stopLoading()
         nsView.navigationDelegate = nil

@@ -114,7 +114,9 @@ extension GameCard {
                                 .padding(2)
                         }
                     }
-                    .disabled(networkMonitor.epicAccessibilityState != .accessible)
+                    // Epic's reachability check gates Epic. A GOG game has no business being
+                    // ungrabbable because epicgames.com didn't answer.
+                    .disabled(!networkMonitor.isReachable(for: game.storefront))
                     .disabled(game.storefront == .local)
                     .disabled(operationManager.queue.contains(where: { $0.game == game && $0.type == .install }))
                     .help("Install \(game.description)")
@@ -124,6 +126,14 @@ extension GameCard {
                         case let epicGame as EpicGamesGame:
                             EpicGamesGameInstallationView(
                                 game: .init(get: { epicGame },
+                                            set: { game = $0 }),
+                                isPresented: $isInstallSheetPresented
+                            )
+                            .padding()
+                            .frame(width: 700, height: 380)
+                        case let gogGame as GOGGame:
+                            GOGGameInstallationView(
+                                game: .init(get: { gogGame },
                                             set: { game = $0 }),
                                 isPresented: $isInstallSheetPresented
                             )
@@ -164,7 +174,7 @@ extension GameCard {
                             .padding(2)
                     }
                 }
-                .disabled(networkMonitor.epicAccessibilityState != .accessible)
+                .disabled(!networkMonitor.isReachable(for: game.storefront))
                 .disabled(game.storefront == .local)
                 .disabled(operationManager.queue.contains(where: { $0.game == game && $0.type == .repair }))
                 .alert("Unable to verify installation.",
@@ -207,7 +217,7 @@ extension GameCard {
                             .padding(2)
                     }
                 }
-                .disabled(networkMonitor.epicAccessibilityState != .accessible)
+                .disabled(!networkMonitor.isReachable(for: game.storefront))
                 // FIXME: .disabled(game.checkIfGameIsRunning())
                 .disabled(game.isUpdateAvailable != true)
                 .disabled(operationManager.queue.contains(where: { $0.game == game && $0.type == .update }))
@@ -350,6 +360,11 @@ extension GameCard {
                 case let epicGame as EpicGamesGame:
                     EpicGamesGameUninstallationView(game: .init(get: { epicGame }, set: { game = $0 }),
                                                     isPresented: $isUninstallSheetPresented)
+                    .padding()
+                    .frame(width: 700, height: 380)
+                case let gogGame as GOGGame:
+                    GOGGameUninstallationView(game: .init(get: { gogGame }, set: { game = $0 }),
+                                              isPresented: $isUninstallSheetPresented)
                     .padding()
                     .frame(width: 700, height: 380)
                 case let localGame as LocalGame:

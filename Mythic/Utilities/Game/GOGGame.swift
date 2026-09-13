@@ -75,8 +75,16 @@ class GOGGame: Game, @unchecked Sendable {
         try await GOGGameManager.launch(game: self)
     }
 
+    /// What the last refresh found, not what GOG says right now.
+    ///
+    /// The property is synchronous and read while cards are drawn, so it can't ask the
+    /// network. ``GOGDL/refreshUpdateAvailability(for:)`` is what fills it in, and `nil` —
+    /// which the UI renders as "update checking unavailable" — is the honest answer until it
+    /// has run for this game.
+    override var isUpdateAvailable: Bool? { GOGDL.cachedUpdateAvailability(forGameID: id) }
+
     nonisolated override func _update() async throws {
-        throw GOGGameManager.InstallationUnsupportedError()
+        try await GOGGameManager.update(game: self)
     }
 
     nonisolated override func _move(from currentLocation: URL,
@@ -85,6 +93,6 @@ class GOGGame: Game, @unchecked Sendable {
     }
 
     nonisolated override func _verifyInstallation() async throws {
-        throw GOGGameManager.InstallationUnsupportedError()
+        try await GOGGameManager.repair(game: self)
     }
 }
