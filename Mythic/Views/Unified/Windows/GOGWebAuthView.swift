@@ -28,9 +28,13 @@ struct GOGWebAuthView: View {
     @State private var signInError: Error?
 
     var body: some View {
-        GOGInterceptorWebView { code in
-            handle(authorizationCode: code)
-        }
+        GOGInterceptorWebView(
+            completion: { code in handle(authorizationCode: code) },
+            failure: {
+                signInError = GOG.SignInError()
+                isSignInErrorPresented = true
+            }
+        )
         .blur(radius: isWorking ? 30 : 0)
         .alert(isPresented: $isSignInErrorPresented) {
             .init(
@@ -125,35 +129,87 @@ private struct GOGInterceptorWebView: NSViewRepresentable {
     @CodableAppStorage("gogWebDataStore") var gogWebDataStore: UUID = .init()
 
     let completion: (String) -> Void
+    let failure: () -> Void
 
     final class Coordinator: NSObject, WKNavigationDelegate {
         let completion: (String) -> Void
-        private var hasCompleted = false
+        let failure: () -> Void
 
-        init(completion: @escaping (String) -> Void) {
+        /// Kept alive for the life of the web view — see ``observe(_:)``.
+        var urlObservation: NSKeyValueObservation?
+
+        private var hasFinished = false
+
+        init(completion: @escaping (String) -> Void, failure: @escaping () -> Void) {
             self.completion = completion
+            self.failure = failure
+        }
+
+        /// Watch every way WebKit will tell us where it is.
+        ///
+        /// The first version of this only implemented `decidePolicyFor navigationAction`, and
+        /// it never fired: GOG's last hop is a *server* redirect, which WebKit reports through
+        /// `didReceiveServerRedirectForProvisionalNavigation` rather than as a new navigation
+        /// action to approve. The authorisation code went past unread, the blank
+        /// `on_login_success` page loaded — it genuinely has no content — and the window sat
+        /// there looking broken.
+        ///
+        /// So rather than pick the one correct callback, watch `url` itself and treat the
+        /// delegate methods as extra chances. ``handle(_:)`` only acts once.
+        func observe(_ webView: WKWebView) {
+            urlObservation = webView.observe(\.url, options: [.initial, .new]) { [weak self] view, _ in
+                self?.handle(view.url)
+            }
+        }
+
+        func handle(_ url: URL?) {
+            guard !hasFinished, let url else { return }
+
+            if let code = GOG.authorizationCode(from: url) {
+                hasFinished = true
+                urlObservation = nil
+                completion(code)
+                return
+            }
+
+            // Landing here without a code means GOG finished the flow and declined to issue
+            // one. Nothing more is coming, and a blank page is the worst way to say so.
+            if url.host == "embed.gog.com", url.path.hasPrefix("/on_login_success") {
+                hasFinished = true
+                urlObservation = nil
+                failure()
+            }
         }
 
         func webView(_ webView: WKWebView,
                      decidePolicyFor navigationAction: WKNavigationAction,
                      decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
             guard let url = navigationAction.request.url,
-                  let code = GOG.authorizationCode(from: url) else {
+                  GOG.authorizationCode(from: url) != nil else {
                 decisionHandler(.allow)
                 return
             }
 
-            // The redirect has done its job the moment we've read it; letting it load just
-            // shows the user a blank embed page behind the window we're about to close.
+            // The redirect has done its job the moment it's read; letting it load just shows
+            // a blank embed page behind a window that's about to close.
             decisionHandler(.cancel)
+            handle(url)
+        }
 
-            guard !hasCompleted else { return }
-            hasCompleted = true
-            completion(code)
+        func webView(_ webView: WKWebView, didReceiveServerRedirectForProvisionalNavigation navigation: WKNavigation!) {
+            handle(webView.url)
+        }
+
+        func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+            handle(webView.url)
+        }
+
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            handle(webView.url)
         }
     }
 
-    func makeCoordinator() -> Coordinator { .init(completion: completion) }
+    func makeCoordinator() -> Coordinator { .init(completion: completion, failure: failure) }
 
     func makeNSView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
@@ -164,6 +220,7 @@ private struct GOGInterceptorWebView: NSViewRepresentable {
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
+        context.coordinator.observe(webView)
         webView.load(URLRequest(url: GOG.authorizationURL))
         return webView
     }
@@ -171,6 +228,7 @@ private struct GOGInterceptorWebView: NSViewRepresentable {
     func updateNSView(_ nsView: WKWebView, context: Context) {}
 
     static func dismantleNSView(_ nsView: WKWebView, coordinator: Coordinator) {
+        coordinator.urlObservation = nil
         nsView.stopLoading()
         nsView.navigationDelegate = nil
         nsView.uiDelegate = nil
