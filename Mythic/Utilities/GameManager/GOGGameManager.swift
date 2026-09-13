@@ -149,11 +149,7 @@ class GOGGameManager {
             throw CocoaError(.fileNoSuchFile)
         }
 
-        defer {
-            if UserDefaults.standard.bool(forKey: "minimiseOnGameLaunch") {
-                NSApp.windows.first?.makeKeyAndOrderFront(nil)
-            }
-        }
+        let shouldHideLauncher = UserDefaults.standard.bool(forKey: "minimiseOnGameLaunch")
 
         let operation: GameOperation = .init(game: game, type: .launch) { _ in
             switch platform {
@@ -196,10 +192,6 @@ class GOGGameManager {
                 guard let containerURL = game.containerURL else { throw Wine.Container.DoesNotExistError() }
                 let container = try Wine.getContainerObject(at: containerURL)
 
-                if UserDefaults.standard.bool(forKey: "minimiseOnGameLaunch") {
-                    await MainActor.run { NSApp.windows.first?.miniaturize(nil) }
-                }
-
                 let process: Process = .init()
                 process.arguments = [target.executable.path] + target.arguments + game.launchArguments
                 process.environment = try Wine.assembleEnvironmentVariables(forContainerAtURL: container.url)
@@ -211,7 +203,19 @@ class GOGGameManager {
                 Wine.transformProcess(process, containerURL: containerURL)
 
                 try process.run()
+
+                // Not a courtesy: Wine's Mac driver won't change the display mode until its
+                // process is the active application, so a game left behind the launcher comes
+                // up windowed no matter what its settings say.
+                await Wine.handOverForeground(toGameNamed: target.executable.lastPathComponent,
+                                              startedAs: process.processIdentifier,
+                                              hidingLauncher: shouldHideLauncher)
+
                 process.waitUntilExit()
+
+                if shouldHideLauncher {
+                    await MainActor.run { NSApp.unhide(nil) }
+                }
             }
         }
 

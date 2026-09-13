@@ -8,6 +8,7 @@
 // Copyright © 2023-2025 vapidinfinity
 
 import Foundation
+import AppKit
 import OSLog
 import SemanticVersion
 
@@ -867,6 +868,75 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
         
         var errorDescription: String? {
             "Failed to install '\(verb)' via winetricks. Exit code: \(exitCode)"
+        }
+    }
+
+    // MARK: - Foreground
+
+    /// Hands the foreground to a Windows game that has just been started.
+    ///
+    /// Wine's Mac driver does not change the display mode while its process isn't the active
+    /// application — it records the request and applies it when the process is next activated.
+    /// A game started by a launcher that stays in front therefore asks for fullscreen, is
+    /// quietly told "later", and comes up as an ordinary window the size of its fullscreen
+    /// resolution. It looks exactly like a game ignoring its own settings, and it un-sticks
+    /// itself the moment the player changes any video setting — because by then they have
+    /// clicked into the game and it has become active.
+    ///
+    /// So Mythic steps back and then brings the game forward itself, rather than leaving the
+    /// player to do it before the game gets as far as asking.
+    ///
+    /// - Parameters:
+    ///   - executableName: the game's executable, e.g. `Prey.exe`. Wine names the application
+    ///     after it, which is the only handle on a process Mythic didn't create directly.
+    ///   - pid: the process Mythic *did* create, tried first — it's the same application in
+    ///     the common case, and unambiguous when it is.
+    static func handOverForeground(toGameNamed executableName: String,
+                                   startedAs pid: pid_t,
+                                   hidingLauncher: Bool) async {
+        await MainActor.run {
+            // Standing aside first: a new application can't come to the front while this one
+            // is still insisting on being there.
+            if hidingLauncher {
+                NSApp.hide(nil)
+            } else {
+                NSApp.deactivate()
+            }
+        }
+
+        // Wine takes a moment to get as far as creating a window, and a game rather longer.
+        // Polling rather than waiting a fixed time, because "rather longer" is the shape of a
+        // number that is always wrong on someone else's machine.
+        let deadline: ContinuousClock.Instant = .now.advanced(by: .seconds(30))
+
+        while .now < deadline {
+            if let application = await runningApplication(pid: pid, named: executableName) {
+                if application.isActive { return }
+
+                await MainActor.run { _ = application.activate(options: []) }
+
+                // One follow-up, because the window the game wants to make fullscreen may not
+                // exist yet at the moment it first appears in the Dock.
+                try? await Task.sleep(for: .seconds(2))
+                await MainActor.run { _ = application.activate(options: []) }
+                return
+            }
+
+            try? await Task.sleep(for: .milliseconds(300))
+        }
+
+        log.notice("\(executableName, privacy: .public) never appeared as an application; it may open behind Mythic")
+    }
+
+    @MainActor
+    private static func runningApplication(pid: pid_t, named executableName: String) -> NSRunningApplication? {
+        if let direct = NSRunningApplication(processIdentifier: pid) { return direct }
+
+        // Wine re-executes itself on the way to a Windows process, so the application that
+        // ends up owning the window is usually a descendant rather than the process we
+        // spawned. Wine names it after the executable, which is what's left to match on.
+        return NSWorkspace.shared.runningApplications.first {
+            $0.localizedName?.localizedCaseInsensitiveContains(executableName) == true
         }
     }
 }

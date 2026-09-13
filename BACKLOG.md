@@ -67,33 +67,31 @@ hard-require a running client.
 
 ## Fullscreen that actually fills the screen
 
-Confirmed on Prey (2017), from the game's own `Game.log`:
+Fixed for GOG in `GOGGameManager.launch`, and written down here because Epic
+and Local still have it.
 
-    Current display mode is 4096x2660x32
-    Current Resolution: 2048x1330x32 Full Screen
+A game launched from Mythic came up in a window the size of its fullscreen
+resolution, however its own settings were set. Wine's Mac driver doesn't
+change the display mode while its process isn't the active application — it
+records the request and applies it on activation. Mythic stayed in front, so
+the game asked for fullscreen, was quietly told "later", and drew a window.
+Changing any video setting in-game fixed it permanently, which is the tell:
+by then the player had clicked into the game, so it was active and the
+deferred mode change landed.
 
-The game is genuinely in fullscreen. Wine, with Retina Mode on, reports the
-display at its backing resolution — 4096×2660 — so a 2048×1330 fullscreen mode
-is a quarter of the screen's area, and Wine doesn't scale a smaller fullscreen
-mode up to fill. Every game whose resolution is set below the backing
-resolution looks like this, which is most of them, because the resolution list
-a game shows is usually the one it saw first.
+`Wine.handOverForeground(toGameNamed:startedAs:hidingLauncher:)` steps Mythic
+aside and brings the game forward. Still to do:
 
-Three ways out, and the launcher should be choosing between them rather than
-the player:
-
-  - Set the game's own resolution to the backing resolution. Sharpest, and on
-    a 4K/5K display that is a 10+ megapixel render target — often the reason
-    someone turns the settings down in the first place.
-  - Turn Retina Mode off for the container. Wine then reports the display in
-    points, the game's existing setting becomes the full desktop, and macOS
-    scales the result. Softer, much cheaper, and what most people actually
-    want.
-  - Leave Retina Mode on and have the container's display mode follow the
-    game — this is the one worth building.
-
-Mythic can detect the mismatch without being told: the resolution a game last
-ran at is in its own config, and the container's reported display size is
-knowable. A card that says "this game won't fill your screen — fix it?" beats
-a forum post. Belongs with automatic runtime selection above: both are the
-launcher taking a decision the player shouldn't have to research.
+  - Epic. `Legendary.launch` hands off to legendary, which spawns Wine
+    detached — the process Mythic can see isn't the one that owns the window,
+    so the name match is all there is to go on. Worth doing carefully.
+  - Local Windows games, which share `LocalGameManager.launch` and the same
+    misplaced `defer` that raised Mythic's own window immediately after
+    queueing rather than after the game exited.
+  - The related question of what resolution a game *should* run at. With
+    Retina Mode on, Wine reports the display at its backing resolution, so a
+    game left at half of that renders a quarter of the pixels and is upscaled
+    by the display. Mythic can read what a game last ran at from its own
+    config and say something useful about it. Belongs with automatic runtime
+    selection above: both are the launcher taking a decision the player
+    shouldn't have to research.
