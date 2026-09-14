@@ -768,6 +768,30 @@ final class Legendary {
         }
     }
 
+    /// The app names in legendary's catalogue that are add-ons rather than games.
+    ///
+    /// Needed because a refresh only ever adds and updates: an add-on that an earlier version
+    /// filed as a game is still sitting in the library, and nothing would ever take it out.
+    static func addOnGameIDs() -> Set<String> {
+        let metadataDirectory: URL = configurationFolder.appending(path: "metadata")
+
+        guard let contents = try? FileManager.default.contentsOfDirectory(atPath: metadataDirectory.path) else {
+            return .init()
+        }
+
+        return Set(
+            contents
+                .filter { $0.hasSuffix(".json") }
+                .compactMap { fileName -> String? in
+                    guard let data = try? Data(contentsOf: metadataDirectory.appending(path: fileName)),
+                          let metadata = try? JSONDecoder().decode(GameMetadata.self, from: data),
+                          isAddOn(metadata.storeMetadata) else { return nil }
+
+                    return metadata.appName
+                }
+        )
+    }
+
     static func getInstallableGames() throws -> [EpicGamesGame] {
         guard isSignedIn else { throw NotSignedInError() }
 
@@ -791,6 +815,10 @@ final class Legendary {
                         log.warning("Skipping unreadable Epic metadata file: \(fileName, privacy: .public)")
                         return nil
                     }
+
+                    // A file per entitlement, not per game: DLC lives in here too. See
+                    // ``isAddOn(_:)`` for why this is the discriminator.
+                    guard !isAddOn(metadata.storeMetadata) else { return nil }
 
                     return .init(id: metadata.appName,
                                  title: metadata.appTitle,

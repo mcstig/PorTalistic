@@ -161,3 +161,22 @@ setting that changes how games render is not a preference, it is a change of
 environment. Changing one should say what it may affect and be easy to put
 back, because the failure it causes will show up in a different game than the
 one it was changed for.
+
+## `Game` identity ignores the storefront
+
+`Game.==` and `Game.hash(into:)` use `id` alone, and the library is a
+`Set<Game>`. So an Epic game and a GOG game that happen to share an id are the
+same game as far as the library is concerned: the second one merges into the
+first and one of them disappears.
+
+In practice it holds up — GOG's ids are numeric and Epic's are hex-ish
+catalogue names — so nothing has collided yet. But nothing stops it, and
+`library.first(where: { $0 == fetchedGame })` in `refreshFromStorefronts` will
+match across storefronts if it ever happens. Identity should be
+`(storefront, id)`; the reason to be careful about changing it is that `id`
+alone is also what's persisted, so a migration has to keep existing libraries
+readable.
+
+Found while fixing the Epic add-on duplicates, which turned out to be the
+opposite problem — distinct ids, same title — so this one is still only
+theoretical.

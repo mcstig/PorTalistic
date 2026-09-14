@@ -758,8 +758,36 @@ extension Legendary {
         }
     }
 
+    /// Whether a catalogue entry is something attached to a game rather than a game.
+    ///
+    /// Legendary's metadata directory holds a file per *entitlement*, not per game, so DLC
+    /// sits in there beside the thing it extends — and Mythic was making a library card out
+    /// of every one. A Civilization VI account came out as ten "games", Fallout New Vegas as
+    /// six, because each add-on has its own app name and its own key art and nothing had ever
+    /// asked whether it was a game.
+    ///
+    /// Epic's own answer is `mainGameItem`: an add-on names the game it belongs to and a game
+    /// names nothing. That is exactly what legendary's `is_dlc` checks, so it is what this
+    /// checks. `addons` in the category paths is the same fact said a second way, and is kept
+    /// because Epic has not always populated `mainGameItem` on older entries.
+    ///
+    /// Deliberately an exclusion rather than a requirement — nothing here demands a `games`
+    /// category — because the cost of the two mistakes isn't symmetric. A stray add-on in the
+    /// library is untidy; a game missing from it looks like Mythic lost your purchase.
+    static func isAddOn(_ metadata: GameMetadataDetails) -> Bool {
+        if metadata.mainGameItem != nil { return true }
+        if metadata.mainGameItemList?.isEmpty == false { return true }
+
+        return metadata.categories.contains {
+            $0.path == "addons" || $0.path.hasPrefix("addons/")
+        }
+    }
+
     /// Detailed game metadata from Epic Games Store catalog.
     /// **File:** `metadata/{app_name}.json`
+    ///
+    /// - Note: see ``GameMetadataDetails/isAddOn`` — not every file in legendary's metadata
+    ///   directory describes something you can play.
     struct GameMetadataDetails: Codable, Identifiable {
         /// Age rating information for different rating systems
         let ageGatings: [String: AgeGating]?

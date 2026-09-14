@@ -103,6 +103,22 @@ import OSLog
                         library.update(with: fetchedGame)
                     }
                 }
+
+                // Add-ons that an earlier version filed as games are still in here, because a
+                // refresh only adds and updates. Take them out — but only the ones that
+                // aren't installed. Being wrong about what to show is untidy; being wrong
+                // about what to remove looks like Mythic lost someone's game.
+                let addOnIDs = Legendary.addOnGameIDs()
+                let staleAddOns = library.filter { game in
+                    guard game.storefront == .epicGames, addOnIDs.contains(game.id) else { return false }
+                    guard case .uninstalled = game.installationState else { return false }
+                    return true
+                }
+
+                if !staleAddOns.isEmpty {
+                    log.notice("Removing \(staleAddOns.count, privacy: .public) Epic add-on(s) previously filed as games")
+                    library.subtract(staleAddOns)
+                }
             } catch {
                 log.error("Unable to refresh game data from Epic Games: \(error.localizedDescription)")
                 throw error
