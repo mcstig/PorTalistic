@@ -13,9 +13,5 @@
 			<string>ExtendedGamepad</string>
 		</dict>
 	</array>
-	<key>SUFeedURL</key>
-	<string>https://dl.getmythic.app/updates/update.xml</string>
-	<key>SUPublicEDKey</key>
-	<string>g+sJ+Hhxtb5ziscjMaoIvjMcvycB1PpZhhRJeoF+YSM=</string>
 </dict>
 </plist>

@@ -29,6 +29,18 @@ final class SparkleUpdateController: NSObject, SPUUserDriver, ObservableObject {
     override init() {
         super.init()
 
+        // No feed, no updater — and that is a decision rather than an oversight.
+        //
+        // `SUFeedURL` pointed at upstream Mythic's appcast, and `SUPublicEDKey` at upstream's
+        // update-signing key. Shipping either would have meant this application quietly
+        // replacing itself with a different one, signed by someone else, on the first update
+        // check. Both are gone from `Info.plist`, and ``Branding/appcastURL`` is where updates
+        // come back on once there is an appcast of this project's own to point at.
+        guard Branding.appcastURL != nil else {
+            log.notice("No appcast configured; automatic updates are off.")
+            return
+        }
+
         let updaterController: SPUUpdater = .init(
             hostBundle: Bundle.main,
             applicationBundle: Bundle.main,

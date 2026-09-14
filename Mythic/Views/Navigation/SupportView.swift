@@ -29,11 +29,11 @@ struct SupportView: View {
                 .frame(maxWidth: 400, alignment: .leading)
             HStack{
                 Button("Documentation"){
-                    openLink(urlString: "https://docs.getmythic.app/")
+                    openLink(url: Branding.readmeURL)
                 }
                 verticalDivider(height: 30)
                 Button("FAQ"){
-                    openLink(urlString: "https://getmythic.app/faq/")
+                    openLink(url: Branding.discussionsURL)
                 }
                 verticalDivider(height: 30)
                 Button("Compatibility List"){
@@ -49,11 +49,11 @@ struct SupportView: View {
                 .frame(maxWidth: 400, alignment: .leading)
             HStack{
                 Button("Report an issue"){
-                    openLink(urlString: "https://github.com/MythicApp/Mythic/issues")
+                    openLink(url: Branding.issuesURL)
                 }
                 verticalDivider(height: 30)
                 Button("Create a support ticket"){
-                    openLink(urlString: "https://discord.gg/kQKdvjTVqh")
+                    openLink(url: Branding.issuesURL)
                 }
             }
             .frame(maxWidth: 400, alignment: .leading)
@@ -147,6 +147,10 @@ private func openLink(urlString: String) {
     if let url = URL(string: urlString) {
         NSWorkspace.shared.open(url)
     }
+}
+
+private func openLink(url: URL) {
+    NSWorkspace.shared.open(url)
 }
 
 @ViewBuilder

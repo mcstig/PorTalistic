@@ -42,10 +42,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         // MARK: Firebase Configuration
-        // Use the Firebase library to configure APIs.
-        FirebaseApp.configure()
-
-        FirebaseConfiguration.shared.setLoggerLevel(.min)
+        // Only when the bundled configuration actually belongs to this app. Upstream's
+        // `GoogleService-Info.plist` is still here and names upstream's project, so
+        // configuring against it would send this fork's crash reports and analytics into
+        // someone else's Firebase. See ``Branding/hasOwnFirebaseConfiguration``.
+        if Branding.hasOwnFirebaseConfiguration {
+            FirebaseApp.configure()
+            FirebaseConfiguration.shared.setLoggerLevel(.min)
+        }
 
         setenv("CX_ROOT", Bundle.main.bundlePath, 1)
 

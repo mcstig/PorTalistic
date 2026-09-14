@@ -87,8 +87,8 @@ struct MythicApp: App {
             }
             
             CommandGroup(replacing: .help) {
-                Link("Documentation", destination: URL(string: "https://docs.getmythic.app/")!)
-                Link("Discord server", destination: URL(string: "https://discord.gg/kQKdvjTVqh")!)
+                Link("Documentation", destination: Branding.readmeURL)
+                Link("Discussions", destination: Branding.discussionsURL)
                 Link("Games compability",
                      destination: URL(string: "https://docs.google.com/spreadsheets/d/1W_1UexC1VOcbP2CHhoZBR5-8koH-ZPxJBDWntwH-tsc/")!)
 
@@ -98,8 +98,8 @@ struct MythicApp: App {
                 }
                 
                 Section("More") {
-                    Link("GitHub repository", destination: URL(string: "https://github.com/MythicApp/Mythic")!)
-                    Link("Website", destination: URL(string: "https://getmythic.app/")!)
+                    Link("GitHub repository", destination: Branding.repositoryURL)
+                    Link("Project home", destination: Branding.repositoryURL)
                 }
             }
         }
