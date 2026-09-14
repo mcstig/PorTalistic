@@ -37,9 +37,12 @@ struct AboutView: View {
                         
                         if !animateTextView {
                             Group {
-                                Text("Mythic")
+                                Text(Branding.name)
                                     .font(.largeTitle)
-                                Text("© by vapidinfinity ✦")
+                                Text("by Michael Stoian")
+                                Text("a fork of Mythic by vapidinfinity ✦")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
                                 
                                 Divider()
                                     .frame(width: 100)
@@ -47,8 +50,8 @@ struct AboutView: View {
                                 VStack {
                                     if let shortVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
                                        let bundleVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String,
-                                       let mythicVersion: SemanticVersion = .init("\(shortVersion)+\(bundleVersion)") {
-                                        Text(mythicVersion.prettyString)
+                                       let version: SemanticVersion = .init("\(shortVersion)+\(bundleVersion)") {
+                                        Text(version.prettyString)
                                     }
                                     
                                     if let engineVersion {
@@ -95,7 +98,7 @@ struct AboutView: View {
                     Divider()
                         .padding(.horizontal)
                     
-                    Text(#""An open-source macOS game launcher with the ability to play Windows games through a custom implementation of Apple's Game Porting Toolkit — supporting multiple platforms.""#)
+                    Text(#""An open-source macOS game launcher that runs Windows games through Wine, choosing the runtime and graphics translation each game needs — across multiple storefronts.""#)
                         .font(.headline)
                         .multilineTextAlignment(.center)
                         .padding()
@@ -108,10 +111,17 @@ struct AboutView: View {
                             .font(.title)
                         
                         AcknowledgementCard(
+                            URL: .init(string: "https://github.com/MythicApp/Mythic")!,
+                            image: Image("BlankAppIcon"),
+                            title: "✦ Mythic, by vapidinfinity",
+                            description: "The launcher this one is forked from, under the GPLv3. Most of what works here was working there first."
+                        )
+
+                        AcknowledgementCard(
                             URL: .init(string: "https://codeweavers.com/")!,
                             image: Image("CrossOver"),
                             title: "⭐ CodeWeavers, and Gcenx",
-                            description: "Developing, maintaining, and porting Wine, the technology behind Mythic's underlying Windows® → macOS API translation layer."
+                            description: "Developing, maintaining, and porting Wine, the technology behind this application's Windows® → macOS API translation layer."
                         )
                         
                         AcknowledgementCard(
@@ -122,10 +132,10 @@ struct AboutView: View {
                         )
                         
                         AcknowledgementCard(
-                            URL: .init(string: "https://github.com/MythicApp/Mythic#dependencies")!,
+                            URL: Branding.repositoryURL,
                             image: Image("BlankAppIcon"),
                             title: "⭐ Others",
-                            description: "View Mythic's other dependencies."
+                            description: "View this application's other dependencies."
                         )
                     }
                     .id(2)
