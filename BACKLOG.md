@@ -232,9 +232,7 @@ still use it, and a fallback that works beats a principle that doesn't.
   - **A second DXMT-capable Wine build would remove the single point of failure.**
     Either another published build with the escapes, or building one. This is the
     highest-value item on this list now, because everything modern depends on it.
-  - **Use the user's own GPTK when they have one.** Discovery already finds
-    `/Applications/Game Porting Toolkit.app` and Whisky's and CrossOver's
-    installs, but nothing detects whether an external runtime carries D3DMetal,
-    so they are never chosen for a Direct3D game. Someone who has installed GPTK
-    themselves is under their own licence, not Mythic's, and could have the
-    better path. Needs a way to detect `D3DMetal.framework` inside a runtime.
+  - ~~**Use the user's own GPTK when they have one.**~~ Done:
+    ``Wine/D3DMetal/isPresent(in:)`` detects `lib/external/D3DMetal.framework`,
+    so a Game Porting Toolkit or Whisky install is now recognised and chosen
+    behind DXMT. Mythic detects and never installs.

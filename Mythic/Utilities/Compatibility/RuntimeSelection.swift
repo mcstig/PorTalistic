@@ -67,10 +67,10 @@ extension Runtime {
             return .dxmt
         }
 
-        // Note what this does not try to detect: a user's own Game Porting Toolkit install,
-        // which discovery does find but which has no marker this can read. Recognising those
-        // would let someone who already has GPTK use it, and is in the backlog.
-        if origin == .bundledEngine { return .appleD3DMetal }
+        // Apple's implementation, wherever it came from — the bundled engine, a user's own
+        // Game Porting Toolkit install, or Whisky's Wine library, all three of which carry it
+        // on this machine. Mythic never installs it; it only notices.
+        if Wine.D3DMetal.isPresent(in: self) { return .appleD3DMetal }
 
         return nil
     }
@@ -129,7 +129,14 @@ extension Runtime {
                 return preferredByCatalogue(among: byDXMT) ?? byDXMT.first
             }
 
-            return viable.first(where: { $0.capabilities.direct3DOnMetal == .appleD3DMetal })
+            let byD3DMetal = viable.filter { $0.capabilities.direct3DOnMetal == .appleD3DMetal }
+
+            // Among Apple's implementations, prefer one Mythic didn't put there. A Game
+            // Porting Toolkit or Whisky install is the user's own copy under their own
+            // licence; the bundled engine is a copy Mythic fetched, which is the one with a
+            // question mark over it.
+            return byD3DMetal.first(where: { $0.origin != .bundledEngine })
+                ?? byD3DMetal.first
                 ?? viable.first
         }
 
