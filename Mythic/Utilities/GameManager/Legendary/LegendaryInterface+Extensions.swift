@@ -766,20 +766,33 @@ extension Legendary {
     /// six, because each add-on has its own app name and its own key art and nothing had ever
     /// asked whether it was a game.
     ///
-    /// Epic's own answer is `mainGameItem`: an add-on names the game it belongs to and a game
-    /// names nothing. That is exactly what legendary's `is_dlc` checks, so it is what this
-    /// checks. `addons` in the category paths is the same fact said a second way, and is kept
-    /// because Epic has not always populated `mainGameItem` on older entries.
+    /// Three markers, in the order they earn their keep on a real account of 157 entitlements:
+    ///
+    /// - `mainGameItem` — Epic's own answer, and what legendary's `is_dlc` checks: an add-on
+    ///   names the game it belongs to, a game names nothing. It catches the ones whose
+    ///   categories say plain `games` and give nothing else away (The Outer Worlds: Peril on
+    ///   Gorgon, Dying Light: The Following, a soundtrack, a wallpaper).
+    /// - `addons` in the category paths — the same fact said a second way, kept because Epic
+    ///   has not always populated `mainGameItem`. Every Civilization VI pack and every
+    ///   Fallout New Vegas expansion carries it.
+    /// - `digitalextras` — bonus content that names no parent game, so neither of the above
+    ///   sees it. This is the category Epic files a "<game> Content" bundle under: the
+    ///   entitlement a game's extra assets ship in, sharing its title and its key art, which
+    ///   is what made "Death Stranding" appear twice with nothing to tell the two apart.
     ///
     /// Deliberately an exclusion rather than a requirement — nothing here demands a `games`
     /// category — because the cost of the two mistakes isn't symmetric. A stray add-on in the
-    /// library is untidy; a game missing from it looks like Mythic lost your purchase.
+    /// library is untidy; a game missing from it looks like Mythic lost your purchase. For the
+    /// same reason `software` is *not* excluded, though it would be easy to: Discord and
+    /// Antstream Arcade are filed under it, and they are real, separately launchable things
+    /// the account owns. Epic shelves them apart from games and Mythic should eventually too,
+    /// but hiding them outright is a different decision than this one.
     static func isAddOn(_ metadata: GameMetadataDetails) -> Bool {
         if metadata.mainGameItem != nil { return true }
         if metadata.mainGameItemList?.isEmpty == false { return true }
 
         return metadata.categories.contains {
-            $0.path == "addons" || $0.path.hasPrefix("addons/")
+            $0.path == "addons" || $0.path.hasPrefix("addons/") || $0.path == "digitalextras"
         }
     }
 

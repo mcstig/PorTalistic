@@ -180,3 +180,19 @@ readable.
 Found while fixing the Epic add-on duplicates, which turned out to be the
 opposite problem — distinct ids, same title — so this one is still only
 theoretical.
+
+## Epic sells things that aren't games, and Mythic shelves them as games
+
+Filtering out add-ons left two entitlements that are neither games nor add-ons:
+**Discord** and **Antstream Arcade**, both filed under Epic's `software`
+category. They're in the library as cards with Play buttons.
+
+They weren't filtered, on purpose. They are real, separately launchable things
+the account owns, and hiding a purchase is the worse mistake — but a card that
+looks exactly like a game is the wrong answer too. Epic's own launcher shelves
+them apart, and so does Steam; Mythic should get a section for them rather than
+either showing them as games or pretending they aren't owned.
+
+Worth doing as part of the library UI pass, since it's a shelf, not a filter:
+`software` in the category paths is the discriminator, already visible in the
+metadata Mythic decodes.
