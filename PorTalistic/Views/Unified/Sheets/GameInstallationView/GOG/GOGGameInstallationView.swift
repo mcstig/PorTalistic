@@ -70,19 +70,13 @@ struct GOGGameInstallationView: View {
 
     var body: some View {
         VStack {
-            HStack {
-                GameImageCard(game: game, url: game.verticalImageURL, isImageEmpty: $isImageEmpty)
-                    .aspectRatio(3/4, contentMode: .fit)
-
-                VStack {
-                    Text("Install \(game.description)")
-                        .font(.title)
-                        .bold()
-
-                    if let storefront = game.storefront {
-                        SubscriptedTextView(storefront.description)
-                    }
-
+            GameSheetHeader(game: game,
+                            action: String(localized: "Install"),
+                            // The download size used to be tertiary text beside the Install
+                            // button, where it read as a caption on the button rather than
+                            // as a fact about the game.
+                            badges: downloadSizeBadge.map { [$0] } ?? []) {
+                VStack(alignment: .leading, spacing: Theme.Spacing.small) {
                     Form {
                         HStack {
                             VStack(alignment: .leading) {
@@ -152,7 +146,7 @@ struct GOGGameInstallationView: View {
             }
 
             HStack {
-                Button("Cancel") {
+                Button("Cancel", role: .cancel) {
                     isPresented = false
                 }
 
@@ -160,9 +154,10 @@ struct GOGGameInstallationView: View {
 
                 if let availableSpace = availableSpaceInBytes,
                    let installSize = installSizeInBytes {
-                    Text(ByteCountFormatter.string(fromByteCount: installSize, countStyle: .file))
-                        .font(.footnote)
-                        .foregroundStyle(.tertiary)
+                    // Nothing to draw — the size is a badge in the header now. This only
+                    // still exists to notice, once the size arrives, that it won't fit.
+                    Color.clear
+                        .frame(width: 0, height: 0)
                         .onAppear {
                             if availableSpace < installSize {
                                 isFreeSpaceAlertPresented = true
@@ -219,6 +214,14 @@ struct GOGGameInstallationView: View {
         } message: { error in
             Text(error.localizedDescription)
         }
+    }
+
+    /// The download size, once GOG has told us, as a fact about the game.
+    private var downloadSizeBadge: PortalBadge? {
+        guard let installSize = installSizeInBytes else { return nil }
+        return .init(ByteCountFormatter.string(fromByteCount: installSize, countStyle: .file),
+                     systemImage: "arrow.down.circle",
+                     tint: Theme.Palette.brandSecondary)
     }
 
     /// Shows where the game will actually land once GOG has named the folder, and the base

@@ -317,18 +317,17 @@ Not finished:
 Buttons, sheet surfaces and panels are routed through `Views/DesignSystem/` now, which
 carried the look into most of the app for free. What it did not reach:
 
-  - **The Settings window** is still a plain `Form` of sections. It's the densest
-    screen in the app and the one most worth doing properly.
-  - **Containers** — `ContainersView`, `ContainerListView`, `ContainerCreationView`,
-    `ContainerSettingsView`. `ContainerListView` emits bare `ForEach` rows meant to
-    sit inside a `Form`, so it cannot be dropped anywhere else without looking
-    wrong; that is why Home lost its containers section rather than restyling it.
-  - **Onboarding** — the first thing a new Patreon user sees, and it has had no
-    attention at all.
-  - **The installation and uninstallation sheets' insides.** They have the right
-    ground and the right buttons now, but their layout is still upstream's.
+  - ~~The Settings window~~, ~~Containers~~, ~~Onboarding~~ and ~~the installation
+    sheets' headers~~ are done. What's left below.
+  - **`ContainerCreationView` and `ContainerSettingsView`** have the app's ground
+    and buttons but their own layout inside.
   - **`GameSettingsView`**, which is where a per-game runtime override will have to
     live once `RuntimeProfile.Source.userOverride` is reachable from the interface.
+    Also `HarmonyRatingView`, `RosettaInstallationView`, `EngineInstallationView`,
+    and the four `GameImportView` tabs below their new chrome.
+  - **`SteamGameImportView`'s `Spacer()`** has the same shape as the bug that made
+    the GOG import tab appear blank — it is only safe because the tab container
+    now proposes an ordinary height. Worth removing on principle.
 
 Also outstanding from this round:
 

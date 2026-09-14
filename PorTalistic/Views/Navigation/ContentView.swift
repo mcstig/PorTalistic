@@ -82,8 +82,10 @@ struct ContentView: View {
         List(selection: $selection) {
             Section {
                 row(.home, title: String(localized: "Home"), systemImage: "house",
+                    tint: Theme.Palette.brand,
                     help: String(localized: "Everything in one place"))
                 row(.store, title: String(localized: "Store"), systemImage: "bag",
+                    tint: Theme.Palette.brand,
                     help: String(localized: "Purchase new games from Epic"))
             }
 
@@ -91,8 +93,9 @@ struct ContentView: View {
             // completely different ways, so a single list that mixes them means every action
             // has to be qualified by "…but which kind of game is this?" — for the user and
             // for the code.
-            Section("Library") {
-                row(.library(nil), title: String(localized: "All Games"), systemImage: "books.vertical",
+            Section(header: sectionHeader(String(localized: "Library"))) {
+                row(.library(nil), title: String(localized: "All Games"), systemImage: "square.grid.2x2",
+                    tint: Theme.Palette.brandSecondary,
                     help: String(localized: "Every game, from every storefront"),
                     count: gameDataStore.library.count)
 
@@ -100,19 +103,30 @@ struct ContentView: View {
                     row(.library(storefront),
                         title: storefront.description,
                         systemImage: storefront.symbolName,
+                        tint: storefront.tint,
                         help: String(localized: "Games from your \(storefront.description) library"),
-                        count: gameDataStore.library.filter { $0.storefront == storefront }.count)
+                        count: gameDataStore.library.filter { $0.storefront == storefront }.count,
+                        // A storefront you're signed out of looks exactly like an empty one
+                        // from here, and the only way to find out was to open it.
+                        needsAttention: storefront.usesAccount && !storefront.isSignedIn)
                 }
             }
 
-            Section("Management") {
+            Section(header: sectionHeader(String(localized: "Manage"))) {
                 row(.containers, title: String(localized: "Containers"), systemImage: "cube",
+                    tint: Theme.Palette.brandSecondary,
                     help: String(localized: "Manage containers for Windows® applications"))
                 row(.accounts, title: String(localized: "Accounts"), systemImage: "person.2",
+                    tint: Theme.Palette.brand,
                     help: String(localized: "View all currently signed in accounts"))
 
-                Button("Support", systemImage: "questionmark.bubble") {
+                Button {
                     SupportWindowController.show()
+                } label: {
+                    rowContent(title: String(localized: "Support"),
+                               systemImage: "questionmark.bubble",
+                               tint: .secondary,
+                               isSelected: false)
                 }
                 .help("Get support")
                 .buttonStyle(.plain)
@@ -126,41 +140,119 @@ struct ContentView: View {
                 Section {
                     row(.operations,
                         title: String(localized: "Operations"),
-                        systemImage: "progress.indicator",
+                        systemImage: "arrow.down.circle",
+                        tint: Theme.Palette.brandSecondary,
                         help: String(localized: "View all active game operations"),
                         count: operationManager.queue.count)
                 }
             }
         }
         .listStyle(.sidebar)
-        .navigationSplitViewColumnWidth(min: 196, ideal: 214, max: 280)
+        .tint(Theme.Palette.brand)
+        .navigationSplitViewColumnWidth(min: 214, ideal: 232, max: 300)
+        .safeAreaInset(edge: .top, spacing: 0) { wordmark }
         .safeAreaInset(edge: .bottom, spacing: 0) { footer }
+    }
+
+    /// The app, at the top of its own sidebar.
+    ///
+    /// The window used to begin with the word "Home" against the traffic lights and nothing
+    /// else — no name, no mark, nothing to say which application you were looking at.
+    private var wordmark: some View {
+        HStack(spacing: Theme.Spacing.small) {
+            BundleIconView()
+                .frame(width: 22, height: 22)
+
+            Text(Branding.name)
+                .font(.system(.subheadline, weight: .semibold))
+                .foregroundStyle(.primary)
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, Theme.Spacing.medium)
+        .padding(.bottom, Theme.Spacing.small)
+    }
+
+    private func sectionHeader(_ title: String) -> some View {
+        Text(title.uppercased())
+            .font(.system(size: 10, weight: .semibold))
+            .tracking(0.9)
+            .foregroundStyle(.tertiary)
+            .padding(.top, Theme.Spacing.xsmall)
     }
 
     @ViewBuilder
     private func row(_ item: SidebarItem,
                      title: String,
                      systemImage: String,
+                     tint: Color,
                      help: String,
-                     count: Int? = nil) -> some View {
+                     count: Int? = nil,
+                     needsAttention: Bool = false) -> some View {
         // A tagged row rather than a `NavigationLink`: in a two-column split view the
         // sidebar has no stack of its own to push onto, and it is the `List`'s selection
         // that drives the detail column — and that draws the selected row as selected,
         // which the old link-based sidebar never did.
-        HStack {
-            Label(title, systemImage: systemImage)
+        rowContent(title: title,
+                   systemImage: systemImage,
+                   tint: tint,
+                   isSelected: selection == item,
+                   count: count,
+                   needsAttention: needsAttention)
+            .help(help)
+            .tag(item)
+    }
+
+    /// A sidebar row.
+    ///
+    /// The symbol sits in a tinted tile rather than floating beside the text, which is what
+    /// lets a storefront carry its own colour: four monochrome glyphs in a column are four
+    /// things to read, where four coloured tiles are four things to recognise. The count is
+    /// a capsule instead of a bare numeral so it reads as a quantity and not as part of the
+    /// name.
+    @ViewBuilder
+    private func rowContent(title: String,
+                            systemImage: String,
+                            tint: Color,
+                            isSelected: Bool,
+                            count: Int? = nil,
+                            needsAttention: Bool = false) -> some View {
+        HStack(spacing: Theme.Spacing.small + 2) {
+            Image(systemName: systemImage)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(isSelected ? .white : tint)
+                .frame(width: 24, height: 24)
+                .background {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(tint.opacity(isSelected ? 0.95 : 0.18))
+                }
+
+            Text(title)
+                .font(.system(.body, weight: isSelected ? .semibold : .regular))
+                .lineLimit(1)
+
+            Spacer(minLength: Theme.Spacing.xsmall)
+
+            if needsAttention {
+                Circle()
+                    .fill(.orange)
+                    .frame(width: 6, height: 6)
+                    .help("You're not signed in to \(title).")
+            }
 
             if let count, count > 0 {
-                Spacer(minLength: Theme.Spacing.small)
-
                 Text(count, format: .number)
-                    .font(.caption)
+                    .font(.system(size: 10, weight: .semibold))
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
+                    .padding(.horizontal, Theme.Spacing.small - 2)
+                    .padding(.vertical, 1)
+                    .background {
+                        Capsule(style: .continuous).fill(.quaternary)
+                    }
             }
         }
-        .help(help)
-        .tag(item)
+        .padding(.vertical, 3)
     }
 
     // MARK: Footer

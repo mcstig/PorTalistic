@@ -257,7 +257,7 @@ extension Game.Storefront {
 
     var tint: Color {
         switch self {
-        case .epicGames:    .init(red: 0.55, green: 0.55, blue: 0.60)
+        case .epicGames:    .init(red: 0.38, green: 0.42, blue: 0.58)
         case .gog:          .init(red: 0.66, green: 0.35, blue: 0.85)
         case .steam:        .init(red: 0.28, green: 0.52, blue: 0.78)
         case .local:        .init(red: 0.40, green: 0.62, blue: 0.52)

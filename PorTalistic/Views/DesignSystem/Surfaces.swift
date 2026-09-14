@@ -443,6 +443,69 @@ extension View {
     }
 }
 
+// MARK: - Game sheet header
+
+/**
+ The top of a sheet that acts on one game: its cover, what you're about to do, and the
+ facts worth knowing before you do it.
+
+ Written once because the three installation sheets and the three uninstallation sheets all
+ had their own copy of it, and they had drifted: each drew
+ `Text("Install \(game.description)")` — and `Game.description` is `"\(title)"`, quotation
+ marks included — so the heading came out as `Install "Heroes of Might and Magic® 3:
+ Complete"`, at `.title` weight, wrapping to two lines inside its own punctuation. The verb
+ belongs in an eyebrow above the name, not in a sentence with it.
+ */
+struct GameSheetHeader<Content: View>: View {
+    let game: Game
+
+    /// "Install", "Uninstall" — shown above the name, not wrapped around it.
+    let action: String
+
+    /// Facts about what's about to happen: a download size, a platform.
+    var badges: [PortalBadge] = []
+
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        HStack(alignment: .top, spacing: Theme.Spacing.xlarge) {
+            GameArtwork(game: game, url: game.verticalImageURL, cornerRadius: Theme.Radius.card)
+                .aspectRatio(Theme.Grid.artworkAspectRatio, contentMode: .fit)
+                .frame(width: 170)
+
+            VStack(alignment: .leading, spacing: Theme.Spacing.medium) {
+                VStack(alignment: .leading, spacing: Theme.Spacing.xsmall) {
+                    Text(action.uppercased())
+                        .font(Theme.Text.heroEyebrow)
+                        .tracking(1.2)
+                        .foregroundStyle(.secondary)
+
+                    Text(game.title)
+                        .font(.system(.title2, weight: .bold))
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.7)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                HStack(spacing: Theme.Spacing.small) {
+                    if let storefront = game.storefront {
+                        PortalBadge(storefront.description,
+                                    systemImage: storefront.symbolName,
+                                    tint: storefront.tint)
+                    }
+
+                    ForEach(Array(badges.enumerated()), id: \.offset) { _, badge in
+                        badge
+                    }
+                }
+
+                content
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
 // MARK: - Badge
 
 /// A small label for a fact about a game: its storefront, its state, its graphics backend.

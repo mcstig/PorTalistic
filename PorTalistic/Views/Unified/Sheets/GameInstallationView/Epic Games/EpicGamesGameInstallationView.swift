@@ -52,19 +52,8 @@ struct EpicGamesGameInstallationView: View {
 
     var body: some View {
         VStack { // wrap in VStack to prevent padding from callers being applied within the view
-            HStack {
-                GameImageCard(game: game, url: game.verticalImageURL, isImageEmpty: $isImageEmpty)
-                    .aspectRatio(3/4, contentMode: .fit)
-
-                VStack {
-                    Text("Install \(game.description)")
-                        .font(.title)
-                        .bold()
-
-                    if let storefront = game.storefront {
-                        SubscriptedTextView(storefront.description)
-                    }
-
+            GameSheetHeader(game: game, action: String(localized: "Install")) {
+                VStack(alignment: .leading, spacing: Theme.Spacing.small) {
                     if !optionalPacks.isEmpty {
                         Text("(Selective downloads supported.)")
                             .font(.footnote)
