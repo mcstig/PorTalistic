@@ -22,6 +22,7 @@ struct LibraryView: View {
     @State private var isGameImportSheetPresented = false
     @Bindable var gameListViewModel: GameListViewModel = .shared
     @CodableAppStorage("gameListLayout") var gameListLayout: GameListViewModel.Layout = .grid
+    @AppStorage(GameCardSize.storageKey) private var cardSize: GameCardSize = .regular
 
     var body: some View {
         VStack(spacing: 0) {
@@ -63,6 +64,26 @@ struct LibraryView: View {
                             storefront.presentSignIn()
                         }
                         .help("Sign in to \(storefront.description)")
+                    }
+                }
+
+                // Plain buttons rather than a size picker, because this is a zoom control
+                // and zoom controls are two buttons everywhere else on the system. Each step
+                // is 30%; they disable themselves at the ends so the current size is always
+                // legible from the toolbar without opening anything.
+                if gameListLayout == .grid, !gameListViewModel.sortedLibrary.isEmpty {
+                    ToolbarItemGroup(placement: .automatic) {
+                        Button("Smaller Cards", systemImage: "minus.magnifyingglass") {
+                            if let smaller = cardSize.stepped(by: -1) { cardSize = smaller }
+                        }
+                        .disabled(cardSize.stepped(by: -1) == nil)
+                        .help("Make the game cards 30% smaller")
+
+                        Button("Larger Cards", systemImage: "plus.magnifyingglass") {
+                            if let larger = cardSize.stepped(by: 1) { cardSize = larger }
+                        }
+                        .disabled(cardSize.stepped(by: 1) == nil)
+                        .help("Make the game cards 30% larger")
                     }
                 }
 

@@ -100,12 +100,63 @@ enum Theme {
     enum Grid {
         /// Artwork is 3:4 because that is the shape of every storefront's portrait cover.
         static let artworkAspectRatio: CGFloat = 3.0 / 4.0
-        /// Room under the artwork for two lines of title and a line of badges.
-        static let captionHeight: CGFloat = 52
         static let spacing: CGFloat = Spacing.large
-        /// The width a card is given on a shelf, where the row scrolls instead of wrapping.
-        static let shelfCardWidth: CGFloat = 150
+
+        /// The width a card is given at ``GameCardSize/regular``, before scaling.
+        static let baseCardWidth: CGFloat = 200
+
+        /// The same, on a shelf, where the row scrolls instead of wrapping so a card can be
+        /// smaller without leaving the grid ragged.
+        static let baseShelfCardWidth: CGFloat = 150
     }
+}
+
+/// How big the game cards are, in three steps of 30%.
+///
+/// Replaces a `Slider` over a raw point width from 200 to 400, labelled "Gamecard Size" and
+/// subtitled "Default is 1 tick." — which gave nine indistinguishable positions, none of them
+/// named, and no way to tell which one you were on.
+enum GameCardSize: String, CaseIterable, Codable, Identifiable {
+    case small
+    case regular
+    case large
+
+    var id: String { rawValue }
+
+    /// Stored as a name rather than as its multiplier: a `Double` raw value has to come back
+    /// out of `UserDefaults` bit-identical to match a case, and 0.7 is not a number worth
+    /// betting an interface on.
+    var multiplier: CGFloat {
+        switch self {
+        case .small:    0.7
+        case .regular:  1.0
+        case .large:    1.3
+        }
+    }
+
+    var description: String {
+        switch self {
+        case .small:    String(localized: "Small")
+        case .regular:  String(localized: "Medium")
+        case .large:    String(localized: "Large")
+        }
+    }
+
+    var cardWidth: CGFloat { (Theme.Grid.baseCardWidth * multiplier).rounded() }
+    var shelfCardWidth: CGFloat { (Theme.Grid.baseShelfCardWidth * multiplier).rounded() }
+
+    /// The next size up or down, or `nil` at either end — which is what disables the buttons.
+    func stepped(by offset: Int) -> GameCardSize? {
+        let all = Self.allCases
+        guard let index = all.firstIndex(of: self) else { return nil }
+        let target = index + offset
+        guard all.indices.contains(target) else { return nil }
+        return all[target]
+    }
+
+    /// A key of its own rather than reusing `gameCardSize`, which holds a `Double` from the
+    /// slider this replaces.
+    static let storageKey: String = "gameCardSizeStep"
 }
 
 extension ShapeStyle where Self == Color {

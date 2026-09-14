@@ -227,6 +227,7 @@ struct GameShelf: View {
     var emptyMessage: String?
 
     @State private var hoveredGameID: Game.ID?
+    @AppStorage(GameCardSize.storageKey) private var cardSize: GameCardSize = .regular
 
     var body: some View {
         if !games.isEmpty || emptyMessage != nil {
@@ -250,7 +251,7 @@ struct GameShelf: View {
                                 GameCard(game: .constant(game),
                                          isCompact: true,
                                          hoveredGameID: $hoveredGameID)
-                                    .frame(width: Theme.Grid.shelfCardWidth)
+                                    .frame(width: cardSize.shelfCardWidth)
                             }
                         }
                         // Room for the hover lift and its shadow, which a tight clip would

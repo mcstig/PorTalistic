@@ -236,7 +236,11 @@ private struct GameDetailContent: View {
                               value: sizeOnDisk.formatted(.byteCount(style: .file)))
                 }
 
-                if let containerURL = game.containerURL,
+                // Only for an installed game. `Game.containerURL` falls back to whichever
+                // container happens to be first when a game hasn't got one, so an
+                // uninstalled Epic game confidently reported that it runs in "Steam".
+                if isInstalled,
+                   let containerURL = game.containerURL,
                    let container = try? Wine.Container(knownURL: containerURL) {
                     DetailRow(String(localized: "Container"), value: container.name)
                     DetailRow(String(localized: "Wine build"),

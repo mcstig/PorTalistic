@@ -20,7 +20,7 @@ struct GameListView: View {
     @Bindable var gameDataStore: GameDataStore = .shared
 
     @CodableAppStorage("gameListLayout") var layout: GameListViewModel.Layout = .grid
-    @AppStorage("gameCardSize") private var gameCardSize: Double = 200.0
+    @AppStorage(GameCardSize.storageKey) private var cardSize: GameCardSize = .regular
 
     @State private var isGameImportViewPresented: Bool = false
     @State private var hoveredGameID: Game.ID?
@@ -38,7 +38,7 @@ struct GameListView: View {
                     switch layout {
                     case .grid:
                         LazyVGrid(
-                            columns: [.init(.adaptive(minimum: gameCardSize), spacing: Theme.Grid.spacing)],
+                            columns: [.init(.adaptive(minimum: cardSize.cardWidth), spacing: Theme.Grid.spacing)],
                             alignment: .leading,
                             spacing: Theme.Spacing.xlarge
                         ) {
@@ -80,6 +80,7 @@ struct GameListView: View {
             }
         }
         .animation(Theme.Motion.layout, value: layout)
+        .animation(Theme.Motion.layout, value: cardSize)
         .animation(.default, value: games)
     }
 

@@ -65,29 +65,40 @@ struct GameArtwork: View {
     private var shape: RoundedRectangle { .init(cornerRadius: cornerRadius, style: .continuous) }
 
     var body: some View {
-        ZStack {
-            ArtworkPlaceholder(game: game, orientation: orientation)
+        // `Color.clear` takes whatever size it is offered, and an overlay never reports its
+        // own size upward — which is the whole point of the arrangement.
+        //
+        // With the artwork in a `ZStack` instead, a `resizable` image with `.fill` overflows
+        // the proposal and the stack grows to the *image's* size. `clipShape` clips the
+        // drawing but not the layout, so cards ended up as big as whatever cover art they
+        // happened to hold: GOG publishes larger covers than Epic, so a row of GOG games was
+        // visibly taller and wider than a row of Epic ones in the same grid, and the outer
+        // `aspectRatio` never got a look in.
+        Color.clear
+            .overlay {
+                ZStack {
+                    ArtworkPlaceholder(game: game, orientation: orientation)
 
-            if let image {
-                // No cross-fade. Art fading in *over* the placeholder means both are
-                // half-transparent for the length of the animation, so the game's initials
-                // ghost through its own cover art — worse than either state on its own.
-                Image(nsImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-            } else if url != nil {
-                Rectangle()
-                    .fill(.white.opacity(0.06))
-                    .shimmering(animation: .easeInOut(duration: 1.1).repeatForever(autoreverses: false),
-                                bandSize: 0.8)
+                    if let image {
+                        // No cross-fade. Art fading in *over* the placeholder means both are
+                        // half-transparent for the length of the animation, so the game's
+                        // initials ghost through its own cover art — worse than either state.
+                        Image(nsImage: image)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                    } else if url != nil {
+                        Rectangle()
+                            .fill(.white.opacity(0.06))
+                            .shimmering(animation: .easeInOut(duration: 1.1).repeatForever(autoreverses: false),
+                                        bandSize: 0.8)
+                    }
+                }
             }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .clipShape(shape)
-        // A border belongs on a tile, not on a hero: at `cornerRadius: 0` this drew a
-        // separator-coloured line down both sides of a full-bleed image.
-        .conditionalTransform(if: cornerRadius > 0) { $0.hairlineBorder(shape) }
-        .task(id: taskIdentity) { await load() }
+            .clipShape(shape)
+            // A border belongs on a tile, not on a hero: at `cornerRadius: 0` this drew a
+            // separator-coloured line down both sides of a full-bleed image.
+            .conditionalTransform(if: cornerRadius > 0) { $0.hairlineBorder(shape) }
+            .task(id: taskIdentity) { await load() }
     }
 
     private var taskIdentity: String { "\(url?.absoluteString ?? "")#\(attempt)" }

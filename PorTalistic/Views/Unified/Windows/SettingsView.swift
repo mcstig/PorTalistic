@@ -151,17 +151,22 @@ extension SettingsView {
     }
 
     struct ViewSettingsView: View {
-        @AppStorage("gameCardSize") private var gameCardSize: Double = 200.0
+        @AppStorage(GameCardSize.storageKey) private var cardSize: GameCardSize = .regular
         @AppStorage("gameImageCardBlur") private var imageCardBlur: Double = 0.0
         @CodableAppStorage("gameListLayout") var gameListLayout: GameListViewModel.Layout = .grid
         @AppStorage("forceLegacyAppearance") private var forceLegacyAppearance: Bool = false
 
         var body: some View {
-            Slider(value: $gameCardSize, in: 200...400, step: 25) {
+            Picker(selection: $cardSize) {
+                ForEach(GameCardSize.allCases) { size in
+                    Text(size.description).tag(size)
+                }
+            } label: {
                 Label("Gamecard Size", systemImage: "square.resize")
-                Text("Default is 1 tick.")
+                Text("Each step is 30%. Also on the library toolbar.")
                     .foregroundStyle(.secondary)
             }
+            .pickerStyle(.segmented)
 
             Slider(value: $imageCardBlur, in: 0...20, step: 5) {
                 Label("Gamecard Glow", systemImage: imageCardBlur <= 10 ? "sun.min" : "sun.max")

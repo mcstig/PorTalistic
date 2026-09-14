@@ -301,3 +301,13 @@ Not finished:
     showing its Play button while the pointer is elsewhere. `ListGameCard` still
     keeps its own — rows are full width, so it is much harder to trip, but it is
     the same latent bug.
+
+  - **Hover-revealed controls are invisible to VoiceOver.** `revealedOnHover` leaves
+    them hit-testable only while hovered but deliberately does not set
+    `accessibilityHidden`, on the theory that an AX press reaches an element
+    directly. In practice AppKit appears to drop zero-opacity views from the
+    accessibility tree anyway — searching the grid for an "Install" element finds
+    nothing. So Play and Install are unreachable without a pointer. The fix is to
+    put them in the context menu as well, which means the card owning an install
+    flag and the launch-error alert the way it already owns the settings and
+    uninstall flags. Hover is not a gesture every user has.

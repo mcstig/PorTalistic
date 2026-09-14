@@ -109,6 +109,23 @@ extension View {
     ///
     /// The toolbar returning on every view reload inside a `NavigationSplitView` is an old
     /// bug worked around here rather than in each view that happens to start with a picture.
+    /// Shows a control only while the pointer is on its card, without taking it out of the
+    /// view hierarchy.
+    ///
+    /// The distinction matters because a control that presents a sheet or an alert owns the
+    /// `@State` behind it. Removing the control while its sheet is up destroys that state and
+    /// the sheet closes itself — and a sheet covering the card is exactly what makes hover go
+    /// false, so the control removes itself the instant it succeeds. Opacity and hit testing
+    /// hide it; nothing unmounts it.
+    /// Hit testing is gated so an invisible control can't swallow a click meant for the card
+    /// underneath it. Accessibility is deliberately *not*: an AX press reaches an element
+    /// directly, so leaving these visible to VoiceOver is what lets someone play or install a
+    /// game from the grid at all — hover is not a gesture every user has.
+    func revealedOnHover(_ isRevealed: Bool) -> some View {
+        opacity(isRevealed ? 1 : 0)
+            .allowsHitTesting(isRevealed)
+    }
+
     /// Undoes ``artworkUnderTitleBar()`` for a view that does *not* start with a picture.
     ///
     /// Toolbar visibility set in one `NavigationStack` destination leaks to its siblings, so
@@ -271,8 +288,12 @@ struct PortalBadge: View {
                     .imageScale(.small)
             }
 
-            Text(text)
-                .lineLimit(1)
+            // An empty string means icon-only — which is how a badge survives a 140-point
+            // card, where "Epic Games" has room to render as "Epic Ga…".
+            if !text.isEmpty {
+                Text(text)
+                    .lineLimit(1)
+            }
         }
         .font(Theme.Text.badge)
         .foregroundStyle(tint ?? .secondary)

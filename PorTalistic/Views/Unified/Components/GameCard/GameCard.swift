@@ -56,6 +56,9 @@ struct GameCard: View {
     /// the edges of its own tile. Nothing at all at the default of 0.
     @AppStorage("gameImageCardBlur") private var glowRadius: Double = 0
 
+    /// Read here only to decide how much of a badge fits.
+    @AppStorage(GameCardSize.storageKey) private var cardSize: GameCardSize = .regular
+
     private var operation: GameOperation? {
         operationManager.queue.first { $0.game == game && ($0.isExecuting || $0.type.modifiesFiles) }
     }
@@ -132,14 +135,21 @@ struct GameCard: View {
 
                 Spacer(minLength: 0)
 
-                if game.isFavourited || isHovering {
-                    FavouriteToggle(game: $game)
-                }
+                FavouriteToggle(game: $game)
+                    .revealedOnHover(game.isFavourited || isHovering)
             }
 
             Spacer(minLength: 0)
 
-            if isHovering {
+            // Hidden when the pointer is elsewhere, but never *removed*.
+            //
+            // `if isHovering { … }` here was a real bug, not a stylistic choice: the Install
+            // button owns the `@State` behind its own installation sheet, so presenting that
+            // sheet covered the card, hover went false, the button left the view hierarchy,
+            // its state was destroyed and the sheet closed by itself a moment after opening.
+            // The Play button's launch-error alert and its "install the engine first" sheet
+            // were one failed launch away from disappearing the same way.
+            Group {
                 if let operation {
                     OperationCard.StatusView(operation: .constant(operation), withLabel: false)
                         .padding(Theme.Spacing.small)
@@ -148,6 +158,7 @@ struct GameCard: View {
                     GameCard.PrimaryActionButton(game: $game)
                 }
             }
+            .revealedOnHover(isHovering)
 
             Spacer(minLength: 0)
         }
@@ -177,7 +188,10 @@ struct GameCard: View {
                             .lineLimit(1)
                     } else {
                         if let storefront = game.storefront, !isCompact {
-                            PortalBadge(storefront.description, tint: storefront.tint)
+                            PortalBadge(cardSize == .small ? "" : storefront.description,
+                                        systemImage: storefront.symbolName,
+                                        tint: storefront.tint)
+                                .help(storefront.description)
                         }
 
                         if case .uninstalled = game.installationState {
