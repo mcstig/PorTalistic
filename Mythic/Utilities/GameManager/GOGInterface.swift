@@ -179,7 +179,7 @@ final class GOG {
 
     struct NotSignedInError: LocalizedError {
         var errorDescription: String? { String(localized: "You're not signed in to GOG.") }
-        var recoverySuggestion: String? { String(localized: "Sign in from Import Game › GOG.") }
+        var recoverySuggestion: String? { String(localized: "Sign in from Accounts in the sidebar.") }
     }
 
     struct RequestError: LocalizedError {
@@ -272,6 +272,42 @@ final class GOG {
         let refreshed = StoredCredentials(from: try await decode(TokenResponse.self, from: .init(url: components.url!)))
         try store(refreshed)
         return refreshed.accessToken
+    }
+
+    // MARK: - Account
+
+    /// The signed-in account's display name, remembered across launches.
+    ///
+    /// GOG's token response carries only a numeric user id, and "Signed in as 51234567890" is
+    /// not worth showing anyone. The name comes from a separate endpoint, so it's cached —
+    /// the accounts view should say who you are the instant it opens, not a second later.
+    private static let usernameDefaultsKey = "gogUsername"
+
+    static var cachedUsername: String? {
+        guard isSignedIn else { return nil }
+        return UserDefaults.standard.string(forKey: usernameDefaultsKey)
+    }
+
+    @discardableResult
+    static func refreshUsername() async -> String? {
+        guard isSignedIn else {
+            UserDefaults.standard.removeObject(forKey: usernameDefaultsKey)
+            return nil
+        }
+
+        guard let url: URL = .init(string: "https://embed.gog.com/userData.json"),
+              let request = try? await authorized(url),
+              let (data, response) = try? await URLSession.shared.data(for: request),
+              let http = response as? HTTPURLResponse, http.statusCode == 200,
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let username = root["username"] as? String else {
+            // Not worth surfacing: a name we couldn't fetch is a cosmetic loss, and the
+            // cached one is probably still right.
+            return cachedUsername
+        }
+
+        UserDefaults.standard.set(username, forKey: usernameDefaultsKey)
+        return username
     }
 
     // MARK: - Library

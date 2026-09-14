@@ -24,7 +24,16 @@ struct LibraryView: View {
     @CodableAppStorage("gameListLayout") var gameListLayout: GameListViewModel.Layout = .grid
 
     var body: some View {
-        GameListView(storefront: storefront)
+        VStack(spacing: 0) {
+            // Above the list, not instead of it: a signed-out storefront may still have games
+            // from a previous session worth looking at, and hiding them to show a sign-in
+            // prompt would lose that.
+            if let storefront {
+                StorefrontSignInBanner(storefront: storefront)
+            }
+
+            GameListView(storefront: storefront)
+        }
             .navigationTitle(storefront?.description ?? String(localized: "All Games"))
         
             .toolbar {
@@ -47,6 +56,15 @@ struct LibraryView: View {
                           ?? String(localized: "Import a game"))
                 }
                 
+                if let storefront, storefront.usesAccount, !storefront.isSignedIn {
+                    ToolbarItem(placement: .automatic) {
+                        Button("Sign In", systemImage: "person") {
+                            storefront.presentSignIn()
+                        }
+                        .help("Sign in to \(storefront.description)")
+                    }
+                }
+
                 ToolbarItem(placement: .automatic) {
                     Button("Force-refresh", systemImage: "arrow.clockwise") {
                         Task(priority: .userInitiated, operation: { try? await gameDataStore.refreshFromStorefronts() })
