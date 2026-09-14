@@ -442,35 +442,22 @@ extension GameCard {
         var font: Font = .title
         var withSubscriptedInfo: Bool = true
 
-        /// What hovering the title says.
-        ///
-        /// The title is `.lineLimit(1)` in a column narrow enough that "Blades of Time"
-        /// becomes "Blades o...", so the full name is the thing worth having on hover.
-        ///
-        /// Debug builds get the storefront's app name after it. That id used to be printed
-        /// as a line of its own under the title — a parenthesised 32-character hex string
-        /// that wrapped to three lines on a grid card, pushed the title into an ellipsis,
-        /// and made every card taller in debug than the one that ships, which is the wrong
-        /// layout to be designing cards against. It's kept because it's how a library entry
-        /// that looks wrong gets matched against the storefront's own metadata, but it goes
-        /// *after* the title: hovering a truncated name should answer "what is this",
-        /// not hand over an id instead.
-        private var titleTooltip: String {
-#if DEBUG
-            "\(game.title) · \(game.id)"
-#else
-            game.title
-#endif
-        }
-
         var body: some View {
             HStack {
                 Text(game.title)
+                    // `.lineLimit(1)` in a column narrow enough that "Blades of Time"
+                    // becomes "Blades o...", so the tooltip is the full name — and only the
+                    // full name. The storefront's app name used to ride along here, and
+                    // before that it was printed as a line of its own under the title,
+                    // where a 32-character hex string wrapped to three lines and made every
+                    // card taller in debug than the one that ships. It isn't worth a
+                    // developer's screen space in either place; the id is in the logs, in
+                    // the debugger, and in the storefront's own metadata.
                     .font(font)
                     .bold()
                     .truncationMode(.tail)
                     .lineLimit(1)
-                    .help(titleTooltip)
+                    .help(game.title)
 
                 if game.isFavourited {
                     Image(systemName: "star.fill")
