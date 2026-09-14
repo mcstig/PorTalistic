@@ -1,70 +1,70 @@
 {
-  "fill" : {
-    "automatic-gradient" : "srgb:0.32941,0.07059,1.00000,1.00000"
+  "fill": {
+    "automatic-gradient": "srgb:0.32941,0.07059,1.00000,1.00000"
   },
-  "groups" : [
+  "groups": [
     {
-      "blur-material" : 0.5,
-      "hidden" : false,
-      "layers" : [
+      "blur-material": 0.5,
+      "hidden": false,
+      "layers": [
         {
-          "image-name" : "Rectangles 1.svg",
-          "name" : "Rectangles 1",
-          "position" : {
-            "scale" : 1,
-            "translation-in-points" : [
+          "image-name": "Portal 1.svg",
+          "name": "Portal 1",
+          "position": {
+            "scale": 1,
+            "translation-in-points": [
               0,
               0
             ]
           }
         },
         {
-          "blend-mode" : "normal",
-          "glass" : true,
-          "image-name" : "Rectangles 2.svg",
-          "name" : "Rectangles 2",
-          "position" : {
-            "scale" : 1,
-            "translation-in-points" : [
+          "blend-mode": "normal",
+          "glass": true,
+          "image-name": "Portal 2.svg",
+          "name": "Portal 2",
+          "position": {
+            "scale": 1,
+            "translation-in-points": [
               0,
               0
             ]
           }
         },
         {
-          "glass" : true,
-          "image-name" : "Rectangles 3.svg",
-          "name" : "Rectangles 3",
-          "position" : {
-            "scale" : 1,
-            "translation-in-points" : [
+          "glass": true,
+          "image-name": "Portal 3.svg",
+          "name": "Portal 3",
+          "position": {
+            "scale": 1,
+            "translation-in-points": [
               0,
               0
             ]
           }
         }
       ],
-      "lighting" : "combined",
-      "position" : {
-        "scale" : 1.25,
-        "translation-in-points" : [
+      "lighting": "combined",
+      "position": {
+        "scale": 1.25,
+        "translation-in-points": [
           0,
           0
         ]
       },
-      "shadow" : {
-        "kind" : "layer-color",
-        "opacity" : 0.5
+      "shadow": {
+        "kind": "layer-color",
+        "opacity": 0.5
       },
-      "specular" : true,
-      "translucency" : {
-        "enabled" : true,
-        "value" : 0.5
+      "specular": true,
+      "translucency": {
+        "enabled": true,
+        "value": 0.5
       }
     }
   ],
-  "supported-platforms" : {
-    "squares" : [
+  "supported-platforms": {
+    "squares": [
       "macOS"
     ]
   }
