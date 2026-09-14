@@ -175,19 +175,29 @@ struct ContentView: View {
     ///
     /// The window used to begin with the word "Home" against the traffic lights and nothing
     /// else — no name, no mark, nothing to say which application you were looking at.
+    ///
+    /// Sized to be a masthead rather than the first row of the menu. At a 22-point mark and
+    /// a `.subheadline` name it matched the rows below it almost exactly — same height, same
+    /// weight, an icon at the same scale in the same column — so it read as another
+    /// destination you could click. It is nearly twice that now, the name is `.title3` bold,
+    /// and the mark carries a violet glow, which is both what separates it from the list and
+    /// the one place in the window the portal gets to look like a portal.
     private var wordmark: some View {
-        HStack(spacing: Theme.Spacing.small) {
+        HStack(spacing: Theme.Spacing.medium) {
             BundleIconView()
-                .frame(width: 22, height: 22)
+                .frame(width: 38, height: 38)
+                .shadow(color: Theme.Palette.brand.opacity(0.55), radius: 11, y: 1)
 
             Text(Branding.name)
-                .font(.system(.subheadline, weight: .semibold))
+                .font(.system(.title3, weight: .bold))
+                .tracking(-0.2)
                 .foregroundStyle(.primary)
 
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, Theme.Spacing.medium)
-        .padding(.bottom, Theme.Spacing.small)
+        .padding(.horizontal, Theme.Spacing.medium + 2)
+        .padding(.top, Theme.Spacing.xsmall)
+        .padding(.bottom, Theme.Spacing.large)
     }
 
     private func sectionHeader(_ title: String) -> some View {
