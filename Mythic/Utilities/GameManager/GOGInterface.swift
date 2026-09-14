@@ -395,11 +395,19 @@ final class GOG {
     }
 
     private static func loadCache() -> [String: CachedProduct] {
-        if let memoizedCache { return memoizedCache }
+        if let memoizedCache, !memoizedCache.isEmpty { return memoizedCache }
+        return loadCacheFromDisk()
+    }
+
+    private static func loadCacheFromDisk() -> [String: CachedProduct] {
+        lastCacheReadAttempt = .now
 
         return (try? Data(contentsOf: cacheURL))
             .flatMap { try? JSONDecoder().decode([String: CachedProduct].self, from: $0) } ?? .init()
     }
+
+    /// When the cache was last read off disk, so a miss doesn't re-read it once per card per frame.
+    private nonisolated(unsafe) static var lastCacheReadAttempt: Date = .distantPast
 
     private static func write(_ cached: [String: CachedProduct]) {
         do {
@@ -459,7 +467,23 @@ final class GOG {
     }
 
     static func cachedProduct(id: String) -> CachedProduct? {
-        if memoizedCache == nil { memoizedCache = loadCache() }
+        if let cached = memoizedCache?[id] { return cached }
+
+        // An empty cache is the absence of an answer, not an answer — and this used to latch
+        // it as one. The first card drawn on a launch where `products.json` wasn't readable
+        // yet stored an empty dictionary, and from then on `memoizedCache != nil` meant every
+        // GOG game went without artwork for the rest of the session, including after a
+        // refresh had just written the file. Epic never showed this, because legendary keeps
+        // its own metadata and Mythic re-reads it on every access; the difference wasn't the
+        // storefront, it was that this one remembered a failure and that one didn't.
+        //
+        // So: re-read, but not on every card of every frame.
+        guard memoizedCache?.isEmpty != false,
+              Date.now.timeIntervalSince(lastCacheReadAttempt) > 3 else {
+            return nil
+        }
+
+        memoizedCache = loadCacheFromDisk()
         return memoizedCache?[id]
     }
 
