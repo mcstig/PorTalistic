@@ -220,38 +220,58 @@ final class GOG {
     ///
     /// GOG's access tokens last an hour and its refresh tokens last far longer, so in practice
     /// this is what keeps an account signed in across weeks of not opening the app.
+    ///
+    /// The awkward part is that Mythic is not the only thing refreshing them. `gogdl` shares
+    /// ``authConfigURL`` — deliberately, so the two can't drift — and refreshes on its own
+    /// whenever it finds the token expired. GOG rotates the refresh token on every use and
+    /// rejects the previous one, so whichever process goes second is holding a token that no
+    /// longer works. That is not the account being signed out; it is a race with a sibling
+    /// that has already fixed the problem. So a rejection means *re-read the file*, not
+    /// *throw the account away*.
     static func accessToken() async throws -> String {
         guard let session else { throw NotSignedInError() }
         guard session.isExpired else { return session.accessToken }
 
+        do {
+            return try await refreshedAccessToken(using: session.refreshToken)
+        } catch {
+            // Another process may have refreshed while this one was asking. Its answer is on
+            // disk, and it is a better answer than this error.
+            if let current = Self.session, !current.isExpired {
+                log.notice("A refresh landed from elsewhere; using it")
+                return current.accessToken
+            }
+
+            if let current = Self.session, current.refreshToken != session.refreshToken {
+                log.notice("The stored refresh token changed underneath; retrying once")
+                return try await refreshedAccessToken(using: current.refreshToken)
+            }
+
+            // Out of ideas, but still not a reason to destroy anything. Mythic never signs
+            // the user out on its own any more: `signOut()` deletes the credentials and the
+            // product cache, and it used to run on *any* failed refresh — a dropped
+            // connection, or a token gogdl had legitimately rotated a second earlier. The
+            // library's artwork would empty, `isSignedIn` would go false, and the refresh
+            // that could have repaired it no longer would. Epic doesn't do this to you and
+            // neither should GOG: the session stays, the call fails, and signing out remains
+            // something only the person can ask for.
+            log.warning("Couldn't refresh the GOG session: \(error.localizedDescription)")
+            throw error
+        }
+    }
+
+    private static func refreshedAccessToken(using refreshToken: String) async throws -> String {
         var components: URLComponents = .init(string: "https://auth.gog.com/token")!
         components.queryItems = [
             .init(name: "client_id", value: Client.id),
             .init(name: "client_secret", value: Client.secret),
             .init(name: "grant_type", value: "refresh_token"),
-            .init(name: "refresh_token", value: session.refreshToken)
+            .init(name: "refresh_token", value: refreshToken)
         ]
 
-        do {
-            let refreshed = StoredCredentials(from: try await decode(TokenResponse.self, from: .init(url: components.url!)))
-            try store(refreshed)
-            return refreshed.accessToken
-        } catch let error as RequestError where (400...401).contains(error.statusCode) {
-            // GOG *rejected* the refresh token. The account is signed out whatever the file on
-            // disk says, and saying so beats every later call failing for a reason that looks
-            // like a network problem.
-            log.warning("GOG refused to refresh the session; signing out. \(error.localizedDescription)")
-            try? signOut()
-            throw NotSignedInError()
-        } catch {
-            // Anything else — no network, a timeout, GOG having a bad afternoon — is not an
-            // answer about the account, and this used to treat it as one. `signOut()` deletes
-            // the product cache along with the credentials, so a dropped connection at the
-            // wrong moment silently emptied the library's artwork and platform data and left
-            // a refresh that could no longer repair it. Fail the call; keep the session.
-            log.warning("Couldn't reach GOG to refresh the session: \(error.localizedDescription)")
-            throw error
-        }
+        let refreshed = StoredCredentials(from: try await decode(TokenResponse.self, from: .init(url: components.url!)))
+        try store(refreshed)
+        return refreshed.accessToken
     }
 
     // MARK: - Library
