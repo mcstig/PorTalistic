@@ -189,13 +189,18 @@ class GOGGameManager {
                     throw NoLaunchTargetError(title: game.title)
                 }
 
-                guard let containerURL = game.containerURL else { throw Wine.Container.DoesNotExistError() }
-                let container = try Wine.getContainerObject(at: containerURL)
+                // Which runtime this game wants, the container belonging to that runtime,
+                // and that game's own settings written into it. Replaces reading
+                // `game.containerURL` and hoping: a game with no container used to simply
+                // refuse to start, and a game whose container was built by the wrong Wine had
+                // no way to say so.
+                let plan = try await Provisioner.shared.planLaunch(for: game)
+                let containerURL = plan.containerURL
 
                 let process: Process = .init()
                 process.arguments = [target.executable.path] + target.arguments + game.launchArguments
 
-                var environment = try Wine.assembleEnvironmentVariables(forContainerAtURL: container.url)
+                var environment = try Wine.assembleEnvironmentVariables(forContainerAtURL: containerURL)
 
                 // Wine's default channels print a `fixme` for every Direct3D present — two
                 // per frame, each a formatted write to stderr. Blades of Time's first two
@@ -243,6 +248,11 @@ class GOGGameManager {
                                               hidingLauncher: shouldHideLauncher)
 
                 process.waitUntilExit()
+
+                // Put the container back. Shared per runtime, so leaving this game's settings
+                // behind would change the next game's launch — see `LaunchPlan.revert()` for
+                // why losing it to a crash is survivable rather than corrupting.
+                await Provisioner.shared.revert(plan)
 
                 if shouldHideLauncher {
                     await MainActor.run { NSApp.unhide(nil) }

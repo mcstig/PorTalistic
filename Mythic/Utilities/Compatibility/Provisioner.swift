@@ -295,6 +295,171 @@ final class Provisioner {
         try await Rosetta.install(agreeToSLA: true) { _ in }
     }
 
+    // MARK: - Launching into the right container
+
+    /**
+     Everything a launch needs, and the way back afterwards.
+
+     Containers are married to their runtime — Wine migrates a prefix forward on first run and
+     has no downgrade path — so "the best runtime for this game" is really "the container
+     belonging to the best runtime for this game". `Wine.transformProcess` already resolves a
+     runtime from the container it is given, which means assigning the container *is* the
+     mechanism; nothing else in the launch path has to know a runtime exists.
+     */
+    struct LaunchPlan: Sendable {
+        /// The container the game should run in. Everything else in the launch path follows
+        /// from this: `Wine.transformProcess` resolves the runtime from the container.
+        let containerURL: URL
+
+        /// Which runtime that container belongs to, and why this game got it — for the log
+        /// now and for the game's settings sheet later.
+        let runtimeName: String
+        let reasons: [String]
+    }
+
+    /// How to put each container back, keyed by the container rather than by the launch.
+    ///
+    /// Keying on the container bounds this to the number of containers rather than the number
+    /// of launches, and is what the entry means anyway: "this prefix has a game's settings in
+    /// it". A second launch into the same container replaces the entry, which is correct —
+    /// the settings to go back to are the container's own either way.
+    private var pendingReverts: [URL: [@Sendable () async -> Void]] = .init()
+
+    /// Choose the runtime, put the game in that runtime's container, and apply its settings.
+    ///
+    /// Returns only Sendable values on purpose. `Wine.Container` is a reference type with
+    /// mutable state, and handing one to a launch running off the main actor is a data race
+    /// the compiler is right to refuse — the alternative was declaring someone else's class
+    /// `@unchecked Sendable` to get past it, which would have been a shortcut rather than an
+    /// answer.
+    func planLaunch(for game: Game) async throws -> LaunchPlan {
+        let profile = await profile(for: game)
+        let runtime = try await prepare(game)
+        let container = try await container(for: runtime)
+
+        if game.containerURL != container.url {
+            Self.log.notice("Moving \(game.title, privacy: .public) to the \(container.name, privacy: .public) container")
+            game.containerURL = container.url
+            GameDataStore.shared.library.update(with: game)
+        }
+
+        pendingReverts[container.url] = await apply(profile.settings, to: container)
+
+        return .init(containerURL: container.url,
+                     runtimeName: runtime.name,
+                     reasons: profile.reasons)
+    }
+
+    /// Put the container back the way the user left it.
+    ///
+    /// Call after the game exits. Skipping it is survivable rather than corrupting: the next
+    /// launch applies its own game's effective settings before starting anything, so a revert
+    /// lost to a crash is corrected rather than inherited.
+    func revert(_ plan: LaunchPlan) async {
+        guard let reverts = pendingReverts.removeValue(forKey: plan.containerURL) else { return }
+
+        for revert in reverts { await revert() }
+    }
+
+    /// The container belonging to a runtime, created if it doesn't exist yet.
+    ///
+    /// One per runtime, shared by every game on it. Cheap on disk — three prefixes rather than
+    /// one per game — at the cost that games on the same runtime share a registry, which is
+    /// what ``apply(_:to:)`` exists to handle.
+    func container(for runtime: Runtime) async throws -> Wine.Container {
+        // `nil` is how a container says "the bundled engine", so that every prefix created
+        // before runtimes existed still resolves.
+        let wanted: String? = runtime.origin == .bundledEngine ? nil : runtime.id
+
+        if let existing = Wine.containerObjects.first(where: { $0.settings.runtimeID == wanted }) {
+            return existing
+        }
+
+        var settings: Wine.Container.Settings = .init()
+        settings.runtimeID = wanted
+
+        let name = availableContainerName(for: runtime, wanting: wanted)
+        Self.log.notice("Creating a container for \(runtime.id, privacy: .public) as '\(name, privacy: .public)'")
+
+        return try await Wine.createContainer(name: name, settings: settings)
+    }
+
+    /// A container name not already taken by a container belonging to a different runtime.
+    ///
+    /// `Wine.createContainer` returns the existing container when one is already at that
+    /// path, which would silently hand back a prefix built by the wrong Wine.
+    private func availableContainerName(for runtime: Runtime, wanting runtimeID: String?) -> String {
+        let preferred = runtime.name
+
+        func isTaken(_ name: String) -> Bool {
+            guard let url = Wine.containersDirectory?.appending(path: name),
+                  Wine.containerExists(at: url) else { return false }
+
+            return (try? Wine.getContainerObject(at: url))?.settings.runtimeID != runtimeID
+        }
+
+        guard isTaken(preferred) else { return preferred }
+
+        // Ids are validated to be safe as directory names, apart from the `managed:` prefix.
+        let suffix = runtime.id.replacingOccurrences(of: ":", with: "-")
+        return "\(preferred) (\(suffix))"
+    }
+
+    /// Apply a game's settings to the container it is about to run in, and hand back the way
+    /// out.
+    ///
+    /// The *effective* value is written every time, not just the fields the game has an
+    /// opinion about — `override ?? the container's own setting`. Writing only the differences
+    /// would make a launch depend on which game ran last: containers are shared per runtime,
+    /// and Prey wants Retina Mode off in the same prefix where Blades of Time wants it on. So
+    /// each launch states the whole answer and the previous one stops mattering.
+    ///
+    /// Limited to the three settings that live in the container's registry, which are also the
+    /// three a curated entry can currently ask for. `msync`, `metalHUD`, `avx2` and `dxvk` are
+    /// read from the container's *persisted* settings when the launch assembles its
+    /// environment, so applying those per-game means writing to the container and hoping to
+    /// write back — and a crash mid-game would leave someone's container changed. Overriding
+    /// them belongs in environment assembly instead, where nothing has to be put back.
+    private func apply(_ overrides: RuntimeProfile.SettingsOverride,
+                       to container: Wine.Container) async -> [@Sendable () async -> Void] {
+        var reverts: [@Sendable () async -> Void] = .init()
+
+        let url = container.url
+        let settings = container.settings
+
+        let retinaMode = overrides.retinaMode ?? settings.retinaMode
+        if (try? await Wine.getRetinaMode(containerURL: url)) != retinaMode {
+            try? await Wine.toggleRetinaMode(containerURL: url, toggle: retinaMode)
+        }
+        if overrides.retinaMode != nil, overrides.retinaMode != settings.retinaMode {
+            reverts.append {
+                try? await Wine.toggleRetinaMode(containerURL: url, toggle: settings.retinaMode)
+            }
+        }
+
+        let commandStreamThread = overrides.commandStreamThread ?? settings.commandStreamThread
+        if (try? await Wine.getCommandStreamThread(containerURL: url)) != commandStreamThread {
+            try? await Wine.setCommandStreamThread(containerURL: url, enabled: commandStreamThread)
+        }
+        if overrides.commandStreamThread != nil, overrides.commandStreamThread != settings.commandStreamThread {
+            reverts.append {
+                try? await Wine.setCommandStreamThread(containerURL: url, enabled: settings.commandStreamThread)
+            }
+        }
+
+        let windowsVersion = overrides.windowsVersion ?? settings.windowsVersion
+        if (try? await Wine.getWindowsVersion(containerURL: url)) != windowsVersion {
+            try? await Wine.setWindowsVersion(containerURL: url, version: windowsVersion)
+        }
+        if overrides.windowsVersion != nil, overrides.windowsVersion != settings.windowsVersion {
+            reverts.append {
+                try? await Wine.setWindowsVersion(containerURL: url, version: settings.windowsVersion)
+            }
+        }
+
+        return reverts
+    }
+
     // MARK: - Profiles
 
     /// Everything about a game that profile resolution needs, as plain values.

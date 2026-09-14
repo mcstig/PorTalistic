@@ -236,3 +236,23 @@ still use it, and a fallback that works beats a principle that doesn't.
     ``Wine/D3DMetal/isPresent(in:)`` detects `lib/external/D3DMetal.framework`,
     so a Game Porting Toolkit or Whisky install is now recognised and chosen
     behind DXMT. Mythic detects and never installs.
+
+## Per-game settings: the half that isn't applied yet
+
+`Provisioner.apply(_:to:)` writes the three settings that live in a container's
+registry — Retina Mode, CSMT, Windows version — and reverts them after. The other
+four a profile can carry don't move: `msync`, `metalHUD`, `avx2` and `dxvk` are
+read from the container's *persisted* settings when a launch assembles its
+environment, so overriding them per game means writing to the container and
+hoping to write back, and a crash mid-game would leave someone's container
+changed.
+
+The right place for those is environment assembly:
+`Wine.assembleEnvironmentVariables(forContainerAtURL:)` should take an optional
+overlay, so a game's values are used for that process and nothing is persisted or
+has to be put back. `dxvk` is different again — it's DLLs in the prefix, not an
+environment variable — and probably belongs to the container rather than the game.
+
+Also outstanding: only GOG's Windows launch goes through `planLaunch`. Epic and
+Local still read `game.containerURL` directly, so they neither get the right
+runtime nor per-game settings. Same three lines each.
