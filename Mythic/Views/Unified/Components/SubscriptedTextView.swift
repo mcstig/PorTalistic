@@ -25,6 +25,13 @@ struct SubscriptedTextView: View {
                     .stroke(.tertiary)
             )
             .compositingGroup()
+            // These sit in a card's label strip under a `.lineLimit(1)`, in whatever width
+            // is left over beside the title and the buttons, so "Recent" routinely renders
+            // as "Re...". SwiftUI puts no tooltip on truncated text of its own accord, and
+            // a badge you can't read is just noise. Unconditional rather than
+            // only-when-truncated: there's no reliable way to ask a `Text` whether it
+            // truncated, and a tooltip that repeats text you can already read costs nothing.
+            .help(text)
     }
 }
 

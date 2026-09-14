@@ -442,6 +442,27 @@ extension GameCard {
         var font: Font = .title
         var withSubscriptedInfo: Bool = true
 
+        /// What hovering the title says.
+        ///
+        /// The title is `.lineLimit(1)` in a column narrow enough that "Blades of Time"
+        /// becomes "Blades o...", so the full name is the thing worth having on hover.
+        ///
+        /// Debug builds get the storefront's app name after it. That id used to be printed
+        /// as a line of its own under the title — a parenthesised 32-character hex string
+        /// that wrapped to three lines on a grid card, pushed the title into an ellipsis,
+        /// and made every card taller in debug than the one that ships, which is the wrong
+        /// layout to be designing cards against. It's kept because it's how a library entry
+        /// that looks wrong gets matched against the storefront's own metadata, but it goes
+        /// *after* the title: hovering a truncated name should answer "what is this",
+        /// not hand over an id instead.
+        private var titleTooltip: String {
+#if DEBUG
+            "\(game.title) · \(game.id)"
+#else
+            game.title
+#endif
+        }
+
         var body: some View {
             HStack {
                 Text(game.title)
@@ -449,21 +470,7 @@ extension GameCard {
                     .bold()
                     .truncationMode(.tail)
                     .lineLimit(1)
-                    // The app name the storefront knows the game by, on hover in debug
-                    // builds. It was a line of its own under the title — a bare
-                    // parenthesised id that wrapped to three lines of hex on a grid card,
-                    // pushed the title into an ellipsis, and made every card taller in
-                    // debug than it ships. Since the cards are designed and reviewed in
-                    // debug builds, that is the wrong layout to be looking at. As a tooltip
-                    // it costs no space and is still there when an entry looks wrong and
-                    // needs matching against the storefront's own metadata.
-                    .customTransform { title in
-#if DEBUG
-                        title.help(game.id)
-#else
-                        title
-#endif
-                    }
+                    .help(titleTooltip)
 
                 if game.isFavourited {
                     Image(systemName: "star.fill")
