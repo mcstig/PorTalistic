@@ -125,9 +125,6 @@ final class Migrator {
             moveContents(of: source, to: destination, describing: "containers")
 
             rewriteStoredContainerURLs(from: source, to: destination)
-            rewriteContainerProperties(under: destination.appending(path: "Containers"),
-                                      from: source,
-                                      to: destination)
         }
 
         /// Rewrite the stored container list, bypassing `Wine.containerURLs`' own filtering.
@@ -143,30 +140,6 @@ final class Migrator {
 
             try? UserDefaults.standard.encodeAndSet(rewritten, forKey: "containerURLs")
             log.notice("Rebrand: repointed \(rewritten.count, privacy: .public) container URLs")
-        }
-
-        /// Each container records its own path in `Properties.plist`, which is what
-        /// `Wine.getContainerObject(at:)` decodes. Left alone, every container would come back
-        /// describing where it used to be.
-        private static func rewriteContainerProperties(under root: URL, from source: URL, to destination: URL) {
-            guard let entries = try? FileManager.default.contentsOfDirectory(atPath: root.path) else { return }
-
-            for entry in entries {
-                let plist = root.appending(path: entry).appending(path: "Properties.plist")
-
-                guard let data = try? Data(contentsOf: plist),
-                      var properties = (try? PropertyListSerialization.propertyList(
-                          from: data, format: nil)) as? [String: Any],
-                      let recorded = properties["url"] as? String,
-                      recorded.hasPrefix(source.path) else { continue }
-
-                properties["url"] = recorded.replacingOccurrences(of: source.path, with: destination.path)
-
-                guard let rewritten = try? PropertyListSerialization.data(
-                    fromPropertyList: properties, format: .xml, options: 0) else { continue }
-
-                try? rewritten.write(to: plist, options: .atomic)
-            }
         }
 
         // MARK: - Moving

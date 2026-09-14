@@ -74,7 +74,26 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
 
     static func getContainerObject(at containerURL: URL) throws -> Container {
         let decoder = PropertyListDecoder()
-        return try decoder.decode(Container.self, from: .init(contentsOf: containerURL.appending(path: "Properties.plist")))
+        let container = try decoder.decode(Container.self,
+                                           from: .init(contentsOf: containerURL.appending(path: "Properties.plist")))
+
+        // A container records its own path, and that record goes stale the moment anything
+        // moves it — which the rebrand did to every prefix on disk. Every container then came
+        // back describing `~/Library/Containers/xyz.blackxfiied.Mythic/…`: harmless in the
+        // list, not harmless in `Provisioner.apply(_:to:)`, which writes registry keys to
+        // `container.url` and would have been writing them into a directory that no longer
+        // exists.
+        //
+        // Trusting the path it was read from fixes it for anything that moves a prefix, not
+        // just for this one migration — including a user moving one by hand. The correction
+        // is written back so it only ever happens once per container.
+        if container.url != containerURL {
+            log.notice("Container \"\(container.name, privacy: .public)\" had moved; repointing it.")
+            container.url = containerURL
+            container.saveProperties()
+        }
+
+        return container
     }
 
     static var containerObjects: [Container] {
