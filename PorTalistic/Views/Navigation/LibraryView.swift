@@ -35,13 +35,14 @@ struct LibraryView: View {
             GameListView(storefront: storefront)
         }
             .navigationTitle(storefront?.description ?? String(localized: "All Games"))
+            .standardTitleBar()
         
             .toolbar {
                 ToolbarItem(placement: .status) {
                     if gameListViewModel.isUpdatingLibrary {
                         ProgressView()
                             .controlSize(.small)
-                            .help("Mythic is updating your library.")
+                            .help("\(Branding.name) is updating your library.")
                             .padding(10)
                     }
                 }

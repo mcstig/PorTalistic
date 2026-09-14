@@ -43,6 +43,11 @@ struct PorTalisticApp: App {
                 }
             }
             .modifier(SparkleUpdater())
+            // `Color.accentColor` follows the *system* accent, so sidebar selection and
+            // every prominent control came out whatever colour the user had chosen in
+            // System Settings — salmon, on the machine this was built on, next to a violet
+            // app icon. Tinting the scene pins the app's own identity to its own controls.
+            .tint(Theme.Palette.brand)
             .frame(minWidth: 850, minHeight: 400)
         }
         .handlesExternalEvents(matching: ["open"])

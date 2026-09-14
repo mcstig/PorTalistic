@@ -154,6 +154,7 @@ extension SettingsView {
         @AppStorage("gameCardSize") private var gameCardSize: Double = 200.0
         @AppStorage("gameImageCardBlur") private var imageCardBlur: Double = 0.0
         @CodableAppStorage("gameListLayout") var gameListLayout: GameListViewModel.Layout = .grid
+        @AppStorage("forceLegacyAppearance") private var forceLegacyAppearance: Bool = false
 
         var body: some View {
             Slider(value: $gameCardSize, in: 200...400, step: 25) {
@@ -174,6 +175,16 @@ extension SettingsView {
                     .tag(GameListViewModel.Layout.grid)
             }
             .animation(.easeInOut, value: $gameListLayout.wrappedValue)
+
+#if DEBUG
+            // The app draws two appearances — Liquid Glass on macOS 26, a material with a
+            // top-lit edge below it — and a machine can only ever show you one of them.
+            // This forces the other, so the half that ships to everyone on Sonoma and
+            // Sequoia can actually be looked at before it ships.
+            Toggle("Draw the pre-macOS 26 appearance",
+                   systemImage: "paintbrush.pointed",
+                   isOn: $forceLegacyAppearance)
+#endif
         }
     }
 

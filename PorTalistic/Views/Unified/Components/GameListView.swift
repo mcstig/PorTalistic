@@ -1,11 +1,13 @@
 //
 //  GameListView.swift
-//  Mythic
+//  PorTalistic
 //
 //  Created by vapidinfinity (esi) on 6/3/2024.
+//  Rebuilt by Claude Opus 5 on 14/9/2026.
 //
 
 // Copyright © 2023-2025 vapidinfinity
+// Copyright © 2026 Michael Stoian
 
 import Foundation
 import SwiftUI
@@ -16,59 +18,48 @@ struct GameListView: View {
 
     @Bindable var viewModel: GameListViewModel = .shared
     @Bindable var gameDataStore: GameDataStore = .shared
-    
+
     @CodableAppStorage("gameListLayout") var layout: GameListViewModel.Layout = .grid
     @AppStorage("gameCardSize") private var gameCardSize: Double = 200.0
-    
+
     @State private var isGameImportViewPresented: Bool = false
-    
+    @State private var hoveredGameID: Game.ID?
+
     private var games: [Game] { viewModel.library(inStorefront: storefront) }
 
     var body: some View {
-        VStack {
+        Group {
             if games.isEmpty {
-                ContentUnavailableView(
-                    emptyTitle,
-                    systemImage: "folder.badge.questionmark",
-                    description: Text(emptyDescription)
-                )
-                .task {
-                    try? await gameDataStore.refreshFromStorefronts()
-                }
-
-                Button {
-                    isGameImportViewPresented = true
-                } label: {
-                    Label("Import Game", systemImage: "plus.app")
-                        .padding(5)
-                }
-                .buttonStyle(.borderedProminent)
-                .sheet(isPresented: $isGameImportViewPresented) {
-                    // Opens on this list's storefront — there is no reason to ask again
-                    // which storefront you meant when you asked from inside its library.
-                    GameImportView(isPresented: $isGameImportViewPresented, storefront: storefront)
-                }
+                empty
             } else {
                 ScrollView(.vertical) {
                     // FIXME: sortedLibrary should not be appended to or it'll cause overwrites.
                     // FIXME: a dirtyfix is to directly set to the underlying library
                     switch layout {
                     case .grid:
-                        LazyVGrid(columns: [.init(.adaptive(minimum: gameCardSize))]) {
+                        LazyVGrid(
+                            columns: [.init(.adaptive(minimum: gameCardSize), spacing: Theme.Grid.spacing)],
+                            alignment: .leading,
+                            spacing: Theme.Spacing.xlarge
+                        ) {
                             ForEach(games) { game in
-                                GameCard(game: .constant(game))
+                                GameCard(game: .constant(game), hoveredGameID: $hoveredGameID)
                             }
                         }
-                        .padding()
+                        .padding(Theme.Spacing.xlarge)
                     case .list:
-                        LazyVStack {
+                        LazyVStack(spacing: Theme.Spacing.small) {
                             ForEach(games) { game in
                                 ListGameCard(game: .constant(game))
                             }
                         }
-                        .padding()
+                        .padding(Theme.Spacing.large)
                     }
                 }
+                // The grid's cards report hover here rather than each keeping its own flag;
+                // this is the half that clears it when the pointer leaves the grid entirely,
+                // which no individual card is in a position to notice.
+                .onHover { if !$0 { hoveredGameID = nil } }
                 .searchable(text: $viewModel.searchString,
                             tokens: $viewModel.searchTokens,
                             suggestedTokens: .constant(viewModel.suggestedTokens),
@@ -88,14 +79,38 @@ struct GameListView: View {
                 }
             }
         }
-        .animation(.easeInOut, value: layout)
+        .animation(Theme.Motion.layout, value: layout)
         .animation(.default, value: games)
+    }
+
+    private var empty: some View {
+        VStack(spacing: Theme.Spacing.large) {
+            ContentUnavailableView(
+                emptyTitle,
+                systemImage: "square.grid.3x3.square",
+                description: Text(emptyDescription)
+            )
+            .task {
+                try? await gameDataStore.refreshFromStorefronts()
+            }
+
+            Button("Import Game", systemImage: "plus.app") {
+                isGameImportViewPresented = true
+            }
+            .buttonStyle(.portalProminent)
+            .sheet(isPresented: $isGameImportViewPresented) {
+                // Opens on this list's storefront — there is no reason to ask again
+                // which storefront you meant when you asked from inside its library.
+                GameImportView(isPresented: $isGameImportViewPresented, storefront: storefront)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     /// Empty-state copy that names the storefront being looked at, rather than claiming the
     /// whole library is empty when it's only this one shelf that is.
     private var emptyTitle: String {
-        guard let storefront else { return String(localized: "No games found. 😢") }
+        guard let storefront else { return String(localized: "Nothing here yet.") }
         return String(localized: "No \(storefront.description) games yet.")
     }
 
@@ -103,7 +118,7 @@ struct GameListView: View {
         guard let storefront else {
             return String(localized: """
                 Games in your library will appear here.
-                If there are games in your library and they're not appearing, try restarting Mythic.
+                If there are games in your library and they're not appearing, try restarting \(Branding.name).
                 """)
         }
 
@@ -119,8 +134,11 @@ struct GameListView: View {
         }
     }
 }
-    
+
 #Preview {
-    GameListView()
-        .environmentObject(NetworkMonitor.shared)
+    NavigationStack {
+        GameListView()
+            .environmentObject(NetworkMonitor.shared)
+    }
+    .frame(width: 1000, height: 620)
 }

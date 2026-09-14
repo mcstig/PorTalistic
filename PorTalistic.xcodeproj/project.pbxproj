@@ -53,6 +53,11 @@
 		6A2935422BFCFAFD0035CE4B /* WineInterface+Container.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A2934C32BFCFAFD0035CE4B /* WineInterface+Container.swift */; };
 		6A2935432BFCFAFD0035CE4B /* FileLocations.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A2934C52BFCFAFD0035CE4B /* FileLocations.swift */; };
 		6A2935442BFCFAFD0035CE4B /* Global.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A2934C62BFCFAFD0035CE4B /* Global.swift */; };
+		C1A0DSG000000000001005 /* ArtworkCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A0DSG0000000000000005 /* ArtworkCache.swift */; };
+		C1A0DSG000000000001001 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A0DSG0000000000000001 /* Theme.swift */; };
+		C1A0DSG000000000001002 /* Surfaces.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A0DSG0000000000000002 /* Surfaces.swift */; };
+		C1A0DSG000000000001003 /* GameArtwork.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A0DSG0000000000000003 /* GameArtwork.swift */; };
+		C1A0DSG000000000001004 /* GameDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A0DSG0000000000000004 /* GameDetailView.swift */; };
 		C1A0BRD0000000000000101 /* Branding.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A0BRD0000000000000001 /* Branding.swift */; };
 		6A2935452BFCFAFD0035CE4B /* NetworkMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A2934C72BFCFAFD0035CE4B /* NetworkMonitor.swift */; };
 		C1A0RES0000000000000002 /* ResourceLimits.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A0RES0000000000000001 /* ResourceLimits.swift */; };
@@ -222,6 +227,11 @@
 		6A2934C32BFCFAFD0035CE4B /* WineInterface+Container.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = "WineInterface+Container.swift"; sourceTree = "<group>"; };
 		6A2934C52BFCFAFD0035CE4B /* FileLocations.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = FileLocations.swift; sourceTree = "<group>"; };
 		6A2934C62BFCFAFD0035CE4B /* Global.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = Global.swift; sourceTree = "<group>"; };
+		C1A0DSG0000000000000005 /* ArtworkCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArtworkCache.swift; sourceTree = "<group>"; };
+		C1A0DSG0000000000000001 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
+		C1A0DSG0000000000000002 /* Surfaces.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Surfaces.swift; sourceTree = "<group>"; };
+		C1A0DSG0000000000000003 /* GameArtwork.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameArtwork.swift; sourceTree = "<group>"; };
+		C1A0DSG0000000000000004 /* GameDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameDetailView.swift; sourceTree = "<group>"; };
 		C1A0BRD0000000000000001 /* Branding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Branding.swift; sourceTree = "<group>"; };
 		6A2934C72BFCFAFD0035CE4B /* NetworkMonitor.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = NetworkMonitor.swift; sourceTree = "<group>"; };
 		C1A0RES0000000000000001 /* ResourceLimits.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = ResourceLimits.swift; sourceTree = "<group>"; };
@@ -517,10 +527,22 @@
 			path = Utilities;
 			sourceTree = "<group>";
 		};
+		C1A0DSG0000000000000201 /* DesignSystem */ = {
+			isa = PBXGroup;
+			children = (
+				C1A0DSG0000000000000001 /* Theme.swift */,
+				C1A0DSG0000000000000002 /* Surfaces.swift */,
+				C1A0DSG0000000000000003 /* GameArtwork.swift */,
+				C1A0DSG0000000000000005 /* ArtworkCache.swift */,
+			);
+			path = DesignSystem;
+			sourceTree = "<group>";
+		};
 		6A2934DA2BFCFAFD0035CE4B /* Navigation */ = {
 			isa = PBXGroup;
 			children = (
 				6A2934D62BFCFAFD0035CE4B /* ContentView.swift */,
+				C1A0DSG0000000000000004 /* GameDetailView.swift */,
 				6A2934D52BFCFAFD0035CE4B /* HomeView.swift */,
 				6A2934D02BFCFAFD0035CE4B /* LibraryView.swift */,
 				6A2934D82BFCFAFD0035CE4B /* StoreView.swift */,
@@ -562,6 +584,7 @@
 		6A2934EF2BFCFAFD0035CE4B /* Views */ = {
 			isa = PBXGroup;
 			children = (
+				C1A0DSG0000000000000201 /* DesignSystem */,
 				6A2934DA2BFCFAFD0035CE4B /* Navigation */,
 				6A8080D12EA35F2F00F10A00 /* Onboarding */,
 				1217C8A82EADC525003EC8C9 /* SparkleUpdater */,
@@ -965,6 +988,11 @@
 				6A6EE1872DBA651700870AC4 /* Migrator.swift in Sources */,
 				6A2935442BFCFAFD0035CE4B /* Global.swift in Sources */,
 				C1A0BRD0000000000000101 /* Branding.swift in Sources */,
+				C1A0DSG000000000001001 /* Theme.swift in Sources */,
+				C1A0DSG000000000001005 /* ArtworkCache.swift in Sources */,
+				C1A0DSG000000000001002 /* Surfaces.swift in Sources */,
+				C1A0DSG000000000001003 /* GameArtwork.swift in Sources */,
+				C1A0DSG000000000001004 /* GameDetailView.swift in Sources */,
 				6A2935632BFCFAFD0035CE4B /* WebView.swift in Sources */,
 				C6291EA8CB774D53B9F85A79 /* GOGGameImportView.swift in Sources */,
 				BDC39317304AD7CD009AA2DB /* SteamGameImportView.swift in Sources */,
@@ -1179,7 +1207,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 4619;
+				CURRENT_PROJECT_VERSION = 4624;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_ASSET_PATHS = "\"PorTalistic/Preview Content\"";
@@ -1227,7 +1255,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 4619;
+				CURRENT_PROJECT_VERSION = 4624;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_ASSET_PATHS = "\"PorTalistic/Preview Content\"";

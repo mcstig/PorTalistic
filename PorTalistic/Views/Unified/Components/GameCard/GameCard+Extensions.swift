@@ -9,6 +9,7 @@
 
 import Foundation
 import SwiftUI
+import AppKit
 
 // TODO: architectural refactor, for new GameOperationManager
 // swiftlint:disable nesting
@@ -18,6 +19,7 @@ extension GameCard {
             struct PlayButton: View {
                 @Binding var game: Game
                 var withLabel: Bool = false
+                var isCompact: Bool = false
 
                 @Bindable private var operationManager: GameOperationManager = .shared
 
@@ -44,24 +46,17 @@ extension GameCard {
                                 Label("Play", systemImage: "play")
                             } else {
                                 Image(systemName: "play")
-                                    .padding(2)
                             }
                         }
                         .symbolVariant(.fill)
-                        .customTransform { view in
-                            if #unavailable(macOS 26.0) {
-                                view.foregroundStyle(.black)
-                            } else {
-                                view
-                            }
-                        }
                     }
+                    // Was a white capsule with black text, hard-coded on both counts: the
+                    // one control in the app that couldn't be tinted and couldn't be read in
+                    // light mode. The brand pill is defined once, in `Surfaces.swift`.
+                    .buttonStyle(PortalProminentButtonStyle(isCompact: isCompact))
                     .disabled(operationManager.queue.contains(where: { $0.game == game && $0.type.modifiesFiles }))
                     // FIXME: .disabled(game.checkIfGameIsRunning())
                     .help("Play \"\(game.title)\"")
-
-                    .background(.white)
-                    .foregroundStyle(.black)
 
                     .alert(isPresented: $isLaunchErrorAlertPresented) {
                         if launchError is Engine.NotInstalledError {
@@ -97,6 +92,7 @@ extension GameCard {
             struct InstallButton: View {
                 @Binding var game: Game
                 var withLabel: Bool = false
+                var isCompact: Bool = false
 
                 @EnvironmentObject var networkMonitor: NetworkMonitor
                 @Bindable private var operationManager: GameOperationManager = .shared
@@ -129,9 +125,9 @@ extension GameCard {
                             Label("Install", systemImage: "arrow.down.to.line")
                         } else {
                             Image(systemName: "arrow.down.to.line")
-                                .padding(2)
                         }
                     }
+                    .buttonStyle(PortalProminentButtonStyle(isCompact: isCompact))
                     // Epic's reachability check gates Epic. A GOG game has no business being
                     // ungrabbable because epicgames.com didn't answer.
                     .disabled(!networkMonitor.isReachable(for: game.storefront))
@@ -356,49 +352,54 @@ extension GameCard {
                     GameCard.Buttons.FavouriteButton(game: $game, withLabel: true)
                     GameCard.Buttons.DeleteButton(game: $game, withLabel: true, isUninstallSheetPresented: $isUninstallSheetPresented)
                 } label: {
-                    Button { } label: {
-                        Image(systemName: "ellipsis")
-                    }
+                    Image(systemName: "ellipsis")
+                        .imageScale(.medium)
+                        .frame(width: 22, height: 18)
+                        .contentShape(.rect)
                 }
-                .sheet(isPresented: $isGameSettingsSheetPresented) {
-                    GameSettingsView(game: $game, isPresented: $isGameSettingsSheetPresented)
-                        .frame(width: 700, height: 380)
-                }
-                .customTransform { view in
-                    if #unavailable(macOS 26.0) {
-                        view
-                            .fixedSize()
-                    } else {
-                        view
-                    }
+                .help("More options for \(game.description)")
+                .gameSettingsSheet(game: $game, isPresented: $isGameSettingsSheetPresented)
+            }
+            .gameUninstallSheet(game: $game, isPresented: $isUninstallSheetPresented)
+        }
+    }
+
+    /// The same commands as ``MenuView``, for a right-click on a card.
+    ///
+    /// Separate because a context menu's contents are not in the view hierarchy, so sheets
+    /// attached inside one never present — which is the real cause of the two "you must add
+    /// the sheet below to whatever view you call this button in" notes further up this file.
+    /// The presenting view owns the flags and attaches the sheets; this only sets them.
+    struct ContextMenuItems: View {
+        @Binding var game: Game
+        @Binding var isSettingsPresented: Bool
+        @Binding var isUninstallPresented: Bool
+
+        var body: some View {
+            Button(game.isFavourited ? "Unfavourite" : "Favourite", systemImage: "star") {
+                game.isFavourited.toggle()
+            }
+
+            GameCard.Buttons.UpdateButton(game: $game, withLabel: true)
+            GameCard.Buttons.VerificationButton(game: $game, withLabel: true)
+
+            if case .installed(let location, _) = game.installationState {
+                Button("Show in Finder", systemImage: "folder") {
+                    NSWorkspace.shared.activateFileViewerSelecting([location])
                 }
             }
-            .sheet(isPresented: $isUninstallSheetPresented) {
-                switch game {
-                case let epicGame as EpicGamesGame:
-                    EpicGamesGameUninstallationView(game: .init(get: { epicGame }, set: { game = $0 }),
-                                                    isPresented: $isUninstallSheetPresented)
-                    .padding()
-                    .frame(width: 700, height: 380)
-                case let gogGame as GOGGame:
-                    GOGGameUninstallationView(game: .init(get: { gogGame }, set: { game = $0 }),
-                                              isPresented: $isUninstallSheetPresented)
-                    .padding()
-                    .frame(width: 700, height: 380)
-                case let localGame as LocalGame:
-                    LocalGameUninstallationView(game: .init(get: { localGame }, set: { game = $0 }),
-                                                isPresented: $isUninstallSheetPresented)
-                    .padding()
-                    .frame(width: 700, height: 380)
-                default: EmptyView()
-                }
-            }
+
+            Divider()
+
+            Button("Settings...", systemImage: "gear") { isSettingsPresented = true }
+            Button("Delete...", systemImage: "xmark.bin") { isUninstallPresented = true }
         }
     }
 
     struct ButtonsView: View {
         @Binding var game: Game
         var withLabel = false
+        var isCompact: Bool = false
 
         @Bindable private var operationManager: GameOperationManager = .shared
         @EnvironmentObject var networkMonitor: NetworkMonitor
@@ -415,11 +416,14 @@ extension GameCard {
             }) {
                 OperationCard.StatusView(operation: .constant(operation), withLabel: withLabel)
             } else if case .installed = game.installationState {
-                Buttons.Prominent.PlayButton(game: $game, withLabel: withLabel)
+                Buttons.Prominent.PlayButton(game: $game, withLabel: withLabel, isCompact: isCompact)
                 MenuView(game: $game)
+                    .buttonStyle(.borderless)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
                     .layoutPriority(1)
             } else {
-                Buttons.Prominent.InstallButton(game: $game, withLabel: withLabel)
+                Buttons.Prominent.InstallButton(game: $game, withLabel: withLabel, isCompact: isCompact)
             }
         }
     }
@@ -429,10 +433,12 @@ extension GameCard {
         @Bindable var gameDataStore: GameDataStore = .shared
 
         var body: some View {
-            SubscriptedTextView(game.storefront?.description ?? "Unknown")
+            if let storefront = game.storefront {
+                PortalBadge(storefront.description, systemImage: storefront.symbolName, tint: storefront.tint)
+            }
 
             if GameDataStore.shared.recent == game {
-                SubscriptedTextView("Recent")
+                PortalBadge(String(localized: "Recently played"))
             }
         }
     }
@@ -459,9 +465,6 @@ extension GameCard {
                     .lineLimit(1)
                     .help(game.title)
 
-                if game.isFavourited {
-                    Image(systemName: "star.fill")
-                }
             }
 
             if withSubscriptedInfo {
@@ -478,4 +481,52 @@ extension GameCard {
 #Preview {
     LibraryView()
         .environmentObject(NetworkMonitor.shared)
+}
+
+
+// MARK: - Shared sheets
+
+extension View {
+    /// This game's settings, as a sheet.
+    func gameSettingsSheet(game: Binding<Game>, isPresented: Binding<Bool>) -> some View {
+        sheet(isPresented: isPresented) {
+            GameSettingsView(game: game, isPresented: isPresented)
+                .frame(width: 700, height: 380)
+        }
+    }
+
+    /// This game's uninstaller, as a sheet.
+    ///
+    /// Each storefront removes a game its own way, so the right sheet depends on the game's
+    /// concrete type. Written once here rather than copied into every view that offers a
+    /// Delete command.
+    func gameUninstallSheet(game: Binding<Game>, isPresented: Binding<Bool>) -> some View {
+        sheet(isPresented: isPresented) {
+            switch game.wrappedValue {
+            case let epicGame as EpicGamesGame:
+                EpicGamesGameUninstallationView(
+                    game: .init(get: { epicGame }, set: { game.wrappedValue = $0 }),
+                    isPresented: isPresented
+                )
+                .padding()
+                .frame(width: 700, height: 380)
+            case let gogGame as GOGGame:
+                GOGGameUninstallationView(
+                    game: .init(get: { gogGame }, set: { game.wrappedValue = $0 }),
+                    isPresented: isPresented
+                )
+                .padding()
+                .frame(width: 700, height: 380)
+            case let localGame as LocalGame:
+                LocalGameUninstallationView(
+                    game: .init(get: { localGame }, set: { game.wrappedValue = $0 }),
+                    isPresented: isPresented
+                )
+                .padding()
+                .frame(width: 700, height: 380)
+            default:
+                EmptyView()
+            }
+        }
+    }
 }

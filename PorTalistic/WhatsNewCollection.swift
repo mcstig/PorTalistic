@@ -85,7 +85,11 @@ extension PorTalisticApp: @MainActor WhatsNewCollectionProvider {
                         Your games, containers and sign-ins were carried over from it.
                         """
                 )
-            ]
+            ],
+            // WhatsNewKit defaults this to `Color.accentColor`, which is a static resolved
+            // against the *system* accent rather than the scene's tint — so this one button
+            // came out salmon in a violet app however the app itself was tinted.
+            primaryAction: .init(backgroundColor: Theme.Palette.brand)
         )
     }
 }

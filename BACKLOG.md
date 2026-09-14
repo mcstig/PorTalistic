@@ -256,3 +256,48 @@ environment variable — and probably belongs to the container rather than the g
 Also outstanding: only GOG's Windows launch goes through `planLaunch`. Epic and
 Local still read `game.containerURL` directly, so they neither get the right
 runtime nor per-game settings. Same three lines each.
+
+## The interface pass: what it left behind
+
+The pass built a design system (`Views/DesignSystem/`) and rebuilt the sidebar, Home, the
+game card, the list row and — new — a game page. Surfaces are now asked for by role
+(`floatingSurface`, `cardSurface`, `artworkScrim`, `artworkFadesOut`) and `Surfaces.swift`
+decides how each role is drawn on the running system, instead of eighteen inlined
+`#available(macOS 26.0, *)` checks that had drifted apart.
+
+Not finished:
+
+  - **Nine of those checks are still inlined**, in `OperationCard` (four),
+    `OperationsView`, `RosettaInstallationView`, `GameSettingsView`,
+    `EpicGamesGameImportView`, `EngineInstallationView`, `OnboardingView` and
+    `HeroGameCard`. They should ask for a role too. `OperationCard` is the one a
+    user sees, and it still draws its own glass panels by hand.
+  - **The pre-macOS-26 appearance has never been seen on a machine that renders
+    it.** This one runs Tahoe, so `#available(macOS 26.0, *)` is always true here
+    and the fallback half of `Surfaces.swift` is dead code locally. Settings ▸ View
+    has a debug switch — "Draw the pre-macOS 26 appearance" — which forces
+    `FloatingSurface` down the other path; it does *not* force the `macOS 15`
+    branches, and nothing forces AppKit's own Tahoe-era control rendering. A real
+    Sonoma or Sequoia machine is still the only way to know.
+  - **Toolbar visibility leaks between `NavigationStack` destinations.** Home hides
+    the title bar's background so artwork can run under it, and every sibling
+    inherits that until it says otherwise — hence `standardTitleBar()` on
+    `LibraryView`. Upstream fought the same bug with the same kind of workaround.
+    Worth revisiting if SwiftUI ever scopes this properly.
+  - **`GameArtwork` re-requests on `.task`, not on appearance.** `ArtworkCache`
+    keeps decoded covers for the life of the process, which is what stopped the
+    library dissolving back in on every navigation, but nothing persists across
+    launches beyond `URLCache`'s bytes, so the first paint of a cold launch still
+    decodes 136 JPEGs. A small on-disk thumbnail cache would fix that.
+  - **`HeroGameCard` is still an `EmptyView()` stub** with a `#Preview` that
+    describes what it was going to be. `HomeHero` in `HomeView` is the thing that
+    got built. Delete the stub or move `HomeHero` into it.
+  - **`StoreView` renders as a blank rectangle** when Epic's page doesn't load —
+    no loading state, no empty state, no way to tell a slow network from a broken
+    view.
+  - **The grid is the only layout with hover owned by its container.** `GameCard`
+    takes a `hoveredGameID` binding because `.onHover` in a `LazyVGrid` does not
+    reliably deliver the exit event, and a card that keeps its own flag gets stuck
+    showing its Play button while the pointer is elsewhere. `ListGameCard` still
+    keeps its own — rows are full width, so it is much harder to trip, but it is
+    the same latent bug.
