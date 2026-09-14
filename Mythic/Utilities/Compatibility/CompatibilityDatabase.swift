@@ -63,19 +63,28 @@ struct CompatibilityDatabase: Codable, Hashable {
     // MARK: - Lookup
 
     /// The entry for a game, by id first and title second.
-    func entry(for game: Game) -> Entry? {
-        if let byIdentifier = entries.first(where: { entry in
-            entry.identifiers.contains { $0.storefront == game.storefront && $0.id == game.id }
+    ///
+    /// Takes plain values rather than a `Game` so it can be called from wherever the work is
+    /// happening: `Game` is a main-actor-bound reference type, and profile resolution reads
+    /// executables off disk, which has no business on the main actor.
+    func entry(storefront: Game.Storefront?, id: String, title: String) -> Entry? {
+        if let storefront, let byIdentifier = entries.first(where: { entry in
+            entry.identifiers.contains { $0.storefront == storefront && $0.id == id }
         }) {
             return byIdentifier
         }
 
-        let normalised = Self.normalise(game.title)
+        let normalised = Self.normalise(title)
         guard !normalised.isEmpty else { return nil }
 
         return entries.first { entry in
             entry.titles.contains { Self.normalise($0) == normalised }
         }
+    }
+
+    @MainActor
+    func entry(for game: Game) -> Entry? {
+        entry(storefront: game.storefront, id: game.id, title: game.title)
     }
 
     /// Titles arrive decorated differently from every storefront — "Fallout New Vegas®",

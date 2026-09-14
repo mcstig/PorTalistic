@@ -179,19 +179,38 @@ struct WindowsExecutable: Codable, Hashable {
 
     /// Inspect a game, starting from the executable Mythic would launch.
     ///
-    /// The launch target is often not the renderer. Storefront play tasks point at
-    /// `Launcher.exe`, at a bitness-picking stub, or at a wrapper that starts the real binary
-    /// — none of which touch Direct3D, so inspecting only that file would report a game with
-    /// no graphics API at all. When the primary target shows no sign of rendering, its
-    /// siblings are inspected too and the evidence merged, with the primary's architecture
-    /// kept: the launcher decides which process actually runs, and 32-bit launchers hand off
-    /// to 32-bit games.
+    /// The launch target is usually not the renderer, and on a modern game it usually isn't
+    /// even the program. Measured on a real library:
     ///
-    /// Bounded on purpose. A game directory can hold hundreds of executables, most of them
-    /// redistributables, and this runs before a launch.
+    /// - **Prey**: the play task points at `Prey.exe`, which is under a megabyte. The game is
+    ///   `PreyDll.dll`, 35MB, in the same directory.
+    /// - **Horizon Chase Turbo**: `HorizonChase.exe`, under a megabyte, beside
+    ///   `UnityPlayer.dll` at 22MB — every Unity game has this shape.
+    ///
+    /// Which is why DLLs are candidates and not just executables. Scanning only `.exe` files
+    /// reported "nothing says how it renders" for both of those games and sent them to the
+    /// fallback profile, while the answer was sitting next to the file being read. Largest
+    /// first, because the renderer is the biggest binary in the folder and the noise —
+    /// crash handlers, redistributables, GOG's and Epic's SDKs — is small.
+    ///
+    /// The primary's architecture is kept rather than the sibling's: the stub decides which
+    /// process actually runs, and a 32-bit stub hands off to a 32-bit game.
+    ///
+    /// Bounded on purpose. A game directory can hold hundreds of binaries, and this runs
+    /// before a launch.
     static func inspectGame(primaryExecutable: URL, searchLimit: Int = 12) -> WindowsExecutable? {
+        // Reading a game can mean up to `scanByteLimit` bytes per executable across a dozen
+        // of them, and provisioning walks the whole installed library on every pass. Keyed on
+        // size and modification time as well as path, so a reinstall or a patch re-reads.
+        let key = cacheKey(for: primaryExecutable)
+
+        if let key, let cached = cached(for: key) { return cached }
+
         guard let primary = try? inspect(primaryExecutable) else { return nil }
-        guard !primary.hasGraphicsEvidence else { return primary }
+        guard !primary.hasGraphicsEvidence else {
+            if let key { store(primary, for: key) }
+            return primary
+        }
 
         let directory = primaryExecutable.deletingLastPathComponent()
         guard let entries = try? FileManager.default.contentsOfDirectory(
@@ -203,7 +222,7 @@ struct WindowsExecutable: Codable, Hashable {
         // Biggest first: the renderer is almost always the largest binary in the folder, and
         // the noise — crash handlers, installers, updaters — is small.
         let candidates = entries
-            .filter { $0.pathExtension.lowercased() == "exe" }
+            .filter { ["exe", "dll"].contains($0.pathExtension.lowercased()) }
             .filter { $0 != primaryExecutable }
             .filter { !isUninteresting($0) }
             .sorted { lhs, rhs in
@@ -229,11 +248,36 @@ struct WindowsExecutable: Codable, Hashable {
             if !inspected.graphicsAPIs.isEmpty { break }
         }
 
-        return .init(url: primary.url,
-                     architecture: primary.architecture,
-                     importedLibraries: imported,
-                     referencedLibraries: referenced,
-                     referenceScanWasTruncated: truncated)
+        let merged: WindowsExecutable = .init(url: primary.url,
+                                              architecture: primary.architecture,
+                                              importedLibraries: imported,
+                                              referencedLibraries: referenced,
+                                              referenceScanWasTruncated: truncated)
+
+        if let key { store(merged, for: key) }
+
+        return merged
+    }
+
+    // MARK: - Cache
+
+    private nonisolated(unsafe) static var inspections: [String: WindowsExecutable] = .init()
+    private static let inspectionsLock: NSLock = .init()
+
+    private static func cacheKey(for url: URL) -> String? {
+        guard let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey]),
+              let size = values.fileSize,
+              let modified = values.contentModificationDate else { return nil }
+
+        return "\(url.path)|\(size)|\(modified.timeIntervalSince1970)"
+    }
+
+    private static func cached(for key: String) -> WindowsExecutable? {
+        inspectionsLock.withLock { inspections[key] }
+    }
+
+    private static func store(_ executable: WindowsExecutable, for key: String) {
+        inspectionsLock.withLock { inspections[key] = executable }
     }
 
     /// Names that are never the game.

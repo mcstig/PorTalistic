@@ -70,6 +70,9 @@ struct CompatibilityManifest: Decodable {
         let payloadSubpath: String
         let executableSubpath: String
         let summary: String
+        /// See `RuntimeRelease.exposesMetalEscapes`. Absent means false, which is the safe
+        /// default: claiming it wrongly gets a game a Direct3D 11 layer that half-works.
+        var exposesMetalEscapes: Bool?
         var supportLibraries: SupportLibrariesEntry?
 
         struct SupportLibrariesEntry: Decodable {
@@ -224,6 +227,9 @@ struct CompatibilityManifest: Decodable {
                     Self.log.warning("Manifest tried to re-point \(entry.id, privacy: .public); keeping the version that shipped with the app")
                 }
 
+                // `exposesMetalEscapes` is held to the shipped value along with the URL and
+                // digest: it decides whether a Direct3D 11 game is sent to this build, and a
+                // fetched file shouldn't be able to turn that on for a build that lacks them.
                 resolved[index] = .init(id: shipped.id,
                                         name: entry.name,
                                         version: shipped.version,
@@ -232,6 +238,7 @@ struct CompatibilityManifest: Decodable {
                                         payloadSubpath: shipped.payloadSubpath,
                                         executableSubpath: shipped.executableSubpath,
                                         summary: entry.summary,
+                                        exposesMetalEscapes: shipped.exposesMetalEscapes,
                                         supportLibraries: shipped.supportLibraries)
                 continue
             }
@@ -290,6 +297,7 @@ struct CompatibilityManifest: Decodable {
                      payloadSubpath: entry.payloadSubpath,
                      executableSubpath: entry.executableSubpath,
                      summary: entry.summary,
+                     exposesMetalEscapes: entry.exposesMetalEscapes ?? false,
                      supportLibraries: entry.supportLibraries.map {
                          .init(downloadURL: $0.downloadURL,
                                sha256: $0.sha256.lowercased(),

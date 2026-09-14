@@ -49,6 +49,20 @@ struct RuntimeRelease: Identifiable, Hashable {
     /// Shown to the user when choosing between runtimes.
     let summary: String
 
+    /// Whether this Wine exposes `winemac.drv`'s Metal escape interface, which is what DXMT
+    /// needs to provide Direct3D 11 on Metal.
+    ///
+    /// Declared rather than derived, because nothing about a build's version says it. It also
+    /// cannot be detected before installing — ``Wine/DXMT/isShippedByRuntime(_:)`` inspects
+    /// files inside an installed runtime — and provisioning has to know *before* downloading
+    /// which build could serve a Direct3D 11 game.
+    ///
+    /// Getting it wrong in the optimistic direction is the worst failure mode this whole
+    /// feature has: DXMT on a Wine without the escapes half-works, device creation succeeds,
+    /// everything looks right, and every swap chain fails with `EGL_BAD_ALLOC`. So it
+    /// defaults to false and is set only for builds known to have them.
+    var exposesMetalEscapes: Bool = false
+
     /// A second archive carrying the Unix libraries the engine links against, if it doesn't
     /// carry its own.
     ///
@@ -147,6 +161,7 @@ extension RuntimeRelease {
                 is killed by macOS the moment Wine hands control to Windows code. Try it, and \
                 keep Wine Stable if it can't boot.
                 """,
+            exposesMetalEscapes: true,
             supportLibraries: .init(
                 downloadURL: .init(string: "https://github.com/Sikarugir-App/Wrapper/releases/download/v1.0/Template-1.0.14.tar.xz")!,
                 sha256: "f35b11837c79ca5ca23a0190784b44a5dd40deacf59bae4366e6032dcd4998fa",

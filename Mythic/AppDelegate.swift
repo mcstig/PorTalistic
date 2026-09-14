@@ -25,6 +25,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // them. Cached copy applied synchronously; the refresh happens on its own.
         CompatibilityManifest.bootstrap()
 
+        // Keep the machine ready without anyone being asked to install anything. Does nothing
+        // while operations are in flight, so this is safe to fire at launch.
+        Task { @MainActor in
+            Provisioner.shared.start()
+        }
+
         // MARK: Firebase Configuration
         // Use the Firebase library to configure APIs.
         FirebaseApp.configure()

@@ -21,6 +21,7 @@
       "payloadSubpath": "wswine.bundle",
       "executableSubpath": "bin/wine",
       "summary": "Wine 11 built for DXMT, so it has both modern Wine and Direct3D 11 on Metal — the combination nothing else here has. Installs and reports its version, but on some Macs cannot create a container at all: every Windows process it starts is killed by macOS the moment Wine hands control to Windows code. Try it, and keep Wine Stable if it can't boot.",
+      "exposesMetalEscapes": true,
       "supportLibraries": {
         "downloadURL": "https://github.com/Sikarugir-App/Wrapper/releases/download/v1.0/Template-1.0.14.tar.xz",
         "sha256": "f35b11837c79ca5ca23a0190784b44a5dd40deacf59bae4366e6032dcd4998fa",

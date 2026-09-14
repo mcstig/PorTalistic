@@ -150,6 +150,8 @@
 		63C7CCACDB4A4B02BF08158F /* GOGGameManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4DF0347C63A340A487965742 /* GOGGameManager.swift */; };
 		7B0FBFF94537481DB2EBCA02 /* GOGDLInterface.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78C0EEEEE62A4F15A8266669 /* GOGDLInterface.swift */; };
 		C1A0CMP0000000000000101 /* WindowsExecutable.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A0CMP0000000000000001 /* WindowsExecutable.swift */; };
+		C1A0CMP0000000000000106 /* Provisioner.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A0CMP0000000000000006 /* Provisioner.swift */; };
+		C1A0CMP0000000000000105 /* RuntimeSelection.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A0CMP0000000000000005 /* RuntimeSelection.swift */; };
 		C1A0CMP0000000000000104 /* CompatibilityManifest.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A0CMP0000000000000004 /* CompatibilityManifest.swift */; };
 		C1A0CMP0000000000000103 /* CompatibilityDatabase.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A0CMP0000000000000003 /* CompatibilityDatabase.swift */; };
 		C1A0CMP0000000000000102 /* RuntimeProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A0CMP0000000000000002 /* RuntimeProfile.swift */; };
@@ -307,6 +309,8 @@
 		4DF0347C63A340A487965742 /* GOGGameManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GOGGameManager.swift; sourceTree = "<group>"; };
 		78C0EEEEE62A4F15A8266669 /* GOGDLInterface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GOGDLInterface.swift; sourceTree = "<group>"; };
 		C1A0CMP0000000000000001 /* WindowsExecutable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowsExecutable.swift; sourceTree = "<group>"; };
+		C1A0CMP0000000000000006 /* Provisioner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Provisioner.swift; sourceTree = "<group>"; };
+		C1A0CMP0000000000000005 /* RuntimeSelection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeSelection.swift; sourceTree = "<group>"; };
 		C1A0CMP0000000000000004 /* CompatibilityManifest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompatibilityManifest.swift; sourceTree = "<group>"; };
 		C1A0CMP0000000000000003 /* CompatibilityDatabase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompatibilityDatabase.swift; sourceTree = "<group>"; };
 		C1A0CMP0000000000000002 /* RuntimeProfile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeProfile.swift; sourceTree = "<group>"; };
@@ -474,6 +478,8 @@
 			isa = PBXGroup;
 			children = (
 				C1A0CMP0000000000000001 /* WindowsExecutable.swift */,
+				C1A0CMP0000000000000006 /* Provisioner.swift */,
+				C1A0CMP0000000000000005 /* RuntimeSelection.swift */,
 				C1A0CMP0000000000000004 /* CompatibilityManifest.swift */,
 				C1A0CMP0000000000000003 /* CompatibilityDatabase.swift */,
 				C1A0CMP0000000000000002 /* RuntimeProfile.swift */,
@@ -901,6 +907,8 @@
 				63C7CCACDB4A4B02BF08158F /* GOGGameManager.swift in Sources */,
 				7B0FBFF94537481DB2EBCA02 /* GOGDLInterface.swift in Sources */,
 				C1A0CMP0000000000000101 /* WindowsExecutable.swift in Sources */,
+				C1A0CMP0000000000000106 /* Provisioner.swift in Sources */,
+				C1A0CMP0000000000000105 /* RuntimeSelection.swift in Sources */,
 				C1A0CMP0000000000000104 /* CompatibilityManifest.swift in Sources */,
 				C1A0CMP0000000000000103 /* CompatibilityDatabase.swift in Sources */,
 				C1A0CMP0000000000000102 /* RuntimeProfile.swift in Sources */,
@@ -1163,7 +1171,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 4599;
+				CURRENT_PROJECT_VERSION = 4604;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_ASSET_PATHS = "\"Mythic/Preview Content\"";
@@ -1211,7 +1219,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 4599;
+				CURRENT_PROJECT_VERSION = 4604;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_ASSET_PATHS = "\"Mythic/Preview Content\"";
