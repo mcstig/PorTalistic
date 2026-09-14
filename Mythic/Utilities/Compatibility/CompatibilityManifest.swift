@@ -109,12 +109,14 @@ struct CompatibilityManifest: Decodable {
 
     /// Where the manifest is fetched from.
     ///
-    /// - Important: This still points at the upstream repository, because the fork has no
-    ///   public home yet. Until it does, the fetch 404s — which is deliberately a non-event:
-    ///   the compiled-in catalogue and seed are the fallback, and a failed refresh is logged
-    ///   and forgotten. Change the owner and repository here and nowhere else.
+    /// - Important: `raw.githubusercontent.com` serves public repositories only. While
+    ///   `mcstig/PorTalistic` is private the fetch returns 404 for everyone, which is
+    ///   deliberately a non-event — the compiled-in catalogue and seed are the fallback and a
+    ///   failed refresh is logged and forgotten — but nothing published here reaches anybody
+    ///   until the repository is public. Owner, repository and branch are set here and
+    ///   nowhere else.
     static let remoteURL: URL = .init(
-        string: "https://raw.githubusercontent.com/MythicApp/Mythic/main/Compatibility/manifest.json"
+        string: "https://raw.githubusercontent.com/mcstig/PorTalistic/main/Compatibility/manifest.json"
     )!
 
     /// Hosts a runtime may be downloaded from.
