@@ -1,0 +1,46 @@
+{
+  "formatVersion": 1,
+
+  "runtimes": [
+    {
+      "id": "wine-stable-11.0",
+      "name": "Wine Stable 11.0",
+      "version": "11.0.0",
+      "downloadURL": "https://github.com/Gcenx/macOS_Wine_builds/releases/download/11.0_1/wine-stable-11.0_1-osx64.tar.xz",
+      "sha256": "b50dc50ec7f41d58b115a6b685d4d1315ba3c797bd3aa0f49213f2703cb82388",
+      "payloadSubpath": "Wine Stable.app",
+      "executableSubpath": "Contents/Resources/wine/bin/wine",
+      "summary": "Mainline Wine, four major versions newer than the bundled engine. No D3DMetal, so it isn't the right choice for demanding games — but it's the current reference point for anything the older engine can't run, the Steam client above all."
+    },
+    {
+      "id": "wine-sikarugir-11.0",
+      "name": "Sikarugir Wine 11.0",
+      "version": "11.0.0",
+      "downloadURL": "https://github.com/Sikarugir-App/Engines/releases/download/v1.0/WS11WineSikarugir11.0.tar.xz",
+      "sha256": "d12fa09149b9afd3be349d726eecea6b2216ac574c91f93f56d872bb6ca7b795",
+      "payloadSubpath": "wswine.bundle",
+      "executableSubpath": "bin/wine",
+      "summary": "Wine 11 built for DXMT, so it has both modern Wine and Direct3D 11 on Metal — the combination nothing else here has. Installs and reports its version, but on some Macs cannot create a container at all: every Windows process it starts is killed by macOS the moment Wine hands control to Windows code. Try it, and keep Wine Stable if it can't boot.",
+      "supportLibraries": {
+        "downloadURL": "https://github.com/Sikarugir-App/Wrapper/releases/download/v1.0/Template-1.0.14.tar.xz",
+        "sha256": "f35b11837c79ca5ca23a0190784b44a5dd40deacf59bae4366e6032dcd4998fa",
+        "payloadSubpath": "Template-1.0.14.app/Contents/Frameworks"
+      }
+    }
+  ],
+
+  "games": [
+    {
+      "ids": ["gog:1158493447"],
+      "titles": ["Prey"],
+      "settings": { "retinaMode": false },
+      "note": "Retina Mode off: with it on, Prey's 2048×1330 fullscreen is rendered into a quarter of a 4096×2660 desktop and every display gets captured."
+    },
+    {
+      "ids": ["gog:1164193173"],
+      "titles": ["Blades of Time"],
+      "settings": { "retinaMode": true },
+      "note": "Retina Mode on. It is the opposite of what Prey wants in the same container: with it off, this reaches wined3d's fullscreen path — different code from the windowed one — and crashes there with a stack overflow on the render thread."
+    }
+  ]
+}

@@ -21,6 +21,10 @@ import FirebaseCrashlytics
 // TODO: modularise
 class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_: Notification) {
+        // The runtime catalogue and the per-game compatibility list, before anything can want
+        // them. Cached copy applied synchronously; the refresh happens on its own.
+        CompatibilityManifest.bootstrap()
+
         // MARK: Firebase Configuration
         // Use the Firebase library to configure APIs.
         FirebaseApp.configure()

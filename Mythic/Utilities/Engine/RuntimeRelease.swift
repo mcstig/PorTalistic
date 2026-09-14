@@ -101,10 +101,20 @@ extension RuntimeRelease {
     /// interface DXMT needs and a `no_d3dmetal` one to say it doesn't carry Apple's
     /// implementation, which is the pairing we want.
     ///
-    /// - Note: Currently compiled in. It wants to become a signed manifest fetched at
-    ///   runtime so new builds don't require an app update — but a hardcoded list with
-    ///   pinned digests is the safer starting point, and the shape won't change.
-    static let catalogue: [RuntimeRelease] = [
+    /// The catalogue in force, which is the compiled-in list until a manifest replaces it.
+    ///
+    /// `nonisolated(unsafe)` for the same reason `Runtime`'s discovery cache is: written once
+    /// early, read from wherever a game is about to launch. See ``CompatibilityManifest`` for
+    /// what a fetched manifest is and isn't allowed to change about this — in short, it can
+    /// add runtimes and reword these, but it cannot re-point an id that shipped in the app at
+    /// different bytes.
+    nonisolated(unsafe) static var catalogue: [RuntimeRelease] = compiledIn
+
+    /// What shipped in this build, and the floor a manifest is merged onto.
+    ///
+    /// Also the offline answer: the whole catalogue being fetched would mean a first launch
+    /// with no network had no runtimes at all to offer.
+    static let compiledIn: [RuntimeRelease] = [
         .init(
             id: "wine-stable-11.0",
             name: "Wine Stable 11.0",
