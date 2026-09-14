@@ -402,14 +402,16 @@ struct PortalRailButtonStyle: ButtonStyle {
 // MARK: - Sheets
 
 extension View {
-    /// The standard ground for a sheet: opaque, faintly violet, focus-independent — and the
-    /// app's button style as the default inside it.
+    /// The app's own ground and button style: opaque, faintly violet, focus-independent.
+    ///
+    /// For a sheet, a secondary window, or any page that isn't part of the main window's
+    /// scroll. Not only sheets, despite where it started.
     ///
     /// The style is set here rather than at each call site because the sheets are where the
     /// unstyled `Button`s live — Cancel, Done, Browse…, Sign Out, Refresh Library — and
     /// there are dozens of them. Set as the environment default, so any button that asks for
     /// something specific still gets it.
-    func sheetBackground() -> some View {
+    func brandedSurface() -> some View {
         background(Theme.Palette.sheet)
             .buttonStyle(.portalCompact)
     }
@@ -429,7 +431,7 @@ extension View {
               idealWidth: idealWidth ?? minWidth,
               minHeight: minHeight,
               idealHeight: idealHeight ?? minHeight)
-            .sheetBackground()
+            .brandedSurface()
     }
 
     /// A panel of related controls inside a sheet or a page.

@@ -85,6 +85,7 @@ extension GameCard {
                             installationComplete: $engineInstallationSuccess
                         )
                         .padding()
+                        .brandedSurface()
                     }
                 }
             }
@@ -145,7 +146,7 @@ extension GameCard {
                             )
                             .padding()
                             .frame(width: 700, height: 380)
-                            .sheetBackground()
+                            .brandedSurface()
                         case let gogGame as GOGGame:
                             GOGGameInstallationView(
                                 game: .init(get: { gogGame },
@@ -154,7 +155,7 @@ extension GameCard {
                             )
                             .padding()
                             .frame(width: 700, height: 380)
-                            .sheetBackground()
+                            .brandedSurface()
                         default: EmptyView()
                         }
                     }
@@ -494,7 +495,7 @@ extension View {
         sheet(isPresented: isPresented) {
             GameSettingsView(game: game, isPresented: isPresented)
                 .frame(width: 720, height: 420)
-                .sheetBackground()
+                .brandedSurface()
         }
     }
 
@@ -513,7 +514,7 @@ extension View {
                 )
                 .padding()
                 .frame(width: 700, height: 380)
-                .sheetBackground()
+                .brandedSurface()
             case let gogGame as GOGGame:
                 GOGGameUninstallationView(
                     game: .init(get: { gogGame }, set: { game.wrappedValue = $0 }),
@@ -521,7 +522,7 @@ extension View {
                 )
                 .padding()
                 .frame(width: 700, height: 380)
-                .sheetBackground()
+                .brandedSurface()
             case let localGame as LocalGame:
                 LocalGameUninstallationView(
                     game: .init(get: { localGame }, set: { game.wrappedValue = $0 }),
@@ -529,7 +530,7 @@ extension View {
                 )
                 .padding()
                 .frame(width: 700, height: 380)
-                .sheetBackground()
+                .brandedSurface()
             default:
                 EmptyView()
             }

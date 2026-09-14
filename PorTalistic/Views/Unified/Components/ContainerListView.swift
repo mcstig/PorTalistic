@@ -27,38 +27,63 @@ struct ContainerListView: View {
     
     var body: some View {
         if Engine.isInstalled {
-            ForEach(Wine.containerObjects) { container in
-                HStack {
-                    Text(container.name)
+            // Panels rather than `Form` rows. This used to emit a bare `ForEach` of `HStack`s
+            // that only made sense inside a grouped `Form`, which is why it couldn't be shown
+            // anywhere else — and why the path was a footnote-sized button wedged between the
+            // name and the gear.
+            VStack(spacing: Theme.Spacing.small) {
+                ForEach(Wine.containerObjects) { container in
+                    HStack(spacing: Theme.Spacing.large) {
+                        Image(systemName: "cube")
+                            .font(.title3)
+                            .foregroundStyle(Theme.Palette.brand)
+                            .frame(width: 34, height: 34)
+                            .background { Circle().fill(Theme.Palette.brand.opacity(0.18)) }
 
-                    Button {
-                        NSWorkspace.shared.open(container.url)
-                    } label: {
-                        Text("\(container.url.prettyPath) \(Image(systemName: "link"))")
-                            .font(.footnote)
+                        VStack(alignment: .leading, spacing: Theme.Spacing.tiny) {
+                            Text(container.name)
+                                .font(.system(.headline, weight: .semibold))
+
+                            Button {
+                                NSWorkspace.shared.open(container.url)
+                            } label: {
+                                Label(container.url.prettyPath, systemImage: "folder")
+                                    .font(.footnote)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                            }
+                            .buttonStyle(.plain)
                             .foregroundStyle(.secondary)
-                            .scaledToFit()
-                    }
-                    .buttonStyle(.portalQuietCompact)
+                            .help("Reveal \"\(container.name)\" in Finder")
+                        }
 
-                    Spacer()
+                        Spacer(minLength: Theme.Spacing.medium)
 
-                    Button {
-                        configuringContainer = container
-                    } label: {
-                        Image(systemName: "gear")
-                    }
-                    .disabled(!Engine.isInstalled)
-                    .buttonStyle(.portalQuietCompact)
-                    .help("Modify default settings for \"\(container.name)\"")
+                        // Which Wine build made this prefix. A container is married to its
+                        // runtime — `Runtime.isCompatible(withPrefixCreatedBy:)` exists for
+                        // exactly that reason — so it is worth saying out loud here.
+                        PortalBadge(Wine.runtime(forContainerAtURL: container.url).name,
+                                    systemImage: "shippingbox",
+                                    tint: Theme.Palette.brandSecondary)
 
-                    Button {
-                        containerPendingDeletion = container
-                    } label: {
-                        Image(systemName: "xmark.bin")
+                        Button {
+                            configuringContainer = container
+                        } label: {
+                            Image(systemName: "gear")
+                        }
+                        .buttonStyle(.portalQuietCompact)
+                        .help("Modify default settings for \"\(container.name)\"")
+
+                        Button(role: .destructive) {
+                            containerPendingDeletion = container
+                        } label: {
+                            Image(systemName: "xmark.bin")
+                        }
+                        .buttonStyle(.portalQuietCompact)
+                        .help("Delete \"\(container.name)\"")
                     }
-                    .buttonStyle(.portalQuietCompact)
-                    .foregroundStyle(.secondary)
+                    .padding(Theme.Spacing.large)
+                    .panelSurface()
                 }
             }
             .sheet(item: $configuringContainer) { container in
@@ -69,6 +94,7 @@ struct ContainerListView: View {
                         set: { if !$0 { configuringContainer = nil } }
                     )
                 )
+                .brandedSurface()
             }
             .alert(
                 "Are you sure you want to delete this container?",
@@ -109,6 +135,7 @@ struct ContainerListView: View {
             .buttonStyle(.portalProminent)
             .sheet(isPresented: $isContainerCreationViewPresented) {
                 ContainerCreationView(isPresented: $isContainerCreationViewPresented)
+                    .brandedSurface()
             }
         } else {
             Engine.NotInstalledView()

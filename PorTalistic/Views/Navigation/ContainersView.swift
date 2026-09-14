@@ -14,11 +14,25 @@ struct ContainersView: View {
     @State private var isContainerCreationViewPresented = false
 
     var body: some View {
-        Form {
-            ContainerListView()
+        ScrollView {
+            VStack(alignment: .leading, spacing: Theme.Spacing.medium) {
+                Label("Wine containers", systemImage: "cube")
+                    .font(Theme.Text.sectionTitle)
+
+                Text("Each container is a separate Windows installation with its own registry and its own C: drive. \(Branding.name) assigns games to one that suits them; you rarely need to touch these.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.bottom, Theme.Spacing.small)
+
+                ContainerListView()
+            }
+            .frame(maxWidth: 760, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .padding(Theme.Spacing.xlarge)
         }
-        .formStyle(.grouped)
         .navigationTitle("Containers")
+        .standardTitleBar()
 
         .task(priority: .background) {
             discordRPC.setPresence({
@@ -59,6 +73,7 @@ struct ContainersView: View {
 
         .sheet(isPresented: $isContainerCreationViewPresented) {
             ContainerCreationView(isPresented: $isContainerCreationViewPresented)
+                .brandedSurface()
         }
     }
 }

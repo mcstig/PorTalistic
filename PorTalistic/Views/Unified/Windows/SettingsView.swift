@@ -80,6 +80,9 @@ struct SettingsView: View {
                 .formStyle(.grouped)
             }
         }
+        // Grouped `Form`s in a `TabView` are the right shape for a Settings window and stay
+        // as they are; what they were missing is the app's ground and its buttons.
+        .brandedSurface()
         .task(priority: .background) {
             discordRPC.setPresence({
                 var presence: RichPresence = .init()

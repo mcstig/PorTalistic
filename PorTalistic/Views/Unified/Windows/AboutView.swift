@@ -39,7 +39,6 @@ struct AboutView: View {
                             Group {
                                 Text(Branding.name)
                                     .font(.largeTitle)
-                                Text("by Michael Stoian")
                                 Text("a fork of Mythic by vapidinfinity ✦")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)

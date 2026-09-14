@@ -139,20 +139,14 @@ struct GOGGameInstallationView: View {
                     }
                     .formStyle(.grouped)
 
+                    // Only the error. The "asking GOG how big this download is…" line that
+                    // used to sit here said in a sentence what a spinner beside the Install
+                    // button says without one — which is how Epic's sheet already did it.
                     if let metadataError {
                         Text(metadataError.localizedDescription)
                             .font(.footnote)
                             .foregroundStyle(.red)
                             .multilineTextAlignment(.center)
-                    } else if isFetchingMetadata {
-                        HStack(spacing: 6) {
-                            ProgressView()
-                                .controlSize(.small)
-
-                            Text("Asking GOG how big this download is…")
-                        }
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
                     }
                 }
             }
@@ -187,7 +181,15 @@ struct GOGGameInstallationView: View {
                         }
                 }
 
-                Button("Install") {
+                // The same control Epic's sheet uses: the spinner rides beside the label
+                // while the size lookup is in flight, and the button is disabled until it
+                // lands.
+                OperationButton(
+                    "Install",
+                    operating: $isFetchingMetadata,
+                    successful: .constant(nil),
+                    placement: .leading
+                ) {
                     Task { @MainActor [game, platform, baseURL] in
                         do {
                             _ = try await GOGGameManager.install(game: game,

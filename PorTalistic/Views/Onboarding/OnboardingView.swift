@@ -179,6 +179,7 @@ struct OnboardingView: View {
             )
         }
         .foregroundStyle(.white)
+        .brandedSurface()
         .navigationTitle("\(Branding.name) Setup")
         .task(priority: .background) {
             discordRPC.setPresence({
