@@ -196,3 +196,45 @@ either showing them as games or pretending they aren't owned.
 Worth doing as part of the library UI pass, since it's a shelf, not a filter:
 `software` in the category paths is the discriminator, already visible in the
 metadata Mythic decodes.
+
+## D3DMetal is out. DXMT is the plan, and it rests on one Wine build.
+
+**The decision.** Apple's Game Porting Toolkit licence restricts distribution of
+its proprietary components — `D3DMetal.framework` among them — to
+non-commercial purposes. This is a Patreon-funded product, so Mythic cannot ship
+it, and an Apple Developer account does not change that: it grants access to
+*download* GPTK and the ability to sign and notarise an app, not permission to
+redistribute Apple's binaries. So Direct3D 10 and newer goes through DXMT, which
+is open source.
+
+**What that costs, stated plainly.** DXMT only works on a Wine exposing
+`winemac.drv`'s Metal escape interface, and exactly one build in the catalogue
+has them: Sikarugir. Which is the build recorded above as sometimes unable to
+create a container at all — every Windows process it starts killed by macOS the
+moment Wine hands control to Windows code. So every Direct3D 11 and 12 game now
+depends on a single third-party build with a known failure mode, where before it
+depended on Apple's implementation being present.
+
+That is a worse engineering position and a better legal one, and there is no
+version of this that is both. Selection therefore keeps the engine reachable
+*behind* DXMT rather than removing it: a machine that already has D3DMetal can
+still use it, and a fallback that works beats a principle that doesn't.
+
+**What still needs deciding, and is not decided by the above:**
+
+  - **The engine is itself GPTK-derived and carries D3DMetal.** Mythic does not
+    bundle it — it downloads it from `dl.getmythic.app`, upstream's server — so
+    this build redistributes nothing today. Whether pointing a paid product at
+    someone else's download for a non-commercially-licensed component is
+    acceptable is a question for a lawyer, not for this file. It is also a
+    product risk independent of licensing: the core runtime of a paid product
+    comes from a server this project does not control.
+  - **A second DXMT-capable Wine build would remove the single point of failure.**
+    Either another published build with the escapes, or building one. This is the
+    highest-value item on this list now, because everything modern depends on it.
+  - **Use the user's own GPTK when they have one.** Discovery already finds
+    `/Applications/Game Porting Toolkit.app` and Whisky's and CrossOver's
+    installs, but nothing detects whether an external runtime carries D3DMetal,
+    so they are never chosen for a Direct3D game. Someone who has installed GPTK
+    themselves is under their own licence, not Mythic's, and could have the
+    better path. Needs a way to detect `D3DMetal.framework` inside a runtime.

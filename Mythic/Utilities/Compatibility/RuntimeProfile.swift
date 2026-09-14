@@ -26,8 +26,10 @@ struct RuntimeProfile: Codable, Hashable {
     /// What a runtime has to be able to do for this game.
     var requirements: Requirements
 
-    /// The translation layer that should be in the container.
-    var graphicsBackend: GraphicsBackend
+    /// The translation layer that should be in the container, or `nil` for "whatever the
+    /// runtime already provides" — which is the honest answer when nothing could be learned
+    /// about how the game renders.
+    var graphicsBackend: GraphicsBackend?
 
     /// Container settings this game wants, overlaid at launch over whatever the container
     /// has. Every field optional: a profile states only what it has an opinion about.
@@ -65,8 +67,14 @@ struct RuntimeProfile: Codable, Hashable {
 
     enum GraphicsBackend: String, Codable, Hashable {
         /// Apple's Direct3D-on-Metal, as shipped in the Game Porting Toolkit derived engine.
+        ///
+        /// Not something Mythic can provide: Apple's Game Porting Toolkit licence restricts
+        /// distribution of its proprietary components to non-commercial purposes. Named here
+        /// because a machine that already has the engine can still use it, and because a
+        /// curated entry may want to ask for it.
         case direct3DMetal
         /// DXMT — Direct3D 11 on Metal, on a Wine that exposes `winemac.drv`'s Metal escapes.
+        /// Open source, and therefore what Mythic actually ships for Direct3D 10 and newer.
         case dxmt
         /// DXVK — Direct3D 10/11 on Vulkan. No Direct3D 9 implementation, which is why it is
         /// never the answer for an older game.
@@ -185,14 +193,14 @@ extension RuntimeProfile {
         let needsMetalTranslation: Bool = (direct3D ?? 0) >= 10 || executable.usesDXGI
         let rendererIsUnknown: Bool = direct3D == nil && !usesOpenGL && !usesVulkan && !executable.usesDXGI
 
-        let backend: GraphicsBackend = {
+        let backend: GraphicsBackend? = {
             guard executable.architecture == .x86_64 else { return .wined3d }
-            if needsMetalTranslation { return .direct3DMetal }
+            if needsMetalTranslation { return .dxmt }
             // A renderer we did identify, and it isn't one Metal translation serves.
             if direct3D != nil || usesOpenGL || usesVulkan { return .wined3d }
-            // Nothing identified: D3DMetal is what most modern games turn out to need, and
-            // it costs nothing in a container where it goes unused.
-            return .direct3DMetal
+            // Nothing identified. Naming a backend here would be a guess dressed up as a
+            // decision; whatever the runtime already provides is the truthful answer.
+            return nil
         }()
 
         // DXVK and D3DMetal both claim `dxgi` and `d3d11`, so a container can't have both,
@@ -221,7 +229,7 @@ extension RuntimeProfile {
             if needsMetalTranslation {
                 requirements.direct3DOnMetal = true
                 let named: String = direct3D.map { "Direct3D \($0)" } ?? "Direct3D 10 or newer"
-                reasons.append("64-bit \(named), which needs Apple's D3DMetal — the bundled engine is the only runtime here that ships it.")
+                reasons.append("64-bit \(named), which has to be translated to Metal. Mythic uses DXMT for that, on a Wine build exposing the Metal interface DXMT needs.")
             } else if let version = direct3D {
                 reasons.append("64-bit Direct3D \(version). DXVK has no Direct3D 9, so this goes through Wine's own Direct3D.")
             }
@@ -259,7 +267,7 @@ extension RuntimeProfile {
     /// likeliest thing to work.
     static let unknownGame: RuntimeProfile = .init(
         requirements: .init(),
-        graphicsBackend: .direct3DMetal,
+        graphicsBackend: nil,
         settings: .init(),
         source: .fallback,
         reasons: ["Mythic hasn't read this game's files yet."]
