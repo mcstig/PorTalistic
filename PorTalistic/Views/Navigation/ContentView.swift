@@ -78,22 +78,40 @@ struct ContentView: View {
 
     // MARK: Sidebar
 
+    /// The sidebar, drawn rather than delegated.
+    ///
+    /// This was a `List(selection:)`, and that cost two things that looked like one bug.
+    ///
+    /// The selection colour is the system accent and `.tint` does not override it, so on a
+    /// machine whose accent is red the selected row in a violet app was red. And `List` on
+    /// macOS is an `NSTableView`: it reuses its rows, and it does not re-evaluate a row's
+    /// content when something outside that row's identity changes — so the tinted tile that
+    /// was *also* meant to indicate selection stayed lit on whichever row had it last. The
+    /// system highlight moved and the drawn one didn't, which reads as a highlight stuck on
+    /// the previous item.
+    ///
+    /// A `ScrollView` of buttons has neither problem: nothing is reused, every row reads
+    /// `selection` as it draws, and the pill is the app's own violet because the app draws
+    /// it.
+    ///
+    /// - Note: what this gives up is `List`'s arrow-key navigation between rows. Worth
+    ///   restoring with `onMoveCommand` on a focusable container.
     private var sidebar: some View {
-        List(selection: $selection) {
-            Section {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 1) {
                 row(.home, title: String(localized: "Home"), systemImage: "house",
                     tint: Theme.Palette.brand,
                     help: String(localized: "Everything in one place"))
                 row(.store, title: String(localized: "Store"), systemImage: "bag",
                     tint: Theme.Palette.brand,
                     help: String(localized: "Purchase new games from Epic"))
-            }
 
-            // One shelf per storefront. They are installed, updated, launched and broken in
-            // completely different ways, so a single list that mixes them means every action
-            // has to be qualified by "…but which kind of game is this?" — for the user and
-            // for the code.
-            Section(header: sectionHeader(String(localized: "Library"))) {
+                sectionHeader(String(localized: "Library"))
+
+                // One shelf per storefront. They are installed, updated, launched and broken
+                // in completely different ways, so a single list that mixes them means every
+                // action has to be qualified by "…but which kind of game is this?" — for the
+                // user and for the code.
                 row(.library(nil), title: String(localized: "All Games"), systemImage: "square.grid.2x2",
                     tint: Theme.Palette.brandSecondary,
                     help: String(localized: "Every game, from every storefront"),
@@ -110,9 +128,9 @@ struct ContentView: View {
                         // from here, and the only way to find out was to open it.
                         needsAttention: storefront.usesAccount && !storefront.isSignedIn)
                 }
-            }
 
-            Section(header: sectionHeader(String(localized: "Manage"))) {
+                sectionHeader(String(localized: "Manage"))
+
                 row(.containers, title: String(localized: "Containers"), systemImage: "cube",
                     tint: Theme.Palette.brandSecondary,
                     help: String(localized: "Manage containers for Windows® applications"))
@@ -120,6 +138,7 @@ struct ContentView: View {
                     tint: Theme.Palette.brand,
                     help: String(localized: "View all currently signed in accounts"))
 
+                // Support opens its own window, so it is never the selected destination.
                 Button {
                     SupportWindowController.show()
                 } label: {
@@ -128,16 +147,12 @@ struct ContentView: View {
                                tint: .secondary,
                                isSelected: false)
                 }
+                .buttonStyle(PortalRailButtonStyle(isSelected: false))
                 .help("Get support")
-                .buttonStyle(.plain)
-            }
 
-            // In the list, not bolted underneath it. This was previously a second `List`
-            // pinned to a 40-point frame with scrolling disabled, purely to borrow the
-            // sidebar's row styling — and it sat outside the selection, so the row it
-            // contained could never look selected.
-            if !operationManager.queue.isEmpty {
-                Section {
+                if !operationManager.queue.isEmpty {
+                    sectionHeader(String(localized: "Activity"))
+
                     row(.operations,
                         title: String(localized: "Operations"),
                         systemImage: "arrow.down.circle",
@@ -146,9 +161,11 @@ struct ContentView: View {
                         count: operationManager.queue.count)
                 }
             }
+            .padding(.horizontal, Theme.Spacing.small)
+            .padding(.bottom, Theme.Spacing.medium)
         }
-        .listStyle(.sidebar)
-        .tint(Theme.Palette.brand)
+        .scrollContentBackground(.hidden)
+        .scrollIndicators(.hidden)
         .navigationSplitViewColumnWidth(min: 214, ideal: 232, max: 300)
         .safeAreaInset(edge: .top, spacing: 0) { wordmark }
         .safeAreaInset(edge: .bottom, spacing: 0) { footer }
@@ -178,7 +195,9 @@ struct ContentView: View {
             .font(.system(size: 10, weight: .semibold))
             .tracking(0.9)
             .foregroundStyle(.tertiary)
-            .padding(.top, Theme.Spacing.xsmall)
+            .padding(.horizontal, Theme.Spacing.small)
+            .padding(.top, Theme.Spacing.medium)
+            .padding(.bottom, Theme.Spacing.xsmall)
     }
 
     @ViewBuilder
@@ -189,27 +208,29 @@ struct ContentView: View {
                      help: String,
                      count: Int? = nil,
                      needsAttention: Bool = false) -> some View {
-        // A tagged row rather than a `NavigationLink`: in a two-column split view the
-        // sidebar has no stack of its own to push onto, and it is the `List`'s selection
-        // that drives the detail column — and that draws the selected row as selected,
-        // which the old link-based sidebar never did.
-        rowContent(title: title,
-                   systemImage: systemImage,
-                   tint: tint,
-                   isSelected: selection == item,
-                   count: count,
-                   needsAttention: needsAttention)
-            .help(help)
-            .tag(item)
+        let isSelected = selection == item
+
+        Button {
+            selection = item
+        } label: {
+            rowContent(title: title,
+                       systemImage: systemImage,
+                       tint: tint,
+                       isSelected: isSelected,
+                       count: count,
+                       needsAttention: needsAttention)
+        }
+        .buttonStyle(PortalRailButtonStyle(isSelected: isSelected))
+        .help(help)
     }
 
     /// A sidebar row.
     ///
     /// The symbol sits in a tinted tile rather than floating beside the text, which is what
     /// lets a storefront carry its own colour: four monochrome glyphs in a column are four
-    /// things to read, where four coloured tiles are four things to recognise. The count is
-    /// a capsule instead of a bare numeral so it reads as a quantity and not as part of the
-    /// name.
+    /// things to read, where four coloured tiles are four things to recognise. On the
+    /// selected row the tile goes to white-on-violet, because a coloured tile inside a
+    /// violet pill is two colours arguing.
     @ViewBuilder
     private func rowContent(title: String,
                             systemImage: String,
@@ -224,18 +245,18 @@ struct ContentView: View {
                 .frame(width: 24, height: 24)
                 .background {
                     RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .fill(tint.opacity(isSelected ? 0.95 : 0.18))
+                        .fill(isSelected ? AnyShapeStyle(Color.white.opacity(0.22))
+                                         : AnyShapeStyle(tint.opacity(0.18)))
                 }
 
             Text(title)
-                .font(.system(.body, weight: isSelected ? .semibold : .regular))
                 .lineLimit(1)
 
             Spacer(minLength: Theme.Spacing.xsmall)
 
             if needsAttention {
                 Circle()
-                    .fill(.orange)
+                    .fill(isSelected ? Color.white : .orange)
                     .frame(width: 6, height: 6)
                     .help("You're not signed in to \(title).")
             }
@@ -244,15 +265,18 @@ struct ContentView: View {
                 Text(count, format: .number)
                     .font(.system(size: 10, weight: .semibold))
                     .monospacedDigit()
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(isSelected ? AnyShapeStyle(Color.white.opacity(0.85))
+                                                : AnyShapeStyle(HierarchicalShapeStyle.secondary))
                     .padding(.horizontal, Theme.Spacing.small - 2)
                     .padding(.vertical, 1)
                     .background {
-                        Capsule(style: .continuous).fill(.quaternary)
+                        Capsule(style: .continuous)
+                            .fill(isSelected ? AnyShapeStyle(Color.white.opacity(0.22))
+                                             : AnyShapeStyle(HierarchicalShapeStyle.quaternary))
                     }
             }
         }
-        .padding(.vertical, 3)
+        .padding(.vertical, 1)
     }
 
     // MARK: Footer

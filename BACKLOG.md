@@ -339,3 +339,8 @@ Also outstanding from this round:
     `GameSettingsView`, `EpicGamesGameImportView`, `EngineInstallationView` and
     `OnboardingView`. `OperationCard`'s four are gone.
   - **`HeroGameCard` is still an `EmptyView()` stub.**
+
+  - **The sidebar no longer has arrow-key navigation.** It stopped being a `List`
+    (see the commit for why), and a `ScrollView` of buttons doesn't move selection
+    with the arrow keys. Restoring it means `onMoveCommand` on a focusable
+    container, plus deciding what focus looks like in there.
