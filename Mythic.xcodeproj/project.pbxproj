@@ -1179,7 +1179,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 4612;
+				CURRENT_PROJECT_VERSION = 4615;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_ASSET_PATHS = "\"Mythic/Preview Content\"";
@@ -1194,7 +1194,7 @@
 				);
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Mythic/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = Mythic;
+				INFOPLIST_KEY_CFBundleDisplayName = PorTalistic;
 				INFOPLIST_KEY_GCSupportsControllerUserInteraction = YES;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2023-2025 vapidinfinity";
@@ -1205,7 +1205,7 @@
 				LIBRARY_SEARCH_PATHS = "$(PROJECT_DIR)/Mythic/legendary/_internal";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = "0.6.0-dirty";
-				PRODUCT_BUNDLE_IDENTIFIER = xyz.blackxfiied.Mythic;
+				PRODUCT_BUNDLE_IDENTIFIER = com.mcstig.PorTalistic;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -1227,7 +1227,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 4612;
+				CURRENT_PROJECT_VERSION = 4615;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_ASSET_PATHS = "\"Mythic/Preview Content\"";
@@ -1242,7 +1242,7 @@
 				);
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Mythic/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = Mythic;
+				INFOPLIST_KEY_CFBundleDisplayName = PorTalistic;
 				INFOPLIST_KEY_GCSupportsControllerUserInteraction = YES;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2023-2025 vapidinfinity";
@@ -1253,7 +1253,7 @@
 				LIBRARY_SEARCH_PATHS = "$(PROJECT_DIR)/Mythic/legendary/_internal";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 0.6.0;
-				PRODUCT_BUNDLE_IDENTIFIER = xyz.blackxfiied.Mythic;
+				PRODUCT_BUNDLE_IDENTIFIER = com.mcstig.PorTalistic;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SWIFT_EMIT_LOC_STRINGS = YES;
