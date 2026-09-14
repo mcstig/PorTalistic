@@ -449,6 +449,21 @@ extension GameCard {
                     .bold()
                     .truncationMode(.tail)
                     .lineLimit(1)
+                    // The app name the storefront knows the game by, on hover in debug
+                    // builds. It was a line of its own under the title — a bare
+                    // parenthesised id that wrapped to three lines of hex on a grid card,
+                    // pushed the title into an ellipsis, and made every card taller in
+                    // debug than it ships. Since the cards are designed and reviewed in
+                    // debug builds, that is the wrong layout to be looking at. As a tooltip
+                    // it costs no space and is still there when an entry looks wrong and
+                    // needs matching against the storefront's own metadata.
+                    .customTransform { title in
+#if DEBUG
+                        title.help(game.id)
+#else
+                        title
+#endif
+                    }
 
                 if game.isFavourited {
                     Image(systemName: "star.fill")
@@ -461,12 +476,6 @@ extension GameCard {
                         .lineLimit(1)
                 }
             }
-
-#if DEBUG
-                                Text("(\(game.id))")
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-#endif // DEBUG
         }
     }
 }
