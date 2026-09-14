@@ -39,7 +39,7 @@ struct ContainerListView: View {
                             .foregroundStyle(.secondary)
                             .scaledToFit()
                     }
-                    .buttonStyle(.accessoryBar)
+                    .buttonStyle(.portalQuietCompact)
 
                     Spacer()
 
@@ -49,7 +49,7 @@ struct ContainerListView: View {
                         Image(systemName: "gear")
                     }
                     .disabled(!Engine.isInstalled)
-                    .buttonStyle(.borderless)
+                    .buttonStyle(.portalQuietCompact)
                     .help("Modify default settings for \"\(container.name)\"")
 
                     Button {
@@ -57,7 +57,7 @@ struct ContainerListView: View {
                     } label: {
                         Image(systemName: "xmark.bin")
                     }
-                    .buttonStyle(.borderless)
+                    .buttonStyle(.portalQuietCompact)
                     .foregroundStyle(.secondary)
                 }
             }
@@ -106,7 +106,7 @@ struct ContainerListView: View {
                 Label("Create Container", systemImage: "plus")
                     .padding(5)
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.portalProminent)
             .sheet(isPresented: $isContainerCreationViewPresented) {
                 ContainerCreationView(isPresented: $isContainerCreationViewPresented)
             }
@@ -353,7 +353,7 @@ struct WinetricksConfigurationView: View {
                         } label: {
                             Image(systemName: "doc.on.doc")
                         }
-                        .buttonStyle(.borderless)
+                        .buttonStyle(.portalQuietCompact)
                         .disabled(consoleOutput.isEmpty)
                         .help(String(localized: "Copy all to clipboard", comment: "Tooltip for copying all console output to clipboard"))
                         
@@ -362,7 +362,7 @@ struct WinetricksConfigurationView: View {
                         } label: {
                             Image(systemName: "trash")
                         }
-                        .buttonStyle(.borderless)
+                        .buttonStyle(.portalQuietCompact)
                         .disabled(consoleOutput.isEmpty)
                         .help(String(localized: "Clear console", comment: "Tooltip for clearing the console output"))
                     }
@@ -428,7 +428,7 @@ struct WinetricksConfigurationView: View {
                 } label: {
                     Text("Install Selected", comment: "Button to install selected Winetricks components")
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.portalProminent)
                 .disabled(selectedVerbs.isEmpty || isInstalling)
             }
             .padding()
@@ -641,7 +641,7 @@ struct ContainerConfigurationView: View {
                     Button("Close") {
                         isPresented = false
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.portalProminent)
                 }
                 .padding([.horizontal, .bottom])
                 .fixedSize()

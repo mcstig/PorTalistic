@@ -67,13 +67,13 @@ struct SteamGameImportView: View {
 
             case .needsClientInstall:
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Mythic runs the real, official Steam client inside a dedicated container so that logins, cloud saves, achievements, and the overlay all work normally.")
+                    Text("\(Branding.name) runs the real, official Steam client inside a dedicated container so that logins, cloud saves, achievements, and the overlay all work normally.")
                         .foregroundStyle(.secondary)
 
                     Button("Set Up Steam") {
                         Task { await installClient() }
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.portalProminent)
                 }
 
             case .installingClient(let progress):
@@ -272,7 +272,7 @@ struct SteamGameImportView: View {
             HStack {
                 Spacer()
                 Button("Done") { isPresented = false }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.portalProminent)
             }
         }
         .padding()

@@ -84,7 +84,7 @@ struct SettingsView: View {
             discordRPC.setPresence({
                 var presence: RichPresence = .init()
                 presence.details = "Tweaking some settings"
-                presence.state = "Configuring Mythic"
+                presence.state = "Configuring \(Branding.name)"
                 presence.timestamps.start = .now
                 presence.assets.largeImage = "macos_512x512_2x"
 
@@ -100,11 +100,11 @@ extension SettingsView {
         @State private var isResetSettingsAlertPresented = false
 
         var body: some View {
-            Button("Reset Mythic", systemImage: "power.dotted") {
+            Button("Reset \(Branding.name)", systemImage: "power.dotted") {
                 isResetAlertPresented = true
             }
             .alert(
-                "Reset Mythic?",
+                "Reset \(Branding.name)?",
                 isPresented: $isResetAlertPresented,
                 actions: {
                     Button("OK", role: .destructive) {
@@ -132,7 +132,7 @@ extension SettingsView {
                 isResetSettingsAlertPresented = true
             }
             .alert(
-                "Reset Mythic Settings?",
+                "Reset \(Branding.name) Settings?",
                 isPresented: $isResetSettingsAlertPresented,
                 actions: {
                     Button("OK", role: .destructive) {
@@ -199,7 +199,7 @@ extension SettingsView {
 
         var body: some View {
             Toggle("Minimise to dock on game launch", systemImage: "dock.arrow.down.rectangle", isOn: $minimiseOnLaunch)
-            Toggle("Force quit all games when Mythic closes", systemImage: "xmark.app", isOn: $quitOnClose)
+            Toggle("Force quit all games when \(Branding.name) closes", systemImage: "xmark.app", isOn: $quitOnClose)
         }
     }
 
@@ -237,7 +237,7 @@ extension SettingsView {
                             installBaseURL = url
                         }
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.portalProminent)
 
                     Button("Reset to Default") {
                         installBaseURL = Bundle.appGames!
@@ -261,7 +261,7 @@ extension SettingsView {
         @AppStorage("engineAutomaticallyChecksForUpdates") private var engineAutomaticallyChecksForUpdates: Bool = true
 
         var body: some View {
-            Section("Mythic", isExpanded: $isMythicUpdatesSectionExpanded) {
+            Section(Branding.name, isExpanded: $isMythicUpdatesSectionExpanded) {
 //                Toggle(
 //                    "Automatically check for Mythic updates",
 //                    systemImage: "arrow.down.app.dashed",
@@ -388,7 +388,7 @@ extension SettingsView {
 
         var body: some View {
             Section("Discord", isExpanded: $isServicesDiscordSectionExpanded) {
-                Toggle("Display Mythic activity status on Discord", isOn: $discordRPCEnabled)
+                Toggle("Display \(Branding.name) activity status on Discord", isOn: $discordRPCEnabled)
                     .onChange(of: discordRPCEnabled) { _, newValue in
                         if newValue {
                             _ = discordRPC.connect()
@@ -545,7 +545,7 @@ extension SettingsView {
                                 runtimePendingRemoval = runtime
                             }
                             .labelStyle(.iconOnly)
-                            .buttonStyle(.borderless)
+                            .buttonStyle(.portalQuietCompact)
                             .foregroundStyle(.secondary)
                             .help("Deletes this runtime. Containers using it fall back to the bundled engine until you install it again.")
                         }

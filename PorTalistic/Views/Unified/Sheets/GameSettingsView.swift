@@ -287,7 +287,7 @@ private extension GameSettingsView {
             Spacer()
 
             Button("Close") { isPresented = false }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.portalProminent)
         }
         .padding()
     }
@@ -370,7 +370,7 @@ extension GameSettingsView {
                         Spacer()
                         
                         Button("Done", action: { modifyThumbnailURL() })
-                            .buttonStyle(.borderedProminent)
+                            .buttonStyle(.portalProminent)
                     }
                 }
             }

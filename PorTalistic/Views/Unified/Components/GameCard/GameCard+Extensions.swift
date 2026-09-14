@@ -53,7 +53,7 @@ extension GameCard {
                     // Was a white capsule with black text, hard-coded on both counts: the
                     // one control in the app that couldn't be tinted and couldn't be read in
                     // light mode. The brand pill is defined once, in `Surfaces.swift`.
-                    .buttonStyle(PortalProminentButtonStyle(isCompact: isCompact))
+                    .buttonStyle(PortalButtonStyle(emphasis: .prominent, isCompact: isCompact))
                     .disabled(operationManager.queue.contains(where: { $0.game == game && $0.type.modifiesFiles }))
                     // FIXME: .disabled(game.checkIfGameIsRunning())
                     .help("Play \"\(game.title)\"")
@@ -107,7 +107,7 @@ extension GameCard {
                     }
 
                     if !networkMonitor.isReachable(for: game.storefront) {
-                        return String(localized: "Mythic can't reach \(game.storefront?.description ?? String(localized: "this storefront")) right now.")
+                        return String(localized: "\(Branding.name) can't reach \(game.storefront?.description ?? String(localized: "this storefront")) right now.")
                     }
 
                     if game.storefront == .local {
@@ -127,7 +127,7 @@ extension GameCard {
                             Image(systemName: "arrow.down.to.line")
                         }
                     }
-                    .buttonStyle(PortalProminentButtonStyle(isCompact: isCompact))
+                    .buttonStyle(PortalButtonStyle(emphasis: .prominent, isCompact: isCompact))
                     // Epic's reachability check gates Epic. A GOG game has no business being
                     // ungrabbable because epicgames.com didn't answer.
                     .disabled(!networkMonitor.isReachable(for: game.storefront))
@@ -145,6 +145,7 @@ extension GameCard {
                             )
                             .padding()
                             .frame(width: 700, height: 380)
+                            .sheetBackground()
                         case let gogGame as GOGGame:
                             GOGGameInstallationView(
                                 game: .init(get: { gogGame },
@@ -153,6 +154,7 @@ extension GameCard {
                             )
                             .padding()
                             .frame(width: 700, height: 380)
+                            .sheetBackground()
                         default: EmptyView()
                         }
                     }
@@ -418,7 +420,7 @@ extension GameCard {
             } else if case .installed = game.installationState {
                 Buttons.Prominent.PlayButton(game: $game, withLabel: withLabel, isCompact: isCompact)
                 MenuView(game: $game)
-                    .buttonStyle(.borderless)
+                    .buttonStyle(.portalQuietCompact)
                     .menuIndicator(.hidden)
                     .fixedSize()
                     .layoutPriority(1)
@@ -491,7 +493,8 @@ extension View {
     func gameSettingsSheet(game: Binding<Game>, isPresented: Binding<Bool>) -> some View {
         sheet(isPresented: isPresented) {
             GameSettingsView(game: game, isPresented: isPresented)
-                .frame(width: 700, height: 380)
+                .frame(width: 720, height: 420)
+                .sheetBackground()
         }
     }
 
@@ -510,6 +513,7 @@ extension View {
                 )
                 .padding()
                 .frame(width: 700, height: 380)
+                .sheetBackground()
             case let gogGame as GOGGame:
                 GOGGameUninstallationView(
                     game: .init(get: { gogGame }, set: { game.wrappedValue = $0 }),
@@ -517,6 +521,7 @@ extension View {
                 )
                 .padding()
                 .frame(width: 700, height: 380)
+                .sheetBackground()
             case let localGame as LocalGame:
                 LocalGameUninstallationView(
                     game: .init(get: { localGame }, set: { game.wrappedValue = $0 }),
@@ -524,6 +529,7 @@ extension View {
                 )
                 .padding()
                 .frame(width: 700, height: 380)
+                .sheetBackground()
             default:
                 EmptyView()
             }

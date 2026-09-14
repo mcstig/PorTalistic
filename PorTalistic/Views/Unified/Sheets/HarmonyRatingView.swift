@@ -33,7 +33,7 @@ struct HarmonyRatingView: View {
                 Text("How well did \"\(game.title)\" run?")
                     .font(.title)
                 
-                Text("This will be uploaded to Harmony, Mythic's game compatibility database.")
+                Text("This will be uploaded to Harmony, the game compatibility database Mythic maintains.")
                     .foregroundStyle(.secondary)
             }
             .padding()
@@ -66,7 +66,7 @@ struct HarmonyRatingView: View {
                 .alert(isPresented: $isConfirmationPresented) {
                     Alert(
                         title: .init("Are you sure you want to proceed without rating?"),
-                        message: .init("Harmony ratings help every Mythic user understand how well a game runs."),
+                        message: .init("Harmony ratings help everyone understand how well a game runs."),
                         primaryButton: .cancel(),
                         secondaryButton: .default(.init("OK")) {
                             isPresented = false
@@ -86,7 +86,7 @@ struct HarmonyRatingView: View {
                     Button("Done") {
                         uploadCompatibilityData()
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.portalProminent)
                     .disabled(rating == nil)
                 }
             }

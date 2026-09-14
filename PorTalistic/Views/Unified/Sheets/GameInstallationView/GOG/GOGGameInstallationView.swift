@@ -204,7 +204,7 @@ struct GOGGameInstallationView: View {
                 .disabled(!FileManager.default.isWritableFile(atPath: baseURL.path))
                 .onAppear(perform: { spawnMetadataFetchTask() })
                 .onChange(of: platform, { spawnMetadataFetchTask() })
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.portalProminent)
             }
             .padding(.top)
         }

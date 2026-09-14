@@ -311,3 +311,32 @@ Not finished:
     put them in the context menu as well, which means the card owning an install
     flag and the launch-error alert the way it already owns the settings and
     uninstall flags. Hover is not a gesture every user has.
+
+## The design system's remaining gaps
+
+Buttons, sheet surfaces and panels are routed through `Views/DesignSystem/` now, which
+carried the look into most of the app for free. What it did not reach:
+
+  - **The Settings window** is still a plain `Form` of sections. It's the densest
+    screen in the app and the one most worth doing properly.
+  - **Containers** — `ContainersView`, `ContainerListView`, `ContainerCreationView`,
+    `ContainerSettingsView`. `ContainerListView` emits bare `ForEach` rows meant to
+    sit inside a `Form`, so it cannot be dropped anywhere else without looking
+    wrong; that is why Home lost its containers section rather than restyling it.
+  - **Onboarding** — the first thing a new Patreon user sees, and it has had no
+    attention at all.
+  - **The installation and uninstallation sheets' insides.** They have the right
+    ground and the right buttons now, but their layout is still upstream's.
+  - **`GameSettingsView`**, which is where a per-game runtime override will have to
+    live once `RuntimeProfile.Source.userOverride` is reachable from the interface.
+
+Also outstanding from this round:
+
+  - **`Button("Cancel", role: .cancel)` comes out solid violet** like everything
+    else, because the sheet sets one default style for every unstyled button in it.
+    That is what "all buttons purple" asks for, but Cancel competing with Done for
+    attention is worth a second look.
+  - **Four `#available(macOS 26.0, *)` checks remain**, in `RosettaInstallationView`,
+    `GameSettingsView`, `EpicGamesGameImportView`, `EngineInstallationView` and
+    `OnboardingView`. `OperationCard`'s four are gone.
+  - **`HeroGameCard` is still an `EmptyView()` stub.**

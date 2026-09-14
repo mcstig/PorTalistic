@@ -143,7 +143,7 @@ private struct GameDetailContent: View {
                 GameCard.PrimaryActionButton(game: $game, isCompact: false)
 
                 GameCard.MenuView(game: $game)
-                    .buttonStyle(.borderless)
+                    .buttonStyle(.portalQuietCompact)
                     .menuIndicator(.hidden)
                     .fixedSize()
                     .foregroundStyle(.white)
@@ -252,7 +252,7 @@ private struct GameDetailContent: View {
                         Button("Show in Finder", systemImage: "folder") {
                             NSWorkspace.shared.activateFileViewerSelecting([location])
                         }
-                        .buttonStyle(.accessoryBar)
+                        .buttonStyle(.portalQuietCompact)
                     }
                 }
 
@@ -263,7 +263,7 @@ private struct GameDetailContent: View {
                         GameCard.Buttons.VerificationButton(game: $game, withLabel: true)
                         Button("Delete", systemImage: "xmark.bin") { isUninstallPresented = true }
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.portalCompact)
                     .controlSize(.small)
                 }
             }

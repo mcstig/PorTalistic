@@ -9,124 +9,93 @@
 
 import SwiftUI
 
+/**
+ The operation currently doing the work, at the top of the Operations page.
+
+ Both cards here used to draw their own Liquid Glass panels inline — four
+ `#available(macOS 26.0, *)` checks between them, each with a different fallback, one of
+ which wrapped its content in `.background(in:)` and one of which did nothing at all. They
+ also flipped their text between `.primary` and white depending on whether an image had
+ loaded. Surfaces come from the design system now, and the scrim means the text colour was
+ never a question.
+ */
 struct ProminentOperationCard: View {
     @Binding var operation: GameOperation
-    
-    @State private var isImageEmpty: Bool = true
-    
+
     var body: some View {
-        GeometryReader { geometry in
-            ZStack {
-                GameImageCard(game: operation.game, url: operation.game.horizontalImageURL, isImageEmpty: $isImageEmpty)
-                    .aspectRatio(16/9, contentMode: .fill)
-                    .frame(width: geometry.size.width,
-                           height: geometry.size.height)
-                
-                VStack(alignment: .leading) {
-                    VStack(alignment: .leading) {
-                        Label(operation.type.description.uppercased(), systemImage: "progress.indicator")
-                            .foregroundStyle(.secondary)
-                            .font(.caption)
-                        
-                        HStack {
-                            GameCard.TitleAndInformationView(game: .constant(operation.game),
-                                                             withSubscriptedInfo: true)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .customTransform { view in
-                        if #available(macOS 26.0, *) {
-                            view
-                                .padding()
-                                .glassEffect(in: .rect(cornerRadius: 20.0))
-                        } else {
-                            view
+        GameArtwork(game: operation.game,
+                    url: operation.game.horizontalImageURL ?? operation.game.verticalImageURL,
+                    orientation: .horizontal,
+                    cornerRadius: 0)
+            .artworkScrim(opacity: 0.94)
+            .artworkFadesOut()
+            .overlay(alignment: .bottomLeading) {
+                VStack(alignment: .leading, spacing: Theme.Spacing.medium) {
+                    Text(operation.type.description.uppercased())
+                        .font(Theme.Text.heroEyebrow)
+                        .tracking(1.4)
+                        .foregroundStyle(.white.opacity(0.75))
+
+                    Text(operation.game.title)
+                        .font(Theme.Text.heroTitle)
+                        .foregroundStyle(.white)
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.6)
+
+                    HStack(spacing: Theme.Spacing.small) {
+                        if let storefront = operation.game.storefront {
+                            PortalBadge(storefront.description,
+                                        systemImage: storefront.symbolName,
+                                        tint: .white)
                         }
                     }
-                    
-                    HStack {
-                        OperationCard.StatusView(operation: $operation, hideStatusIfUnknown: true)
-                            .customTransform { view in
-                                if #available(macOS 26.0, *) {
-                                    view
-                                        .padding()
-                                        .glassEffect(in: .rect(cornerRadius: 20.0))
-                                } else {
-                                    view
-                                }
-                            }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    OperationCard.StatusView(operation: $operation, hideStatusIfUnknown: true)
+                        .frame(maxWidth: 420, alignment: .leading)
+                        .padding(.top, Theme.Spacing.xsmall)
                 }
-                .customTransform { view in
-                    if #available(macOS 26.0, *) {
-                        view
-                    } else {
-                        view
-                            .padding()
-                            .background(in: .rect(cornerRadius: 20.0))
-                    }
-                }
-                .padding()
-                .frame(width: geometry.size.width * 0.6)
-                .frame(maxWidth: .infinity,
-                       maxHeight: .infinity,
-                       alignment: .bottomLeading)
+                .padding(.horizontal, Theme.Spacing.xlarge)
+                .padding(.bottom, Theme.Spacing.xxlarge)
             }
-            .clipShape(.rect(cornerRadius: 20))
-            .contentShape(.rect(cornerRadius: 20))
-        }
     }
 }
 
+/// One queued or running operation, as a row.
 struct OperationCard: View {
     @Binding var operation: GameOperation
-    
-    @State private var isImageEmpty: Bool = true
-    
+
+    static let height: CGFloat = 76
+
     var body: some View {
-        ZStack {
-            GameImageCard(url: operation.game.horizontalImageURL, isImageEmpty: $isImageEmpty)
-                .aspectRatio(16/9, contentMode: .fill)
-            
-            HStack {
-                if operation.game.isFallbackImageAvailable, isImageEmpty {
-                    GameImageCard.FallbackGameImageCard(game: .constant(operation.game))
-                        .frame(width: 70, height: 70)
-                        .padding()
-                }
-                
-                VStack(alignment: .leading) {
-                    Text(operation.game.title)
-                        .font(.system(.title, weight: .bold))
-                    
-                    HStack {
-                        GameCard.SubscriptedInfoView(game: .constant(operation.game))
-                    }
-                }
-                .foregroundStyle(isImageEmpty ? Color.primary : Color.white)
-                .padding(.horizontal)
-                
-                Spacer()
-                
-                StatusView(operation: $operation)
-                    .padding(.trailing)
-            }
-            .padding()
-            .customTransform { view in
-                if #available(macOS 26.0, *) {
-                    view
-                        .glassEffect(in: .rect(cornerRadius: 20.0))
-                        .padding()
-                } else {
-                    view
-                        .background(in: .rect(cornerRadius: 20.0))
+        HStack(spacing: Theme.Spacing.large) {
+            GameArtwork(game: operation.game,
+                        url: operation.game.verticalImageURL,
+                        cornerRadius: Theme.Radius.control)
+                .frame(width: 44, height: 58)
+
+            VStack(alignment: .leading, spacing: Theme.Spacing.xsmall) {
+                Text(operation.game.title)
+                    .font(Theme.Text.rowTitle)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+
+                HStack(spacing: Theme.Spacing.xsmall) {
+                    PortalBadge(operation.type.description,
+                                systemImage: "progress.indicator",
+                                tint: Theme.Palette.brandSecondary)
+
+                    GameCard.SubscriptedInfoView(game: .constant(operation.game))
                 }
             }
+
+            Spacer(minLength: Theme.Spacing.medium)
+
+            StatusView(operation: $operation)
+                .frame(maxWidth: 240, alignment: .trailing)
         }
-        .frame(height: ListGameCard.defaultHeight)
-        .clipShape(.rect(cornerRadius: 20))
-        .contentShape(.rect(cornerRadius: 20))
+        .padding(.horizontal, Theme.Spacing.large)
+        .frame(height: Self.height)
+        .panelSurface(cornerRadius: Theme.Radius.tile)
     }
 }
 

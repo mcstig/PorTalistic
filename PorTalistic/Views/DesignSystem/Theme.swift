@@ -9,6 +9,7 @@
 // Copyright © 2026 Michael Stoian
 
 import SwiftUI
+import AppKit
 
 /**
  The measurements and colours the interface is built out of.
@@ -60,6 +61,15 @@ enum Theme {
         /// The far side of the portal. Only ever seen next to ``brand``, in a gradient.
         static let brandSecondary: Color = .init(red: 0.16, green: 0.78, blue: 0.95)
 
+        /// ``brand``, lightened — what a control does under the pointer.
+        static let brandHighlight: Color = .init(red: 0.51, green: 0.33, blue: 0.98)
+
+        /// For a control whose action destroys something. Deliberately *not* violet: a
+        /// Delete button that looks exactly like a Play button is a design that will
+        /// eventually cost somebody a 27GB install.
+        static let destructive: Color = .init(red: 0.90, green: 0.29, blue: 0.35)
+        static let destructiveHighlight: Color = .init(red: 0.95, green: 0.42, blue: 0.47)
+
         /// The app's one gradient. Used for identity, never for large areas of chrome.
         static let portal: LinearGradient = .init(
             colors: [brand, brandSecondary],
@@ -75,7 +85,33 @@ enum Theme {
         static let surface: Color = .init(nsColor: .controlBackgroundColor)
 
         /// The floor behind everything.
+        ///
+        /// - Warning: not opaque. `NSColor.windowBackgroundColor` in a window like this one
+        ///   is a vibrant colour, so anything drawn *over* artwork with it lets the artwork
+        ///   through. Use ``sheet`` for a surface that has to be solid.
         static let canvas: Color = .init(nsColor: .windowBackgroundColor)
+
+        /// The ground under a sheet: opaque, faintly violet, and the same whether the window
+        /// is focused or not.
+        ///
+        /// Sheets used to take the system's own material, which on macOS 26 picks up the
+        /// app's tint while the window is active and desaturates to grey the moment it
+        /// isn't — so the installation sheet changed colour when you clicked away from the
+        /// app, and again on its way out. A fixed colour keeps the violet and stops the
+        /// texture from reporting on the window's focus.
+        static let sheet: Color = dynamic(dark: .init(red: 0.086, green: 0.075, blue: 0.118, alpha: 1),
+                                          light: .init(red: 0.957, green: 0.949, blue: 0.976, alpha: 1))
+
+        /// A panel *inside* a sheet — one step up from ``sheet``.
+        static let panel: Color = dynamic(dark: .init(red: 0.137, green: 0.122, blue: 0.180, alpha: 1),
+                                          light: .init(red: 1, green: 1, blue: 1, alpha: 1))
+
+        /// A colour that resolves itself per appearance without going through a material.
+        private static func dynamic(dark: NSColor, light: NSColor) -> Color {
+            .init(nsColor: .init(name: nil) { appearance in
+                appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
+            })
+        }
     }
 
     /// Type roles, so a card title is one decision rather than a guess per call site.

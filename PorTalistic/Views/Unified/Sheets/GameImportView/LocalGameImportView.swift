@@ -84,7 +84,7 @@ struct LocalGameImportView: View {
                             if !FileManager.default.isReadableFile(atPath: location.path) {
                                 Image(systemName: "exclamationmark.triangle")
                                     .symbolVariant(.fill)
-                                    .help("File/Folder is not readable by Mythic.")
+                                    .help("File/Folder is not readable by \(Branding.name).")
                             }
                             
                             Spacer()
@@ -136,7 +136,7 @@ struct LocalGameImportView: View {
                 .disabled(game.installationState == .uninstalled)
                 .disabled(game.title.isEmpty)
                 .disabled(location == .temporaryDirectory)
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.portalProminent)
             }
             .padding([.horizontal, .bottom])
         }

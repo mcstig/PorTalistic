@@ -11,66 +11,73 @@ import SwiftUI
 import AppKit
 import SwordRPC
 
+/**
+ Where to go when something doesn't work.
+
+ Rebuilt because the old version was five bare `Button`s in two `HStack`s separated by
+ hand-drawn `Divider`s of an explicit height, every block pinned to `maxWidth: 400`, with
+ `Spacer()`s at the top level of the view body where they had no container to push against.
+ It also offered "Report an issue" and "Create a support ticket" as two separate buttons
+ that opened the same URL.
+ */
 struct SupportView: View {
-
     var body: some View {
-        Text("Support")
-            .font(.title)
-            .fontWeight(.bold)
-            .frame(maxWidth: 400, alignment: .leading)
-            .padding(.leading)
+        ScrollView {
+            VStack(alignment: .leading, spacing: Theme.Spacing.section) {
+                VStack(alignment: .leading, spacing: Theme.Spacing.small) {
+                    Text("Support")
+                        .font(Theme.Text.heroTitle)
 
-        Spacer()
+                    Text("Have a look here before filing anything — most launch failures are a known one.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
 
-        VStack {
-            Text("Resources")
-                .font(.title2)
-                .fontWeight(.bold)
-                .frame(maxWidth: 400, alignment: .leading)
-            HStack{
-                Button("Documentation"){
-                    openLink(url: Branding.readmeURL)
+                section(String(localized: "Read first"), systemImage: "book") {
+                    SupportLinkRow(
+                        title: String(localized: "Documentation"),
+                        description: String(localized: "How \(Branding.name) works, and what it needs from your Mac."),
+                        systemImage: "doc.text",
+                        url: Branding.readmeURL
+                    )
+
+                    SupportLinkRow(
+                        title: String(localized: "Discussions"),
+                        description: String(localized: "Questions other people have already asked."),
+                        systemImage: "bubble.left.and.bubble.right",
+                        url: Branding.discussionsURL
+                    )
+
+                    SupportLinkRow(
+                        title: String(localized: "Compatibility list"),
+                        description: String(localized: "Which games run, and what they need to run well."),
+                        systemImage: "checklist",
+                        url: .init(string: "https://docs.google.com/spreadsheets/d/1W_1UexC1VOcbP2CHhoZBR5-8koH-ZPxJBDWntwH-tsc/")!
+                    )
                 }
-                verticalDivider(height: 30)
-                Button("FAQ"){
-                    openLink(url: Branding.discussionsURL)
-                }
-                verticalDivider(height: 30)
-                Button("Compatibility List"){
-                    openLink(urlString: "https://docs.google.com/spreadsheets/d/1W_1UexC1VOcbP2CHhoZBR5-8koH-ZPxJBDWntwH-tsc/")
+
+                section(String(localized: "Still stuck"), systemImage: "lifepreserver") {
+                    SupportLinkRow(
+                        title: String(localized: "Report an issue"),
+                        description: String(localized: "A game that won't start, or something in the app that's wrong."),
+                        systemImage: "exclamationmark.bubble",
+                        url: Branding.issuesURL
+                    )
+
+                    SupportLinkRow(
+                        title: String(localized: "Source code"),
+                        description: String(localized: "\(Branding.name) is open source, under the GPLv3."),
+                        systemImage: "chevron.left.forwardslash.chevron.right",
+                        url: Branding.repositoryURL
+                    )
                 }
             }
-            .padding(.bottom)
-            .frame(maxWidth: 400, alignment: .leading)
-
-            Text("Recieve Help")
-                .font(.title2)
-                .fontWeight(.bold)
-                .frame(maxWidth: 400, alignment: .leading)
-            HStack{
-                Button("Report an issue"){
-                    openLink(url: Branding.issuesURL)
-                }
-                verticalDivider(height: 30)
-                Button("Create a support ticket"){
-                    openLink(url: Branding.issuesURL)
-                }
-            }
-            .frame(maxWidth: 400, alignment: .leading)
+            .frame(maxWidth: 620, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .center)
+            .padding(Theme.Spacing.xlarge)
         }
-        .padding([.leading, .bottom])
-        .frame(maxWidth: 400, alignment: .leading)
-
-        Spacer()
-
-        VStack{
-            Label("Please consult resources before creating an issue — you may find a solution there.", systemImage: "exclamationmark.bubble")
-                .font(.footnote)
-                .frame(maxWidth: 400, alignment: .leading)
-                .padding([.leading, .bottom])
-        }
+        .navigationTitle("Support")
         .task(priority: .background) {
-            // Set rich presence using SwordRPC
             discordRPC.setPresence({
                 var presence = RichPresence()
                 presence.details = "Looking for help"
@@ -80,7 +87,75 @@ struct SupportView: View {
                 return presence
             }())
         }
-        .navigationTitle("Support")
+    }
+
+    @ViewBuilder
+    private func section<Content: View>(_ title: String,
+                                        systemImage: String,
+                                        @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.medium) {
+            Label(title, systemImage: systemImage)
+                .font(Theme.Text.sectionTitle)
+
+            VStack(spacing: Theme.Spacing.small) {
+                content()
+            }
+        }
+    }
+}
+
+/// One place to go, as a row you can hit anywhere along.
+private struct SupportLinkRow: View {
+    let title: String
+    let description: String
+    let systemImage: String
+    let url: URL
+
+    @State private var isHovering: Bool = false
+
+    private var shape: RoundedRectangle { .init(cornerRadius: Theme.Radius.card, style: .continuous) }
+
+    var body: some View {
+        Button {
+            NSWorkspace.shared.open(url)
+        } label: {
+            HStack(spacing: Theme.Spacing.large) {
+                Image(systemName: systemImage)
+                    .font(.title3)
+                    .foregroundStyle(isHovering ? .white : Theme.Palette.brand)
+                    .frame(width: 34, height: 34)
+                    .background {
+                        Circle().fill(Theme.Palette.brand.opacity(isHovering ? 0.9 : 0.18))
+                    }
+
+                VStack(alignment: .leading, spacing: Theme.Spacing.tiny) {
+                    Text(title)
+                        .font(.system(.headline, weight: .semibold))
+
+                    Text(description)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.leading)
+                }
+
+                Spacer(minLength: Theme.Spacing.medium)
+
+                Image(systemName: "arrow.up.forward")
+                    .foregroundStyle(.secondary)
+            }
+            .padding(Theme.Spacing.large)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(shape)
+        }
+        .buttonStyle(.plain)
+        .background(Theme.Palette.panel, in: shape)
+        .overlay {
+            shape.strokeBorder(isHovering ? Theme.Palette.brand.opacity(0.6) : Theme.Palette.hairline,
+                               lineWidth: 1)
+        }
+        .animation(Theme.Motion.hover, value: isHovering)
+        .onHover { isHovering = $0 }
+        .help(url.absoluteString)
     }
 }
 
@@ -92,10 +167,13 @@ public class SupportWindowController: NSWindowController {
         let hosting = NSHostingController(rootView: supportView)
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
+            // 400×300 was enough for five bare buttons and not enough for anything else:
+            // the rebuilt view scrolled inside it with two rows visible at a time.
+            contentRect: NSRect(x: 0, y: 0, width: 680, height: 660),
             styleMask: [
                 .titled,
                 .closable,
+                .resizable,
                 .fullSizeContentView
             ],
             backing: .buffered,
@@ -106,9 +184,7 @@ public class SupportWindowController: NSWindowController {
         window.isMovableByWindowBackground = true
         window.titleVisibility = .hidden
 
-        if let zoomButton = window.standardWindowButton(.zoomButton) {
-            zoomButton.isEnabled = false
-        }
+        window.contentMinSize = .init(width: 520, height: 420)
 
         let visualEffectView = NSVisualEffectView()
         visualEffectView.material = .sidebar
@@ -141,22 +217,6 @@ public class SupportWindowController: NSWindowController {
             NSApp.activate(ignoringOtherApps: true)
         }
     }
-}
-
-private func openLink(urlString: String) {
-    if let url = URL(string: urlString) {
-        NSWorkspace.shared.open(url)
-    }
-}
-
-private func openLink(url: URL) {
-    NSWorkspace.shared.open(url)
-}
-
-@ViewBuilder
-private func verticalDivider(height: CGFloat) -> some View {
-    Divider()
-        .frame(width: 1, height: height)
 }
 
 #Preview {

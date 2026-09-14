@@ -24,10 +24,20 @@ struct AccountsView: View {
 
     var body: some View {
         ScrollView {
-            HStack {
+            VStack(alignment: .leading, spacing: Theme.Spacing.medium) {
+                Label("Storefronts", systemImage: "person.2")
+                    .font(Theme.Text.sectionTitle)
+
+                Text("Sign in to see the games you own and to install them. Signing out leaves your installed games where they are.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .padding(.bottom, Theme.Spacing.small)
+
+            LazyVGrid(columns: [.init(.adaptive(minimum: 320), spacing: Theme.Spacing.large)],
+                      spacing: Theme.Spacing.large) {
                 AccountCard(
                     signedInUser: .constant(try? Legendary.retrieveUser()),
-                    image: Image("EGFaceless"),
+                    image: Game.Storefront.epicGames.accountImage,
                     storefront: .epicGames,
                     signInAction: {
                         Task { @MainActor in
@@ -38,11 +48,8 @@ struct AccountsView: View {
                         isEpicSignOutConfirmationAlertPresented = true
                     }
                 )
-                .padding()
-                .background(
-                    RoundedRectangle(cornerRadius: 10)
-                        .fill(.quinary)
-                )
+                .padding(Theme.Spacing.large)
+                .panelSurface()
                 .alert(
                     "Are you sure you want to sign out of Epic Games?",
                     isPresented: $isEpicSignOutConfirmationAlertPresented
@@ -93,11 +100,8 @@ struct AccountsView: View {
                         isGOGSignOutConfirmationAlertPresented = true
                     }
                 )
-                .padding()
-                .background(
-                    RoundedRectangle(cornerRadius: 10)
-                        .fill(.quinary)
-                )
+                .padding(Theme.Spacing.large)
+                .panelSurface()
                 .alert(
                     "Are you sure you want to sign out of GOG?",
                     isPresented: $isGOGSignOutConfirmationAlertPresented
@@ -112,6 +116,8 @@ struct AccountsView: View {
                     Text("Your installed games stay where they are; you'll need to sign in again to install or update them.")
                 }
             }
+            }
+            .padding(Theme.Spacing.xlarge)
         }
         // The sign-in windows are their own, so this has to notice on its own that an
         // account arrived rather than being told.
@@ -123,8 +129,8 @@ struct AccountsView: View {
         }
         .task { gogUsername = await GOG.refreshUsername() }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding()
         .navigationTitle("Accounts")
+        .standardTitleBar()
         .task(priority: .background) {
             discordRPC.setPresence({
                 var presence: RichPresence = .init()
@@ -152,31 +158,46 @@ extension AccountsView {
         // @State private var isSignOutConfirmationAlertPresented: Bool = false
 
         var body: some View {
-            HStack {
-                image
-                    .resizable()
-                    .aspectRatio(1, contentMode: .fit)
-                    .frame(width: 60)
+            VStack(alignment: .leading, spacing: Theme.Spacing.large) {
+                HStack(spacing: Theme.Spacing.medium) {
+                    image
+                        .font(.system(size: 20, weight: .medium))
+                        .foregroundStyle(.white)
+                        .frame(width: 34, height: 34)
+                        .padding(Theme.Spacing.small)
+                        .background {
+                            Circle().fill(storefront.tint.opacity(0.85))
+                        }
 
-                VStack(alignment: .leading) {
-                    Text(storefront.description)
-                        .font(.title.bold())
+                    VStack(alignment: .leading, spacing: Theme.Spacing.tiny) {
+                        Text(storefront.description)
+                            .font(.system(.title3, weight: .bold))
 
-                    Text(signedInUser != nil ? "Signed in as \"\(signedInUser ?? "Unknown")\"" : "Not signed in")
+                        if let signedInUser {
+                            Text(signedInUser)
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                    }
+
+                    Spacer(minLength: 0)
+
+                    // A badge rather than a sentence: the state is the thing worth seeing
+                    // from across the window, and "Not signed in" as body text beside a
+                    // title read as a caption.
+                    PortalBadge(signedInUser != nil
+                                ? String(localized: "Signed in")
+                                : String(localized: "Signed out"),
+                                systemImage: signedInUser != nil ? "checkmark.circle" : "person.slash",
+                                tint: signedInUser != nil ? .green : .secondary)
                 }
 
                 Group {
                     if signedInUser != nil {
-                        Button("Sign Out", systemImage: "person.slash", action: signOutAction)
-                            .onHover { hovering in
-                                withAnimation {
-                                    isHoveringOverSignOutButton = hovering
-                                }
-                            }
-                            .conditionalTransform(if: isHoveringOverSignOutButton) { view in
-                                view
-                                    .foregroundStyle(.red)
-                            }
+                        Button("Sign Out", systemImage: "person.slash", role: .destructive, action: signOutAction)
+                            .buttonStyle(.portalCompact)
                         /* FIXME: ☹️☹️ swiftui will not let me do this, stupid hierarchy stupid swiftui rules
                          FIXME: for now, it's called in AccountsView
                             .alert(
@@ -192,10 +213,10 @@ extension AccountsView {
                          */
                     } else {
                         Button("Sign In", systemImage: "person", action: signInAction)
+                            .buttonStyle(.portalProminentCompact)
                     }
                 }
-                .clipShape(.capsule)
-                .padding(.leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
     }
@@ -236,14 +257,11 @@ extension Game.Storefront {
         }
     }
 
-    var accountImage: Image {
-        switch self {
-        case .epicGames: Image("EGFaceless")
-        case .gog: Image(systemName: "building.columns")
-        case .steam: Image(systemName: "cloud")
-        case .local: Image(systemName: "folder")
-        }
-    }
+    /// The storefront's own symbol, which is what the sidebar and every badge already use.
+    ///
+    /// Epic's was the `EGFaceless` asset — a dark glyph, which on a dark tinted circle
+    /// rendered as a faint dash.
+    var accountImage: Image { .init(systemName: symbolName) }
 
     @MainActor func presentSignIn() {
         switch self {
@@ -295,13 +313,10 @@ struct StorefrontSignInBanner: View {
                     Button("Sign In", systemImage: "person") {
                         storefront.presentSignIn()
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.portalProminent)
                 }
-                .padding()
-                .background(
-                    RoundedRectangle(cornerRadius: 10)
-                        .fill(.quinary)
-                )
+                .padding(Theme.Spacing.large)
+                .panelSurface()
                 .padding([.horizontal, .top])
                 .transition(.move(edge: .top).combined(with: .opacity))
             }

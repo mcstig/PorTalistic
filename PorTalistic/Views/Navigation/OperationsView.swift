@@ -22,16 +22,8 @@ struct OperationsView: View {
                         VStack {
                             if let prominentOperation = operationManager.queue.first(where: { $0.isExecuting && $0.type.modifiesFiles }) {
                                 ProminentOperationCard(operation: .constant(prominentOperation))
-                                    .frame(width: geometry.size.width, height: geometry.size.height * 0.75)
-                                    .customTransform { view in
-                                        if #available(macOS 26.0, *) {
-                                            view.backgroundExtensionEffect()
-                                        } else {
-                                            view
-                                        }
-                                    }
-                                
-                                Divider()
+                                    .frame(width: geometry.size.width,
+                                           height: min(geometry.size.height * 0.55, 420))
                             }
                             
                             let nonProminentOperations = operationManager.queue.filter({ $0 != operationManager.queue.first(where: { $0.isExecuting && $0.type.modifiesFiles }) })
@@ -43,14 +35,16 @@ struct OperationsView: View {
                                     description: .init("If you attempt to download more than one game at the same time, it'll be added to this queue.")
                                 )
                             } else {
-                                ForEach(nonProminentOperations) { operation in
-                                    OperationCard(operation: .constant(operation))
+                                VStack(spacing: Theme.Spacing.medium) {
+                                    ForEach(nonProminentOperations) { operation in
+                                        OperationCard(operation: .constant(operation))
+                                    }
                                 }
+                                .padding(Theme.Spacing.xlarge)
                             }
                         }
                     }
                 }
-                .padding()
             } else {
                 ContentUnavailableView(
                     "No new operations! 😁",
@@ -62,18 +56,7 @@ struct OperationsView: View {
                 )
             }
         }
-        .ignoresSafeArea(edges: .top)
-        .customTransform { view in
-            if #available(macOS 15.0, *) {
-                view
-                    .toolbar(removing: .title)
-                    .toolbarBackgroundVisibility(.hidden) // dirtyfixes toolbar reappearance on view reload in navigationsplitview
-            } else {
-                view
-                    .toolbarBackground(.hidden) // dirtyfixes toolbar reappearance on view reload in navigationsplitview
-            }
-        }
-        
+        .artworkUnderTitleBar()
         .navigationTitle("Operations")
         .task(priority: .background) {
             discordRPC.setPresence({

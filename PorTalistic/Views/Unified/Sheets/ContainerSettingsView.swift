@@ -204,7 +204,7 @@ struct ContainerSettingsView: View {
                     Button("Cancel", role: .cancel, action: {})
                 } message: {
                     Text("""
-                        To toggle DXVK, Mythic must quit all games currently running in this container.
+                        To toggle DXVK, \(Branding.name) must quit all games currently running in this container.
                         Additionally, D3DMetal will be disabled.
                         
                         Toggling DXVK may impact compatibility positively or negatively.
@@ -290,7 +290,7 @@ struct ContainerSettingsView: View {
                 description: Text("""
                 The container URL provided is invalid.
                 If this container is not stored on an external device,
-                Please remove it from Mythic.
+                Please remove it from \(Branding.name).
                 """)
             )
         }

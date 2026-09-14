@@ -209,7 +209,7 @@ struct EpicGamesGameInstallationView: View {
                 .onAppear(perform: { spawnOptionalPacksFetchTask() })
                 .onChange(of: game, { spawnOptionalPacksFetchTask() })
                 .onChange(of: platform, { spawnOptionalPacksFetchTask() })
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.portalProminent)
             }
             .padding(.top)
         }

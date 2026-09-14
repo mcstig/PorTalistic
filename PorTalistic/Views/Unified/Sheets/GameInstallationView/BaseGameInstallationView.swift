@@ -59,7 +59,7 @@ struct BaseGameInstallationView<Content>: View where Content: View {
                     
                     isPresented = false
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.portalProminent)
             }
             .padding(.top)
         }

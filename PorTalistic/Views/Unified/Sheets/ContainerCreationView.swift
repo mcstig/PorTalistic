@@ -103,7 +103,7 @@ struct ContainerCreationView: View {
                         }
                     }
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.portalProminent)
                 .disabled(isBooting)
                 .disabled(!FileLocations.isWritableFolder(url: containerURL))
                 .disabled((Wine.containerURLs.first(where: { $0.lastPathComponent == containerName}) != nil))

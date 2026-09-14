@@ -60,7 +60,7 @@ extension SparkleUpdater {
                                 .multilineTextAlignment(.center)
                                 .frame(maxWidth: .infinity)
                         }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(.portalProminent)
                         .clipShape(.capsule)
                         
                         if !appcast.isCriticalUpdate {

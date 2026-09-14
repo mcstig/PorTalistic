@@ -78,7 +78,7 @@ struct ListGameCard: View {
             }
 
             GameCard.MenuView(game: $game)
-                .buttonStyle(.borderless)
+                .buttonStyle(.portalQuietCompact)
                 .menuIndicator(.hidden)
                 .fixedSize()
                 .foregroundStyle(.secondary)

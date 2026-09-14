@@ -225,42 +225,220 @@ private struct CardSurface: ViewModifier {
     }
 }
 
-// MARK: - Prominent button
+// MARK: - Buttons
 
-/// The app's one prominent button: brand-tinted, capsule, and the same on every system.
+/// Every button in the app, in three degrees of emphasis.
 ///
-/// Replaces a hard-coded white pill with black text, which was the Play button's previous
-/// look and the one thing on screen that could not be themed, tinted, or read in light mode.
-struct PortalProminentButtonStyle: ButtonStyle {
+/// There were eight different button styles in use — `.borderedProminent` in nineteen
+/// places, `.borderless` in nine, `.bordered`, `.accessoryBar`, `.plain` — which is why the
+/// app looked assembled rather than designed, and why the hover state was invisible: the
+/// system's hover on a bordered button is a two-percent change in a grey fill.
+///
+/// Here the pointer always gets an answer, and the answer is the same everywhere.
+struct PortalButtonStyle: ButtonStyle {
+    enum Emphasis {
+        /// The one thing to do on this screen: the brand gradient. Play, Install, Continue.
+        case prominent
+        /// An ordinary action: solid violet.
+        case standard
+        /// An icon in a row or a toolbar, where a solid block of colour would be noise —
+        /// no fill until the pointer arrives, and then a clear violet one.
+        case quiet
+    }
+
+    var emphasis: Emphasis = .standard
     var isCompact: Bool = false
 
-    @Environment(\.isEnabled) private var isEnabled
-
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(isCompact ? .footnote : .body, weight: .semibold))
-            .foregroundStyle(.white)
-            .padding(.horizontal, isCompact ? Theme.Spacing.medium : Theme.Spacing.large)
-            .padding(.vertical, isCompact ? Theme.Spacing.xsmall + 1 : Theme.Spacing.small)
-            .background {
-                Capsule(style: .continuous)
+        StyleBody(configuration: configuration, emphasis: emphasis, isCompact: isCompact)
+    }
+
+    /// A `ButtonStyle` cannot hold state or read hover itself, so the body is a real view.
+    ///
+    /// Named `StyleBody` rather than `Body` because `ButtonStyle` declares an associated type
+    /// by that name, and a nested `Body` is taken as the witness for it.
+    private struct StyleBody: View {
+        let configuration: Configuration
+        let emphasis: Emphasis
+        let isCompact: Bool
+
+        @State private var isHovering: Bool = false
+        @Environment(\.isEnabled) private var isEnabled
+
+        /// Destructive buttons stay red. The instruction was "all buttons purple", and this
+        /// is the one place worth arguing with: Delete and Sign Out reading exactly like
+        /// Play is how somebody eventually removes a 27GB install by muscle memory.
+        private var isDestructive: Bool { configuration.role == .destructive }
+
+        private var baseColor: Color {
+            isDestructive ? Theme.Palette.destructive : Theme.Palette.brand
+        }
+
+        private var highlightColor: Color {
+            isDestructive ? Theme.Palette.destructiveHighlight : Theme.Palette.brandHighlight
+        }
+
+        private var shape: Capsule { .init(style: .continuous) }
+
+        var body: some View {
+            configuration.label
+                .font(.system(isCompact ? .footnote : .body, weight: .semibold))
+                .foregroundStyle(foreground)
+                .padding(.horizontal, horizontalPadding)
+                .padding(.vertical, isCompact ? Theme.Spacing.xsmall + 1 : Theme.Spacing.small)
+                .background { background }
+                .overlay {
+                    if emphasis != .quiet {
+                        shape.strokeBorder(.white.opacity(isEnabled ? 0.22 : 0.08), lineWidth: 0.8)
+                    }
+                }
+                .contentShape(.capsule)
+                .scaleEffect(configuration.isPressed ? 0.97 : 1)
+                .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+                .animation(Theme.Motion.hover, value: isHovering)
+                .onHover { isHovering = $0 }
+        }
+
+        /// Icon-only buttons get square padding so they come out round rather than oval.
+        private var horizontalPadding: CGFloat {
+            switch emphasis {
+            case .quiet:    isCompact ? Theme.Spacing.small - 2 : Theme.Spacing.small
+            default:        isCompact ? Theme.Spacing.medium : Theme.Spacing.large
+            }
+        }
+
+        private var foreground: Color {
+            guard isEnabled else { return emphasis == .quiet ? .secondary : .white.opacity(0.55) }
+
+            switch emphasis {
+            case .prominent, .standard:
+                return .white
+            case .quiet:
+                // White once there's a violet fill behind it; the ordinary foreground until
+                // then, so a row of icons doesn't read as a row of links.
+                return isHovering ? .white : .primary
+            }
+        }
+
+        @ViewBuilder
+        private var background: some View {
+            switch emphasis {
+            case .prominent:
+                shape
                     .fill(Theme.Palette.portal)
                     .opacity(isEnabled ? 1 : 0.4)
-                    .brightness(configuration.isPressed ? -0.08 : 0)
+                    .brightness(brightnessAdjustment)
+            case .standard:
+                shape
+                    .fill(isHovering && isEnabled ? highlightColor : baseColor)
+                    .opacity(isEnabled ? 1 : 0.4)
+                    .brightness(configuration.isPressed ? -0.06 : 0)
+            case .quiet:
+                shape
+                    .fill(baseColor.opacity(isHovering && isEnabled ? (configuration.isPressed ? 1 : 0.85) : 0))
             }
-            .overlay {
-                Capsule(style: .continuous)
-                    .strokeBorder(.white.opacity(0.22), lineWidth: 0.8)
-            }
-            .contentShape(.capsule)
-            .scaleEffect(configuration.isPressed ? 0.97 : 1)
-            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+        }
+
+        private var brightnessAdjustment: Double {
+            if configuration.isPressed { return -0.07 }
+            return isHovering && isEnabled ? 0.10 : 0
+        }
     }
 }
 
-extension ButtonStyle where Self == PortalProminentButtonStyle {
-    static var portalProminent: PortalProminentButtonStyle { .init() }
-    static var portalProminentCompact: PortalProminentButtonStyle { .init(isCompact: true) }
+extension ButtonStyle where Self == PortalButtonStyle {
+    /// The one thing to do on this screen.
+    static var portalProminent: PortalButtonStyle { .init(emphasis: .prominent) }
+    static var portalProminentCompact: PortalButtonStyle { .init(emphasis: .prominent, isCompact: true) }
+
+    /// An ordinary action.
+    static var portal: PortalButtonStyle { .init(emphasis: .standard) }
+    static var portalCompact: PortalButtonStyle { .init(emphasis: .standard, isCompact: true) }
+
+    /// An icon in a row, a toolbar, or beside a field.
+    static var portalQuiet: PortalButtonStyle { .init(emphasis: .quiet) }
+    static var portalQuietCompact: PortalButtonStyle { .init(emphasis: .quiet, isCompact: true) }
+}
+
+/// A row in a selectable rail — the storefront list in Import Game, and anywhere else a
+/// short list of choices sits beside its content.
+struct PortalRailButtonStyle: ButtonStyle {
+    var isSelected: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        StyleBody(configuration: configuration, isSelected: isSelected)
+    }
+
+    private struct StyleBody: View {
+        let configuration: Configuration
+        let isSelected: Bool
+
+        @State private var isHovering: Bool = false
+
+        private var shape: RoundedRectangle { .init(cornerRadius: Theme.Radius.control, style: .continuous) }
+
+        var body: some View {
+            configuration.label
+                .font(.system(.body, weight: isSelected ? .semibold : .regular))
+                .foregroundStyle(isSelected || isHovering ? .white : .primary)
+                .padding(.horizontal, Theme.Spacing.small)
+                .padding(.vertical, Theme.Spacing.small - 2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background {
+                    shape.fill(Theme.Palette.brand.opacity(fillOpacity))
+                }
+                .contentShape(.rect)
+                .animation(Theme.Motion.hover, value: isHovering)
+                .onHover { isHovering = $0 }
+        }
+
+        private var fillOpacity: Double {
+            if isSelected { return 1 }
+            return isHovering ? (configuration.isPressed ? 0.9 : 0.35) : 0
+        }
+    }
+}
+
+// MARK: - Sheets
+
+extension View {
+    /// The standard ground for a sheet: opaque, faintly violet, focus-independent — and the
+    /// app's button style as the default inside it.
+    ///
+    /// The style is set here rather than at each call site because the sheets are where the
+    /// unstyled `Button`s live — Cancel, Done, Browse…, Sign Out, Refresh Library — and
+    /// there are dozens of them. Set as the environment default, so any button that asks for
+    /// something specific still gets it.
+    func sheetBackground() -> some View {
+        background(Theme.Palette.sheet)
+            .buttonStyle(.portalCompact)
+    }
+
+    /// ``sheetBackground()`` plus a definite size.
+    ///
+    /// The size is not decoration. A sheet that leaves its dimensions to whatever its
+    /// content asks for is at the mercy of what proposes that height — which is how the
+    /// import sheet ended up rendering "Otherwise, browse for a thumbnail file:" as six
+    /// wrapped lines in a seventy-point column, and how its GOG tab ended up laying out its
+    /// contents sixteen hundred points above the top of the sheet.
+    func sheetSurface(minWidth: CGFloat = 680,
+                      idealWidth: CGFloat? = nil,
+                      minHeight: CGFloat = 400,
+                      idealHeight: CGFloat? = nil) -> some View {
+        frame(minWidth: minWidth,
+              idealWidth: idealWidth ?? minWidth,
+              minHeight: minHeight,
+              idealHeight: idealHeight ?? minHeight)
+            .sheetBackground()
+    }
+
+    /// A panel of related controls inside a sheet or a page.
+    func panelSurface(cornerRadius: CGFloat = Theme.Radius.card) -> some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+
+        return background(Theme.Palette.panel, in: shape)
+            .hairlineBorder(shape)
+    }
 }
 
 // MARK: - Badge

@@ -551,6 +551,30 @@ final class Legendary {
         UserDefaults.standard.removeObject(forKey: "epicGamesWebDataStore")
     }
 
+    /// The WebKit data store that Epic's pages share, created once and remembered.
+    ///
+    /// The sign-in window and the Store view each declared
+    /// `@CodableAppStorage("epicGamesWebDataStore") var … = UUID()`, and that property
+    /// wrapper does not write its default back to `UserDefaults` — so with the key unset,
+    /// each view evaluated `UUID()` for itself and got a *different* identifier. Two
+    /// separate cookie jars: you signed in through the sign-in window, and the Store,
+    /// browsing with the other one, still asked you to sign in.
+    ///
+    /// Persisting on first read is what makes them the same jar. ``signOut()`` still removes
+    /// the key, which rotates the identifier and leaves the old store's cookies unreachable.
+    static var webDataStoreIdentifier: UUID {
+        let key = "epicGamesWebDataStore"
+
+        if let stored = try? UserDefaults.standard.decodeAndGet(UUID.self, forKey: key) {
+            return stored
+        }
+
+        let fresh: UUID = .init()
+        _ = try? UserDefaults.standard.encodeAndSet(fresh, forKey: key)
+        log.notice("Created a WebKit data store for Epic's pages.")
+        return fresh
+    }
+
     /**
      Launches games.
      */

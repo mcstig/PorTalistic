@@ -30,7 +30,7 @@ extension SparkleUpdater {
                         Button("Relaunch Now") {
                             dismiss(true)
                         }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(.portalProminent)
                     }
                 }
             )

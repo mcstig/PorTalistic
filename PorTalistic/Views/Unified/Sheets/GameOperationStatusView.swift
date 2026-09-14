@@ -81,7 +81,7 @@ struct GameOperationStatusView: View {
 
             HStack {
                 Button("Close", action: { isPresented = false })
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.portalProminent)
             }
             .frame(maxWidth: 750)
         }

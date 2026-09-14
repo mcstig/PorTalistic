@@ -43,7 +43,7 @@ struct GOGGameImportView: View {
                     .foregroundStyle(.secondary)
 
                 Text("""
-                    GOG games are DRM-free, so Mythic downloads and runs them without anything \
+                    GOG games are DRM-free, so \(Branding.name) downloads and runs them without anything \
                     else having to be running alongside. They're all in your library — install \
                     any of them from there.
                     """)

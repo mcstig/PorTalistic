@@ -204,7 +204,7 @@ struct GameCard: View {
             Spacer(minLength: 0)
 
             GameCard.MenuView(game: $game)
-                .buttonStyle(.borderless)
+                .buttonStyle(.portalQuietCompact)
                 .menuIndicator(.hidden)
                 .fixedSize()
                 .foregroundStyle(.secondary)

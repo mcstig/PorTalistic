@@ -157,7 +157,6 @@ final class EpicWebAuthViewModel: NSObject, ObservableObject, NSWindowDelegate, 
 private struct EpicInterceptorWebView: NSViewRepresentable {
     @ObservedObject var viewModel: EpicWebAuthViewModel
     @Binding var isWebAuthViewBlurred: Bool
-    @CodableAppStorage("epicGamesWebDataStore") var epicGamesWebDataStore: UUID = .init()
 
     let completion: (String) -> Void
 
@@ -197,7 +196,7 @@ private struct EpicInterceptorWebView: NSViewRepresentable {
                     if errorCode == "errors.com.epicgames.oauth.corrective_action_required" {
                         error = String(localized: """
                             Please visit https://www.epicgames.com/id/login/correction on a normal web browser,
-                            and then try signing in through Mythic again.
+                            and then try signing in through \(Branding.name) again.
                             """)
                     }
                     
@@ -233,7 +232,7 @@ private struct EpicInterceptorWebView: NSViewRepresentable {
     func makeNSView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
 
-        config.websiteDataStore = WKWebsiteDataStore(forIdentifier: epicGamesWebDataStore)
+        config.websiteDataStore = WKWebsiteDataStore(forIdentifier: Legendary.webDataStoreIdentifier)
 
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = context.coordinator

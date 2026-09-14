@@ -22,19 +22,28 @@ extension GameCard {
         @State private var thumbnailImportError: Error?
 
         var body: some View {
-            VStack(alignment: .leading) {
-                TextField(text: .init(
+            // The field, then its controls, then its note — each on its own line.
+            //
+            // All of this used to be passed to `TextField` as *label* content: two `Text`s,
+            // an `HStack` with a sentence and a button, and another button. macOS puts a
+            // field's label in a narrow column beside it, so in the import sheet that column
+            // was seventy points wide and "Otherwise, browse for a thumbnail file:" rendered
+            // as four wrapped lines with a button embedded in the middle of them.
+            VStack(alignment: .leading, spacing: Theme.Spacing.small) {
+                Text("Thumbnail")
+                    .font(.system(.subheadline, weight: .semibold))
+
+                TextField("Paste an image URL", text: .init(
                     get: { imageURL?.path ?? .init() },
                     set: { imageURL = .init(string: $0) }
-                )) {
-                    Text("Thumbnail URL")
-                    Text("(optional)")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                ))
+                .textFieldStyle(.roundedBorder)
+                .truncationMode(.tail)
+                .onChange(of: imageURL) {
+                    game._verticalImageURL = $1
+                }
 
-                    HStack {
-                        Text("Otherwise, browse for a thumbnail file: ")
-
+                HStack(spacing: Theme.Spacing.small) {
                         Button("Browse...") {
                             isThumbnailFileImporterPresented = true
                         }
@@ -84,16 +93,19 @@ extension GameCard {
                             )
                         }
 
-                    }
 
-                    Button("Reset image to default") {
+                    Button("Reset", role: .destructive) {
                         imageURL = nil
                     }
+                    .disabled(imageURL == nil)
+
+                    Spacer(minLength: 0)
                 }
-                .truncationMode(.tail)
-                .onChange(of: imageURL) {
-                    game._verticalImageURL = $1
-                }
+
+                Text("Optional. A 3:4 image works best; without one, a colour is derived from the game's name.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
