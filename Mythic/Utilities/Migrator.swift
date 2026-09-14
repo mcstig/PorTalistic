@@ -19,9 +19,196 @@ final class Migrator {
     private static let containerQueue = DispatchQueue(label: "containerMigration")
 
     static func fullMigration() {
+        // First, and synchronously. Everything below it reads data from a path derived from
+        // the app's own name and identifier, and this is the step that moves that data to
+        // where the renamed app will look.
+        v0_6_0.migrate()
+
         v0_1_0.migrate()
         v0_3_2.migrate()
         v0_5_0.migrate()
+    }
+
+    /// The rebrand from Mythic to PorTalistic.
+    ///
+    /// Renaming an app moves its data, because both locations are derived rather than chosen:
+    /// `Bundle.appHome` is `Application Support/<CFBundleDisplayName>` and `Bundle.appContainer`
+    /// is `Library/Containers/<bundle identifier>`. `UserDefaults` is keyed by the identifier
+    /// too. So without this step the renamed app starts up signed out of Epic and GOG, with an
+    /// empty library, no containers, and several gigabytes of engine and runtimes to fetch
+    /// again — while all of it sits on disk under the old name.
+    ///
+    /// Written to be idempotent and to survive being interrupted: every step moves items one
+    /// at a time and skips anything already at the destination, so a half-finished migration
+    /// finishes on the next launch rather than getting stuck or clobbering what arrived first.
+    struct v0_6_0 { // swiftlint:disable:this type_name
+        private init() {}
+
+        static let previousBundleIdentifier = "xyz.blackxfiied.Mythic"
+        static let previousApplicationSupportName = "Mythic"
+
+        static func migrate() {
+            // Defaults first: the container paths that the folder move has to rewrite are
+            // stored in them, and reading them afterwards would read the new, empty domain.
+            migrateUserDefaultsDomain()
+            migrateApplicationSupportFolder()
+            migrateContainerFolder()
+        }
+
+        // MARK: - Defaults
+
+        /// Copy the old bundle identifier's defaults domain into this one.
+        ///
+        /// Only keys this domain doesn't already have, so running twice can't undo a change
+        /// made after the first run — and so a user who has already set something in the
+        /// renamed app keeps their newer value.
+        static func migrateUserDefaultsDomain() {
+            guard Bundle.main.bundleIdentifier != previousBundleIdentifier else { return }
+            guard let previous = UserDefaults.standard.persistentDomain(forName: previousBundleIdentifier),
+                  !previous.isEmpty else { return }
+
+            let current = UserDefaults.standard.persistentDomain(forName: Bundle.main.bundleIdentifier ?? "") ?? [:]
+            var merged = current
+            var copied = 0
+
+            for (key, value) in previous where current[key] == nil {
+                // Apple's own keys travel with the domain and mean nothing here.
+                guard !key.hasPrefix("NS"), !key.hasPrefix("Apple"), !key.hasPrefix("com.apple") else { continue }
+
+                merged[key] = value
+                copied += 1
+            }
+
+            guard copied > 0 else { return }
+
+            UserDefaults.standard.setPersistentDomain(merged, forName: Bundle.main.bundleIdentifier ?? "")
+            log.notice("Rebrand: carried \(copied, privacy: .public) settings over from the previous bundle identifier")
+        }
+
+        // MARK: - Application Support
+
+        /// Move `Application Support/Mythic` to whatever the app is called now.
+        ///
+        /// Deliberately not via `Bundle.appHome`, which *creates* the directory when asked for
+        /// it — touching it first would leave an empty folder at the destination and make this
+        /// look like it had already run.
+        static func migrateApplicationSupportFolder() {
+            guard let applicationSupport = FileLocations.userApplicationSupport else { return }
+
+            let currentName = Bundle.main.infoDictionary?["CFBundleDisplayName"] as? String ?? ""
+            guard !currentName.isEmpty, currentName != previousApplicationSupportName else { return }
+
+            let source = applicationSupport.appending(path: previousApplicationSupportName)
+            let destination = applicationSupport.appending(path: currentName)
+
+            moveContents(of: source, to: destination, describing: "application support")
+        }
+
+        // MARK: - Containers
+
+        /// Move the Wine prefixes, then repair every path that pointed into them.
+        ///
+        /// The order matters and the reason is easy to miss: `Wine.containerURLs` filters out
+        /// any URL whose container no longer exists, so reading or writing that list between
+        /// the move and the rewrite would silently drop every container the user has.
+        static func migrateContainerFolder() {
+            guard let library = FileLocations.userLibrary,
+                  let identifier = Bundle.main.bundleIdentifier,
+                  identifier != previousBundleIdentifier else { return }
+
+            let containers = library.appending(path: "Containers")
+            let source = containers.appending(path: previousBundleIdentifier)
+            let destination = containers.appending(path: identifier)
+
+            guard FileManager.default.fileExists(atPath: source.path) else { return }
+
+            moveContents(of: source, to: destination, describing: "containers")
+
+            rewriteStoredContainerURLs(from: source, to: destination)
+            rewriteContainerProperties(under: destination.appending(path: "Containers"),
+                                      from: source,
+                                      to: destination)
+        }
+
+        /// Rewrite the stored container list, bypassing `Wine.containerURLs`' own filtering.
+        private static func rewriteStoredContainerURLs(from source: URL, to destination: URL) {
+            guard let stored = try? UserDefaults.standard.decodeAndGet([URL].self, forKey: "containerURLs") else { return }
+
+            let rewritten = stored.map { url -> URL in
+                guard url.path.hasPrefix(source.path) else { return url }
+                return .init(filePath: url.path.replacingOccurrences(of: source.path, with: destination.path))
+            }
+
+            guard rewritten != stored else { return }
+
+            try? UserDefaults.standard.encodeAndSet(rewritten, forKey: "containerURLs")
+            log.notice("Rebrand: repointed \(rewritten.count, privacy: .public) container URLs")
+        }
+
+        /// Each container records its own path in `Properties.plist`, which is what
+        /// `Wine.getContainerObject(at:)` decodes. Left alone, every container would come back
+        /// describing where it used to be.
+        private static func rewriteContainerProperties(under root: URL, from source: URL, to destination: URL) {
+            guard let entries = try? FileManager.default.contentsOfDirectory(atPath: root.path) else { return }
+
+            for entry in entries {
+                let plist = root.appending(path: entry).appending(path: "Properties.plist")
+
+                guard let data = try? Data(contentsOf: plist),
+                      var properties = (try? PropertyListSerialization.propertyList(
+                          from: data, format: nil)) as? [String: Any],
+                      let recorded = properties["url"] as? String,
+                      recorded.hasPrefix(source.path) else { continue }
+
+                properties["url"] = recorded.replacingOccurrences(of: source.path, with: destination.path)
+
+                guard let rewritten = try? PropertyListSerialization.data(
+                    fromPropertyList: properties, format: .xml, options: 0) else { continue }
+
+                try? rewritten.write(to: plist, options: .atomic)
+            }
+        }
+
+        // MARK: - Moving
+
+        /// Move everything in `source` into `destination`, one item at a time.
+        ///
+        /// Item-by-item rather than moving the folder, because `destination` may already exist
+        /// — anything that asked for `Bundle.appHome` creates it — and because it makes the
+        /// whole thing resumable. Anything already at the destination is left alone: it is
+        /// either newer or identical, and neither is worth overwriting.
+        private static func moveContents(of source: URL, to destination: URL, describing what: String) {
+            guard FileManager.default.fileExists(atPath: source.path),
+                  let contents = try? FileManager.default.contentsOfDirectory(atPath: source.path),
+                  !contents.isEmpty else { return }
+
+            do {
+                try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+            } catch {
+                log.error("Rebrand: couldn't create the new \(what, privacy: .public) folder: \(error.localizedDescription)")
+                return
+            }
+
+            var moved = 0
+
+            for item in contents {
+                let from = source.appending(path: item)
+                let to = destination.appending(path: item)
+
+                guard !FileManager.default.fileExists(atPath: to.path) else { continue }
+
+                do {
+                    try FileManager.default.moveItem(at: from, to: to)
+                    moved += 1
+                } catch {
+                    log.error("Rebrand: couldn't move \(item, privacy: .public): \(error.localizedDescription)")
+                }
+            }
+
+            if moved > 0 {
+                log.notice("Rebrand: moved \(moved, privacy: .public) items into the new \(what, privacy: .public) folder")
+            }
+        }
     }
 
     struct v0_1_0 { // swiftlint:disable:this type_name

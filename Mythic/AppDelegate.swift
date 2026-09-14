@@ -21,6 +21,16 @@ import FirebaseCrashlytics
 // TODO: modularise
 class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_: Notification) {
+        // First, before anything derives a path from the app's name or identifier.
+        //
+        // Both of the app's data locations are derived rather than chosen — application
+        // support from `CFBundleDisplayName`, the container folder and `UserDefaults` from the
+        // bundle identifier — so the rebrand moved all of it, and this is what follows it
+        // across. It used to run *after* `refreshFromStorefronts()`, which reads Epic's and
+        // GOG's configuration out of application support: harmless while the app's name never
+        // changed, and fatal the moment it did.
+        Migrator.fullMigration()
+
         // The runtime catalogue and the per-game compatibility list, before anything can want
         // them. Cached copy applied synchronously; the refresh happens on its own.
         CompatibilityManifest.bootstrap()
@@ -57,8 +67,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         Task {
             try? await GameDataStore.shared.refreshFromStorefronts()
         }
-
-        Migrator.fullMigration()
 
         // MARK: Start metadata update cycle for Legendary
         Task(priority: .utility) {
