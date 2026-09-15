@@ -137,27 +137,7 @@ extension GameCard {
                     .help(unavailabilityReason ?? String(localized: "Install \(game.description)"))
 
                     .sheet(isPresented: $isInstallSheetPresented) {
-                        switch game {
-                        case let epicGame as EpicGamesGame:
-                            EpicGamesGameInstallationView(
-                                game: .init(get: { epicGame },
-                                            set: { game = $0 }),
-                                isPresented: $isInstallSheetPresented
-                            )
-                            .padding()
-                            .frame(width: 700, height: 380)
-                            .brandedSurface()
-                        case let gogGame as GOGGame:
-                            GOGGameInstallationView(
-                                game: .init(get: { gogGame },
-                                            set: { game = $0 }),
-                                isPresented: $isInstallSheetPresented
-                            )
-                            .padding()
-                            .frame(width: 700, height: 380)
-                            .brandedSurface()
-                        default: EmptyView()
-                        }
+                        GameCard.InstallationSheet(game: $game, isPresented: $isInstallSheetPresented)
                     }
                 }
             }
@@ -339,6 +319,242 @@ extension GameCard {
                  }
                  */
             }
+        }
+    }
+
+    /// Whichever installation sheet this game's storefront needs.
+    ///
+    /// Written out at both install buttons before this existed, which is two places to
+    /// remember when a storefront is added.
+    struct InstallationSheet: View {
+        @Binding var game: Game
+        @Binding var isPresented: Bool
+
+        var body: some View {
+            Group {
+                switch game {
+                case let epicGame as EpicGamesGame:
+                    EpicGamesGameInstallationView(
+                        game: .init(get: { epicGame }, set: { game = $0 }),
+                        isPresented: $isPresented
+                    )
+                case let gogGame as GOGGame:
+                    GOGGameInstallationView(
+                        game: .init(get: { gogGame }, set: { game = $0 }),
+                        isPresented: $isPresented
+                    )
+                default:
+                    EmptyView()
+                }
+            }
+            .padding()
+            .frame(width: 700, height: 380)
+            .brandedSurface()
+        }
+    }
+
+    /// One icon: download when the game isn't installed, play when it is.
+    ///
+    /// Replaces the prominent Play/Install pill that used to sit in the middle of a card's
+    /// artwork, revealed on hover. It moved next to the menu for two reasons: the artwork was
+    /// crowded, and a large button over the art made it ambiguous what clicking the card
+    /// itself would do — which is open the game's page.
+    ///
+    /// The same button appears on that page, so the primary action looks the same wherever it
+    /// is found.
+    struct ActionIconButton: View {
+        @Binding var game: Game
+
+        /// On the game's page this sits on a hero image and needs a surface of its own; on a
+        /// card it belongs to the quiet row of controls beside the title.
+        var isOnHero: Bool = false
+
+        @EnvironmentObject var networkMonitor: NetworkMonitor
+        @Bindable private var operationManager: GameOperationManager = .shared
+
+        /// Set when Play is pressed and cleared a few seconds later.
+        ///
+        /// There is no "the game's window appeared" signal to wait for. `checkIfGameIsRunning`
+        /// is a stub for Windows games — which is all of them that matter here — and the launch
+        /// operation begins executing the instant it is queued, so it cannot tell starting from
+        /// running either. A fixed interval is the honest version of what this shows: *we have
+        /// asked, give it a moment*. It ends early if the launch fails.
+        @State private var isStarting: Bool = false
+
+        @State private var isInstallSheetPresented: Bool = false
+        @State private var isLaunchErrorAlertPresented: Bool = false
+        @State private var launchError: Error?
+        @State private var isEngineInstallationViewPresented: Bool = false
+        @State private var engineInstallationError: Error?
+        @State private var engineInstallationSuccess: Bool = false
+
+        var body: some View {
+            // Branching here rather than attaching all three presentations to one button: an
+            // uninstalled game has no use for the launch alert or the engine installer, and a
+            // card grid pays for every presenter the moment a card appears. `@State` belongs
+            // to this view, not to either branch, so nothing is lost by choosing.
+            if isInstalled {
+                play
+            } else {
+                download
+            }
+        }
+
+        // MARK: Play
+
+        private var play: some View {
+            Button {
+                isStarting = true
+
+                Task(priority: .userInitiated) {
+                    do {
+                        try await game.launch()
+                    } catch {
+                        launchError = error
+                        isLaunchErrorAlertPresented = true
+                        isStarting = false
+                        return
+                    }
+
+                    try? await Task.sleep(for: .seconds(6))
+                    isStarting = false
+                }
+            } label: {
+                icon(systemImage: "play.fill")
+            }
+            .modifier(Chrome(isOnHero: isOnHero, isDimmed: isRunning))
+            .disabled(isStarting || isRunning || isBusy)
+            .help(playHelp)
+            .alert(isPresented: $isLaunchErrorAlertPresented) {
+                if launchError is Engine.NotInstalledError {
+                    return Alert(
+                        title: Text("\(Branding.name) Engine is not installed."),
+                        message: Text("""
+                            It is required to launch this game.
+                            Would you like to install it now?
+                            """),
+                        primaryButton: .default(.init("Install")) {
+                            isEngineInstallationViewPresented = true
+                        },
+                        secondaryButton: .cancel()
+                    )
+                } else {
+                    return Alert(
+                        title: Text("Error launching \"\(game.title)\"."),
+                        message: Text(launchError?.localizedDescription ?? "Unknown Error.")
+                    )
+                }
+            }
+            .sheet(isPresented: $isEngineInstallationViewPresented) {
+                EngineInstallationView(
+                    isPresented: $isEngineInstallationViewPresented,
+                    installationError: $engineInstallationError,
+                    installationComplete: $engineInstallationSuccess
+                )
+                .padding()
+                .brandedSurface()
+            }
+        }
+
+        private var playHelp: String {
+            if isStarting { return String(localized: "Starting \"\(game.title)\"…") }
+            if isRunning { return String(localized: "\"\(game.title)\" is already running.") }
+            if isBusy { return String(localized: "\(game.description) has work outstanding.") }
+            return String(localized: "Play \"\(game.title)\"")
+        }
+
+        // MARK: Download
+
+        private var download: some View {
+            Button {
+                isInstallSheetPresented = true
+            } label: {
+                icon(systemImage: "arrow.down.to.line")
+            }
+            .modifier(Chrome(isOnHero: isOnHero, isDimmed: false))
+            // Epic's reachability check gates Epic. A GOG game has no business being
+            // ungrabbable because epicgames.com didn't answer.
+            .disabled(!networkMonitor.isReachable(for: game.storefront))
+            .disabled(game.storefront == .local)
+            .disabled(isBusy)
+            .help(downloadHelp ?? String(localized: "Install \(game.description)"))
+            .sheet(isPresented: $isInstallSheetPresented) {
+                GameCard.InstallationSheet(game: $game, isPresented: $isInstallSheetPresented)
+            }
+        }
+
+        /// Why the button won't respond — a disabled control that can't say why is
+        /// indistinguishable from a broken one.
+        private var downloadHelp: String? {
+            if isBusy {
+                return String(localized: "\(game.description) already has work queued.")
+            }
+
+            if !networkMonitor.isReachable(for: game.storefront) {
+                return String(localized: "\(Branding.name) can't reach \(game.storefront?.description ?? String(localized: "this storefront")) right now.")
+            }
+
+            if game.storefront == .local {
+                return String(localized: "\(game.description) was added from a folder, so there's nothing to download.")
+            }
+
+            return nil
+        }
+
+        // MARK: Shape
+
+        /// The icon, or a spinner in its place, at the size of the menu button beside it — so
+        /// the row doesn't move when the state changes.
+        private func icon(systemImage: String) -> some View {
+            Group {
+                if isStarting {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Image(systemName: systemImage)
+                        .imageScale(.medium)
+                }
+            }
+            .frame(width: 22, height: 18)
+            .contentShape(.rect)
+        }
+
+        /// Everything that differs between the card's quiet row and the hero's glass pill.
+        private struct Chrome: ViewModifier {
+            let isOnHero: Bool
+            let isDimmed: Bool
+
+            func body(content: Content) -> some View {
+                if isOnHero {
+                    content
+                        .buttonStyle(.portalQuietCompact)
+                        .foregroundStyle(isDimmed
+                                         ? AnyShapeStyle(HierarchicalShapeStyle.tertiary)
+                                         : AnyShapeStyle(Color.white))
+                        .padding(Theme.Spacing.small)
+                        .floatingCapsule(interactive: true)
+                } else {
+                    content
+                        .buttonStyle(.portalQuietCompact)
+                        .foregroundStyle(isDimmed
+                                         ? AnyShapeStyle(HierarchicalShapeStyle.tertiary)
+                                         : AnyShapeStyle(HierarchicalShapeStyle.secondary))
+                }
+            }
+        }
+
+        // MARK: State
+
+        private var isInstalled: Bool { game.isInstalled }
+
+        /// A launch already in flight. Pressing again would start a second copy.
+        private var isRunning: Bool {
+            !isStarting && operationManager.queue.contains { $0.game == game && $0.type == .launch }
+        }
+
+        /// Work that touches the game's files, which Play and Install both have to wait for.
+        private var isBusy: Bool {
+            operationManager.queue.contains { $0.game == game && $0.type.modifiesFiles }
         }
     }
 

@@ -140,7 +140,9 @@ private struct GameDetailContent: View {
                 .minimumScaleFactor(0.6)
 
             HStack(spacing: Theme.Spacing.medium) {
-                GameCard.PrimaryActionButton(game: $game, isCompact: false)
+                // The same control as a card's, so the primary action looks the same
+                // wherever it is found.
+                GameCard.ActionIconButton(game: $game, isOnHero: true)
 
                 GameCard.MenuView(game: $game,
                                   isSettingsPresented: $isSettingsPresented,

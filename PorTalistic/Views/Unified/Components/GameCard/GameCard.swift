@@ -218,16 +218,10 @@ struct GameCard: View {
 
             Spacer(minLength: 0)
 
-            // Hidden when the pointer is elsewhere, but never *removed*.
-            //
-            // `if isHovering { … }` here was a real bug, not a stylistic choice: the Install
-            // button owns the `@State` behind its own installation sheet, so presenting that
-            // sheet covered the card, hover went false, the button left the view hierarchy,
-            // its state was destroyed and the sheet closed by itself a moment after opening.
-            // The Play button's launch-error alert and its "install the engine first" sheet
-            // were one failed launch away from disappearing the same way.
-            GameCard.OperationOrAction(game: boundGame)
-                .revealedOnHover(isHovering)
+            // Progress only, and not hidden behind hover: a download you can't see the state
+            // of without pointing at it is worse than no indicator. The primary action moved
+            // to the caption row — see `GameCard.ActionIconButton`.
+            GameCard.OperationStatus(game: boundGame)
 
             Spacer(minLength: 0)
         }
@@ -256,6 +250,11 @@ struct GameCard: View {
 
             Spacer(minLength: 0)
 
+            // Download or play, beside the menu rather than over the artwork. Always visible:
+            // it is the one thing on a card someone came to press, and hiding it behind hover
+            // is what made the artwork ambiguous about what a click on the card itself does.
+            GameCard.ActionIconButton(game: boundGame)
+
             // `isPopulated` rather than `if isHovering { … }`: same view, same identity, same
             // size, so nothing shifts — but the four command views are only built while the
             // pointer is on the card, which is the only time this can be opened. Built
@@ -278,13 +277,13 @@ struct GameCard: View {
 // MARK: - Queue-dependent pieces
 
 extension GameCard {
-    /// The running operation's progress, or the Play/Install button when nothing is running.
+    /// What this game is doing, over its artwork — and nothing at all when it isn't.
     ///
     /// A view of its own so that reading the operation queue invalidates *this* and not the
     /// whole card. `GameCard` used to hold a `@Bindable GameOperationManager` and ask it for
     /// the game's operation twice per body, so every progress tick of any download in the
     /// queue redrew every card in the grid — artwork, placeholder gradients and all.
-    struct OperationOrAction: View {
+    struct OperationStatus: View {
         @Binding var game: Game
 
         @Bindable private var operationManager: GameOperationManager = .shared
@@ -294,8 +293,6 @@ extension GameCard {
                 OperationCard.StatusView(operation: .constant(operation), withLabel: false)
                     .padding(Theme.Spacing.small)
                     .floatingCapsule()
-            } else {
-                GameCard.PrimaryActionButton(game: $game)
             }
         }
     }
