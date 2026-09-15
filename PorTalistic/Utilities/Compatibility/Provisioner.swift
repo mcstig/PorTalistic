@@ -389,16 +389,6 @@ final class Provisioner {
 
         pendingReverts[container.url] = await apply(profile.settings, to: container)
 
-        // Before anything is started in it. `wineserver` reads WINEMSYNC once, at startup,
-        // and serves the prefix long after the game that started it exits — so a launch that
-        // wants msync, into a prefix whose server came up without it, dies on the spot with
-        // `err:msync:msync_init Failed to open msync shared memory file` and no window.
-        //
-        // Per-game settings are what make two launches in one container disagree about msync
-        // in the first place, so this belongs here, next to where they are applied.
-        await Wine.ensureServerMatches(msync: profile.settings.msync ?? container.settings.msync,
-                                       forContainerAtURL: container.url)
-
         var reasons = profile.reasons
 
         // Said out loud, because the game is now running on something other than what its

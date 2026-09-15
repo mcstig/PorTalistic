@@ -316,67 +316,16 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
         return !(result.standardError?.contains("version mismatch") ?? false)
     }
 
-    /// What the `wineserver` currently serving each prefix was started with, as far as this
-    /// process knows. Absent means "started before we were, so unknowable".
-    private nonisolated(unsafe) static var serverMsync: [URL: Bool] = .init()
-    private static let serverMsyncLock: NSLock = .init()
-
-    /// Makes sure the prefix's `wineserver` was started with the msync setting this launch
-    /// needs, shutting it down if it wasn't.
-    ///
-    /// A wineserver reads `WINEMSYNC` once, at startup, and then serves the prefix for as
-    /// long as anything holds it — which outlives the game that started it. So a launch that
-    /// wants msync, into a prefix whose server came up without it, dies immediately:
-    ///
-    /// ```
-    /// err:msync:msync_init Failed to open msync shared memory file; make sure no stale
-    /// wineserver instances are running without WINEMSYNC.
-    /// ```
-    ///
-    /// — a three-line log, no window, and nothing that looks like an error to the person who
-    /// pressed Play. That is exactly what stopped Blades of Time from opening: its profile
-    /// asks for msync, and the server still alive in its container had been started for a
-    /// game that didn't.
-    ///
-    /// Per-game settings are what make this reachable at all. One container serves every game
-    /// on its runtime and each launch overlays its own settings, so two games in the same
-    /// prefix can disagree about msync — and the second one loses.
-    ///
-    /// The first launch into a container in this session shuts the server down regardless: a
-    /// server that predates this process was started with settings nobody here can ask about.
-    static func ensureServerMatches(msync: Bool, forContainerAtURL containerURL: URL) async {
-        let known = knownServerMsync(forContainerAtURL: containerURL)
-
-        if known == msync { return }
-
-        if let known {
-            log.notice("""
-                \(containerURL.lastPathComponent, privacy: .public)'s wineserver was started                 with msync \(known ? "on" : "off", privacy: .public) and this launch wants it                 \(msync ? "on" : "off"); shutting it down
-                """)
-        }
-
-        await shutdownPrefix(at: containerURL)
-        rememberServerMsync(msync, forContainerAtURL: containerURL)
-    }
-
-    /// The locked sections, kept out of the `async` function above.
-    ///
-    /// `NSLock.lock()` is unavailable from an asynchronous context — it blocks a cooperative
-    /// thread rather than suspending — so taking it has to happen inside a plain function
-    /// that async code calls. Same arrangement as `ArtworkCache`, for the same reason.
-    private static func knownServerMsync(forContainerAtURL containerURL: URL) -> Bool? {
-        serverMsyncLock.lock()
-        defer { serverMsyncLock.unlock() }
-
-        return serverMsync[containerURL]
-    }
-
-    private static func rememberServerMsync(_ msync: Bool, forContainerAtURL containerURL: URL) {
-        serverMsyncLock.lock()
-        defer { serverMsyncLock.unlock() }
-
-        serverMsync[containerURL] = msync
-    }
+    // `ensureServerMatches` used to live here: it shut a container's wineserver down before a
+    // launch whose msync differed from the one it was started with. Two things were wrong
+    // with it. No profile sets msync at all — only a curated manifest entry could, and none
+    // does — so the divergence it guarded against isn't reachable; and it ran `wineserver -k`
+    // for every installed runtime, eight seconds apiece, on the first launch into a container
+    // in a session, which is a long time to stand in front of a game that hasn't started yet.
+    //
+    // The real way a prefix ends up with a server that has no msync is a wine invocation
+    // that builds its own environment instead of the container's. `winetricks` was doing
+    // exactly that; see `runWinetricks`.
 
     /// Shuts down whichever `wineserver` is holding this prefix, whatever runtime it came from.
     ///
@@ -1109,21 +1058,48 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
         process.executableURL = winetricksURL
         process.arguments = ["--force", verb]
         process.currentDirectoryURL = containerURL
-        process.environment = [
-            "HOME": homeDirectory,
-            "USER": NSUserName(),
-            "XDG_CACHE_HOME": cacheDirectory,
-            "WINEPREFIX": containerURL.path,
-            "WINE": Engine.wineExecutableURL.path,
-            "WINE64": Engine.wineExecutableURL.path,  // FIXME: should follow the container's runtime
-            "WINESERVER": wineBinDirectory.appending(path: "wineserver").path,
-            "WINEARCH": "win64",
-            "PATH": "\(wineBinDirectory.path):/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin",
-            "DYLD_FALLBACK_LIBRARY_PATH": "\(wineLibDirectory.path):/usr/lib",
-            "WINETRICKS_WINE_IS_64BIT": "true",
-            "DISPLAY": "",  // Disable X11 display requirements
-            "TERM": "xterm-256color"
-        ]
+
+        // Built on the container's own environment, not instead of it.
+        //
+        // This used to be a hand-written dictionary, and it left out `WINEMSYNC`. A
+        // `wineserver` reads that once, at startup, and then serves the prefix long after
+        // whatever started it has gone — so one winetricks run left a server behind with
+        // msync off, and every game launched in that container afterwards died immediately
+        // on
+        //
+        //     err:msync:msync_init Failed to open msync shared memory file
+        //
+        // with no window and a three-line log. Blades of Time was exactly this.
+        //
+        // It also hard-coded the bundled engine as `WINE`, `WINE64` and `WINESERVER` — the
+        // FIXME that used to sit on that line — so a verb installed into a Wine 11 prefix
+        // was installed by Wine 7.7, into a prefix its own server then refused on a protocol
+        // version mismatch.
+        let runtimeInvocation = runtimeInvocation(forContainerAtURL: containerURL)
+        let runtimeBinDirectory = runtimeInvocation.executableURL.deletingLastPathComponent()
+
+        var environment = (try? assembleEnvironmentVariables(forContainerAtURL: containerURL)) ?? .init()
+        environment.merge(runtimeInvocation.environment, uniquingKeysWith: { $1 })
+
+        environment["HOME"] = homeDirectory
+        environment["USER"] = NSUserName()
+        environment["XDG_CACHE_HOME"] = cacheDirectory
+        environment["WINEPREFIX"] = containerURL.path
+        environment["WINE"] = runtimeInvocation.executableURL.path
+        environment["WINE64"] = runtimeInvocation.executableURL.path
+        environment["WINESERVER"] = runtimeBinDirectory.appending(path: "wineserver").path
+        environment["WINEARCH"] = "win64"
+        environment["PATH"] = "\(runtimeBinDirectory.path):\(wineBinDirectory.path):/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin"
+        environment["WINETRICKS_WINE_IS_64BIT"] = "true"
+        environment["DISPLAY"] = ""       // no X11 display requirements
+        environment["TERM"] = "xterm-256color"
+
+        // Only if the container's runtime didn't say where its own libraries are.
+        if environment["DYLD_FALLBACK_LIBRARY_PATH"] == nil {
+            environment["DYLD_FALLBACK_LIBRARY_PATH"] = "\(wineLibDirectory.path):/usr/lib"
+        }
+
+        process.environment = environment
         
         log.info("\(formatLog(containerURL: containerURL, description: "Running winetricks verb: \(verb)"))")
         
