@@ -345,9 +345,7 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
     /// The first launch into a container in this session shuts the server down regardless: a
     /// server that predates this process was started with settings nobody here can ask about.
     static func ensureServerMatches(msync: Bool, forContainerAtURL containerURL: URL) async {
-        serverMsyncLock.lock()
-        let known = serverMsync[containerURL]
-        serverMsyncLock.unlock()
+        let known = knownServerMsync(forContainerAtURL: containerURL)
 
         if known == msync { return }
 
@@ -358,10 +356,26 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
         }
 
         await shutdownPrefix(at: containerURL)
+        rememberServerMsync(msync, forContainerAtURL: containerURL)
+    }
 
+    /// The locked sections, kept out of the `async` function above.
+    ///
+    /// `NSLock.lock()` is unavailable from an asynchronous context — it blocks a cooperative
+    /// thread rather than suspending — so taking it has to happen inside a plain function
+    /// that async code calls. Same arrangement as `ArtworkCache`, for the same reason.
+    private static func knownServerMsync(forContainerAtURL containerURL: URL) -> Bool? {
         serverMsyncLock.lock()
+        defer { serverMsyncLock.unlock() }
+
+        return serverMsync[containerURL]
+    }
+
+    private static func rememberServerMsync(_ msync: Bool, forContainerAtURL containerURL: URL) {
+        serverMsyncLock.lock()
+        defer { serverMsyncLock.unlock() }
+
         serverMsync[containerURL] = msync
-        serverMsyncLock.unlock()
     }
 
     /// Shuts down whichever `wineserver` is holding this prefix, whatever runtime it came from.
