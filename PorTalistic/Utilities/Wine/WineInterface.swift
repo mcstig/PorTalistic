@@ -316,6 +316,54 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
         return !(result.standardError?.contains("version mismatch") ?? false)
     }
 
+    /// What the `wineserver` currently serving each prefix was started with, as far as this
+    /// process knows. Absent means "started before we were, so unknowable".
+    private nonisolated(unsafe) static var serverMsync: [URL: Bool] = .init()
+    private static let serverMsyncLock: NSLock = .init()
+
+    /// Makes sure the prefix's `wineserver` was started with the msync setting this launch
+    /// needs, shutting it down if it wasn't.
+    ///
+    /// A wineserver reads `WINEMSYNC` once, at startup, and then serves the prefix for as
+    /// long as anything holds it — which outlives the game that started it. So a launch that
+    /// wants msync, into a prefix whose server came up without it, dies immediately:
+    ///
+    /// ```
+    /// err:msync:msync_init Failed to open msync shared memory file; make sure no stale
+    /// wineserver instances are running without WINEMSYNC.
+    /// ```
+    ///
+    /// — a three-line log, no window, and nothing that looks like an error to the person who
+    /// pressed Play. That is exactly what stopped Blades of Time from opening: its profile
+    /// asks for msync, and the server still alive in its container had been started for a
+    /// game that didn't.
+    ///
+    /// Per-game settings are what make this reachable at all. One container serves every game
+    /// on its runtime and each launch overlays its own settings, so two games in the same
+    /// prefix can disagree about msync — and the second one loses.
+    ///
+    /// The first launch into a container in this session shuts the server down regardless: a
+    /// server that predates this process was started with settings nobody here can ask about.
+    static func ensureServerMatches(msync: Bool, forContainerAtURL containerURL: URL) async {
+        serverMsyncLock.lock()
+        let known = serverMsync[containerURL]
+        serverMsyncLock.unlock()
+
+        if known == msync { return }
+
+        if let known {
+            log.notice("""
+                \(containerURL.lastPathComponent, privacy: .public)'s wineserver was started                 with msync \(known ? "on" : "off", privacy: .public) and this launch wants it                 \(msync ? "on" : "off"); shutting it down
+                """)
+        }
+
+        await shutdownPrefix(at: containerURL)
+
+        serverMsyncLock.lock()
+        serverMsync[containerURL] = msync
+        serverMsyncLock.unlock()
+    }
+
     /// Shuts down whichever `wineserver` is holding this prefix, whatever runtime it came from.
     ///
     /// The runtime that started the server may no longer be the container's selected one —

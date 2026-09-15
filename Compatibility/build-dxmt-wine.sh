@@ -281,7 +281,7 @@ mkdir -p "$BUILD"
 # first run's was arm64, and the ones after it had no freetype, so their Makefiles would
 # quietly produce a Wine with no glyph rasterizer. The marker changes whenever the answer
 # changes, and a directory without the current one is thrown away.
-if [[ -f "$BUILD/Makefile" && ! -f "$BUILD/.configured-x86_64-freetype" ]]; then
+if [[ -f "$BUILD/Makefile" && ! -f "$BUILD/.configured-x86_64-freetype-soname" ]]; then
     warn "build directory was configured by an older version of this script; starting it over"
     rm -rf "$BUILD"
     mkdir -p "$BUILD"
@@ -292,8 +292,27 @@ if [[ -f "$BUILD/Makefile" ]]; then
 else
     (
         cd "$BUILD"
+
+        # What `dlopen` is handed for freetype, stated rather than detected.
+        #
+        # Wine works the name out by parsing `otool -L` and trimming at the last `/`. The
+        # dylib built above has a bare install name with no `/` in it, so the trim did
+        # nothing and configure recorded the whole otool line:
+        #
+        #     SONAME_LIBFREETYPE "\tlibfreetype.6.dylib (compatibility version 27.0.0, ...)"
+        #
+        # which cannot resolve, ever, whatever DYLD_FALLBACK_LIBRARY_PATH says. That is why
+        # the runtime kept printing "Wine cannot find the FreeType font library" with the
+        # library sitting right beside it.
+        #
+        # `@loader_path` rather than a bare name: `win32u.so` lives at
+        # `lib/wine/x86_64-unix/`, so three levels up is the runtime root and `Frameworks` is
+        # where the packaging stage below puts the dylib. dyld honours `@loader_path` in a
+        # `dlopen` path, so this needs no environment variable and there is nothing for dyld
+        # to strip on the way through someone else's launcher.
         # i386 as well as x86_64: a 32-bit PE path is most of the older library, and the
         # engines that work here have one. DXMT itself is 64-bit only.
+        ac_cv_lib_soname_freetype="@loader_path/../../../Frameworks/libfreetype.6.dylib" \
         "$SRC/configure" \
             --prefix="$PREFIX" \
             --host=x86_64-apple-darwin \
@@ -303,7 +322,7 @@ else
             --without-oss \
             --without-v4l2
     ) || die "configure failed — the tail of $BUILD/config.log says why"
-    touch "$BUILD/.configured-x86_64-freetype"
+    touch "$BUILD/.configured-x86_64-freetype-soname"
     ok "configured for x86_64"
 fi
 
@@ -424,6 +443,19 @@ if [[ -f "$PREFIX/Frameworks/libfreetype.6.dylib" ]]; then
     ok "libfreetype.6.dylib is where dlopen will look"
 else
     die "no Frameworks/libfreetype.6.dylib — games would render no text"
+fi
+
+# And that it is asked for by that path. The first build with fonts got this wrong in a way
+# nothing else noticed: the name compiled in was an entire `otool -L` line.
+FT_SONAME="@loader_path/../../../Frameworks/libfreetype.6.dylib"
+if grep -qa -- "$FT_SONAME" "$PREFIX/lib/wine/x86_64-unix/win32u.so"; then
+    ok "win32u.so asks dlopen for $FT_SONAME"
+else
+    die "win32u.so does not name freetype as $FT_SONAME — delete $BUILD and rebuild"
+fi
+
+if grep -qa "compatibility version" "$PREFIX/lib/wine/x86_64-unix/win32u.so"; then
+    warn "an otool line is still compiled into win32u.so; the soname override may not have taken"
 fi
 
 if DYLD_FALLBACK_LIBRARY_PATH="$PREFIX/Frameworks:/usr/local/lib:/usr/lib" \
