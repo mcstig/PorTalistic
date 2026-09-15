@@ -14,13 +14,20 @@ import SwiftUI
 /**
  One game as a row.
 
- The previous row drew the game's 16:9 art full-bleed behind the text at a 30-point blur,
- then doubled its own height on hover and un-blurred — so moving the pointer down a list
- made every row below it jump, twice. It also flipped its text between primary and white
- depending on whether an image had finished loading.
+ Mythic's rows drew the game's art full-bleed behind the text, which looked good, and paid
+ for it three ways: a 30-point blur on every visible row, a height that doubled on hover — so
+ moving the pointer down a list made every row below it jump, twice — and text that flipped
+ between primary and white depending on whether the image had finished loading.
 
- A row is a row: a thumbnail, the name, what it is, and the one thing you'd want to do to
- it. Constant height, so the list holds still under the pointer.
+ The look is worth keeping; those three things are not. So the art bleeds in from the left
+ behind the text, faded out by a gradient mask well before it reaches the title: no blur, no
+ second image (the mask and the thumbnail draw the same cached picture), no movement, and
+ text that is one colour because the art never gets near it. Hover brightens the wash and
+ fills the row's surface, and nothing changes size.
+
+ The thumbnail is 16:9 and prefers the game's landscape art, which is the other half of why
+ the old row looked better than the rebuilt one: a 44-point portrait frame was cropping the
+ sides off box art that is mostly landscape, so a list of games was a list of centre strips.
  */
 struct ListGameCard: View {
     /// The game, not a binding to it — see ``GameCard/game``. A view holding a `Binding`
@@ -37,6 +44,15 @@ struct ListGameCard: View {
 
     static let defaultHeight: CGFloat = 76
 
+    /// The art this row draws, in both places it draws it.
+    ///
+    /// Landscape first: a row is a wide shape and most storefront box art is wide. One URL
+    /// for the thumbnail *and* the backdrop on purpose — they then share a single cached,
+    /// decoded image, so the wash costs a second draw rather than a second download.
+    private var artworkURL: URL? { game.horizontalImageURL ?? game.verticalImageURL }
+
+    private var shape: RoundedRectangle { .init(cornerRadius: Theme.Radius.tile, style: .continuous) }
+
     var body: some View {
 #if DEBUG
         RenderCounter.record("ListGameCard")
@@ -45,10 +61,10 @@ struct ListGameCard: View {
             NavigationLink(value: GameRoute(gameID: game.id)) {
                 HStack(spacing: Theme.Spacing.large) {
                     GameArtwork(game: game,
-                                url: game.verticalImageURL,
-                                orientation: .vertical,
+                                url: artworkURL,
+                                orientation: .horizontal,
                                 cornerRadius: Theme.Radius.control)
-                        .frame(width: 44, height: 58)
+                        .frame(width: 100, height: 56)
 
                     VStack(alignment: .leading, spacing: Theme.Spacing.xsmall) {
                         Text(game.title)
@@ -89,8 +105,29 @@ struct ListGameCard: View {
         .padding(.horizontal, Theme.Spacing.large)
         .frame(height: Self.defaultHeight)
         .background {
-            RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous)
-                .fill(isHovering ? AnyShapeStyle(Theme.Palette.surface) : AnyShapeStyle(Color.clear))
+            ZStack {
+                shape.fill(isHovering ? AnyShapeStyle(Theme.Palette.surface) : AnyShapeStyle(Color.clear))
+
+                // The same picture as the thumbnail, bled across the row and faded out by a
+                // gradient mask before it reaches the title. A mask rather than the old blur:
+                // it is one compositing pass instead of a 30-point Gaussian per visible row,
+                // and it keeps the text on a flat background, which is what lets the title be
+                // one colour rather than changing when the image arrives.
+                GameArtwork(game: game, url: artworkURL, orientation: .horizontal, cornerRadius: 0)
+                    .mask(
+                        LinearGradient(
+                            stops: [
+                                .init(color: .black.opacity(isHovering ? 0.34 : 0.20), location: 0),
+                                .init(color: .black.opacity(isHovering ? 0.10 : 0.05), location: 0.35),
+                                .init(color: .clear, location: 0.62)
+                            ],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                    .allowsHitTesting(false)
+            }
+            .clipShape(shape)
         }
         .contentShape(.rect(cornerRadius: Theme.Radius.tile))
         .onHover { hovering in
@@ -107,7 +144,7 @@ struct ListGameCard: View {
 }
 
 extension ListGameCard {
-    /// The running operation's progress, or the Play/Install button when nothing is running.
+    /// The running operation's progress, or the action button when nothing is running.
     struct TrailingControl: View {
         @Binding var game: Game
         var isHovering: Bool
@@ -119,8 +156,9 @@ extension ListGameCard {
                 OperationCard.StatusView(operation: .constant(operation))
                     .frame(maxWidth: 220, alignment: .trailing)
             } else {
-                GameCard.PrimaryActionButton(game: $game)
-                    .opacity(isHovering ? 1 : 0.75)
+                // The same icon as a card's and the game page's, rather than a labelled
+                // pill — one primary action with one appearance wherever it is found.
+                GameCard.ActionIconButton(game: $game)
             }
         }
     }
