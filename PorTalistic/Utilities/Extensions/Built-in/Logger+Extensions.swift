@@ -57,9 +57,12 @@ enum RenderCounter {
     /// problem, and would not be measuring what it claims to.
     private static let isEnabled: Bool = UserDefaults.standard.bool(forKey: "logRenderCounts")
 
+    /// `nonisolated(unsafe)` with a lock around every access, which is the same arrangement
+    /// the update-availability memos use: this is read and written from view bodies on the
+    /// main actor, and the lock is there for the case where it isn't.
     private static let lock: NSLock = .init()
-    private static var counts: [String: Int] = .init()
-    private static var lastFlush: Date = .now
+    private nonisolated(unsafe) static var counts: [String: Int] = .init()
+    private nonisolated(unsafe) static var lastFlush: Date = .now
 
     static func record(_ name: String) {
         guard isEnabled else { return }

@@ -103,7 +103,7 @@ final class ArtworkCache: @unchecked Sendable {
         // A custom thumbnail the user browsed for is a file on disk, and round-tripping one
         // through `URLSession` to read it is both slower and easier to get wrong.
         if url.isFileURL {
-            return CGImageSourceCreateWithURL(url as CFURL, nil).flatMap(downsampled(from:))
+            return CGImageSourceCreateWithURL(url as CFURL, nil).flatMap { downsampled(from: $0) }
                 ?? NSImage(contentsOf: url)
         }
 
@@ -115,7 +115,7 @@ final class ArtworkCache: @unchecked Sendable {
                 return nil
             }
 
-            return CGImageSourceCreateWithData(data as CFData, nil).flatMap(downsampled(from:))
+            return CGImageSourceCreateWithData(data as CFData, nil).flatMap { downsampled(from: $0) }
                 ?? NSImage(data: data)
         } catch {
             log.debug("Unable to load artwork: \(error.localizedDescription, privacy: .public)")

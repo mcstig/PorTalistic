@@ -53,7 +53,9 @@ import OSLog
     /// games once before the sort rather than per comparison.
     func library(inStorefront storefront: Game.Storefront?) -> [Game] {
         let operating: Set<Game.ID> = .init(
-            GameOperationManager.shared.queue.lazy.filter(\.isExecuting).map(\.game.id)
+            GameOperationManager.shared.queue.lazy
+                .filter { $0.isExecuting }
+                .map { $0.game.id }
         )
 
         return GameDataStore.shared.library

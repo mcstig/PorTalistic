@@ -16,7 +16,7 @@ import SwiftUI
 /// Its own observable object so that a hover change reaches the cards without going through
 /// the grid: as `@State` on the grid, every crossing re-ran the grid's body, and its body
 /// filters and sorts the whole library.
-@Observable @MainActor final class CardHoverState {
+@Observable final class CardHoverState {
     var gameID: Game.ID?
 }
 
