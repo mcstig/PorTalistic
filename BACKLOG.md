@@ -331,6 +331,14 @@ carried the look into most of the app for free. What it did not reach:
 
 Also outstanding from this round:
 
+  - **A container called "Steam" now holds Epic games.** Containers are shared per
+    runtime, matched by `settings.runtimeID` and not by name, so the prefix built
+    for the Steam client is simply *the* Wine Stable 11.0 container now — Horizon
+    Chase Turbo is in it, and the game detail page says "Steam" under Container.
+    `Wine.Container.name` is a persisted field independent of the directory, so
+    renaming it is display-only and moves nothing. Left alone because it is the
+    user's container to name.
+
   - **`Button("Cancel", role: .cancel)` comes out solid violet** like everything
     else, because the sheet sets one default style for every unstyled button in it.
     That is what "all buttons purple" asks for, but Cancel competing with Done for
