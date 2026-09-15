@@ -249,7 +249,7 @@ struct GameShelf: View {
                     ScrollView(.horizontal) {
                         LazyHStack(alignment: .top, spacing: Theme.Grid.spacing) {
                             ForEach(games) { game in
-                                GameCard(game: .constant(game),
+                                GameCard(game: game,
                                          isCompact: true,
                                          hover: hover,
                                          glowRadius: glowRadius,
@@ -263,6 +263,7 @@ struct GameShelf: View {
                         .padding(.vertical, Theme.Spacing.small)
                     }
                     .scrollIndicators(.hidden)
+                    .modifier(ScrollPhaseReporter(hover: hover))
                     .onHover { if !$0 { hover.gameID = nil } }
                 }
             }

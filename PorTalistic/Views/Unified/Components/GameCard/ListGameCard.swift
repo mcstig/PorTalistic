@@ -23,7 +23,13 @@ import SwiftUI
  it. Constant height, so the list holds still under the pointer.
  */
 struct ListGameCard: View {
-    @Binding var game: Game
+    /// The game, not a binding to it — see ``GameCard/game``. A view holding a `Binding`
+    /// cannot be skipped, so every row re-ran its body on every scroll tick.
+    let game: Game
+
+    /// For the children that still take a `Binding<Game>`. `Game` is a class, so this
+    /// writes to the same object.
+    private var boundGame: Binding<Game> { .constant(game) }
 
     @State private var isHovering: Bool = false
     @State private var isSettingsPresented: Bool = false
@@ -52,7 +58,7 @@ struct ListGameCard: View {
                             .foregroundStyle(.primary)
 
                         HStack(spacing: Theme.Spacing.xsmall) {
-                            GameCard.SubscriptedInfoView(game: $game)
+                            GameCard.SubscriptedInfoView(game: boundGame)
 
                             if case .uninstalled = game.installationState {
                                 PortalBadge(String(localized: "Not installed"))
@@ -70,9 +76,9 @@ struct ListGameCard: View {
             // the whole row with its artwork. This row used to hold the operation manager
             // itself, which meant one download redrew every row in the list several times a
             // second.
-            TrailingControl(game: $game, isHovering: isHovering)
+            TrailingControl(game: boundGame, isHovering: isHovering)
 
-            GameCard.MenuView(game: $game,
+            GameCard.MenuView(game: boundGame,
                               isSettingsPresented: $isSettingsPresented,
                               isUninstallPresented: $isUninstallPresented)
                 .buttonStyle(.portalQuietCompact)
@@ -91,12 +97,12 @@ struct ListGameCard: View {
             withAnimation(Theme.Motion.hover) { isHovering = hovering }
         }
         .contextMenu {
-            GameCard.ContextMenuItems(game: $game,
+            GameCard.ContextMenuItems(game: boundGame,
                                       isSettingsPresented: $isSettingsPresented,
                                       isUninstallPresented: $isUninstallPresented)
         }
-        .gameSettingsSheet(game: $game, isPresented: $isSettingsPresented)
-        .gameUninstallSheet(game: $game, isPresented: $isUninstallPresented)
+        .gameSettingsSheet(game: boundGame, isPresented: $isSettingsPresented)
+        .gameUninstallSheet(game: boundGame, isPresented: $isUninstallPresented)
     }
 }
 
@@ -124,7 +130,7 @@ extension ListGameCard {
     NavigationStack {
         LazyVStack(spacing: Theme.Spacing.small) {
             ForEach(0..<4, id: \.self) { _ in
-                ListGameCard(game: .constant(placeholderGame(type: Game.self)))
+                ListGameCard(game: placeholderGame(type: Game.self))
             }
         }
         .padding()

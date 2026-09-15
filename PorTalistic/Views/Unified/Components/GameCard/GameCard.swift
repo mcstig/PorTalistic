@@ -18,6 +18,43 @@ import SwiftUI
 /// filters and sorts the whole library.
 @Observable final class CardHoverState {
     var gameID: Game.ID?
+
+    /// Set while the enclosing scroll view is moving.
+    ///
+    /// Hover is the thing driving the remaining redraws: `onHover` fires as cards slide
+    /// under a pointer that is standing still, so a scroll produced a hover change every
+    /// time a card's edge crossed the cursor, and every card reads the hovered id. Measured
+    /// at about two hundred card bodies a second while scrolling, which is six or seven
+    /// hover changes across thirty visible cards.
+    ///
+    /// Nobody is pointing at anything on purpose mid-scroll, so hover simply stops updating
+    /// until it settles. Deliberately not read from any `body` — only inside event handlers,
+    /// where reading it registers no dependency.
+    var isScrolling: Bool = false
+}
+
+/// Turns the scroll view's phase into ``CardHoverState/isScrolling``.
+///
+/// A modifier because `onScrollPhaseChange` needs macOS 15 and the app targets 14.
+struct ScrollPhaseReporter: ViewModifier {
+    let hover: CardHoverState
+
+    func body(content: Content) -> some View {
+        if #available(macOS 15.0, *) {
+            content.onScrollPhaseChange { _, phase in
+                let isScrolling = phase != .idle
+                guard hover.isScrolling != isScrolling else { return }
+
+                hover.isScrolling = isScrolling
+
+                // Once, at the start. Leaving a card hovered through a scroll would strand
+                // its Play button somewhere in the middle of the grid.
+                if isScrolling { hover.gameID = nil }
+            }
+        } else {
+            content
+        }
+    }
 }
 
 /**
@@ -39,7 +76,18 @@ import SwiftUI
  it. Clicking the card opens the game.
  */
 struct GameCard: View {
-    @Binding var game: Game
+    /// The game, not a binding to it.
+    ///
+    /// This mattered more than anything else in here. `Binding` is not comparable, so a view
+    /// that stores one can never be skipped: SwiftUI has to re-run its body whenever the
+    /// enclosing list is laid out, which during a scroll is every tick. The render counter
+    /// measured three hundred card bodies a second against *three* artwork bodies — and
+    /// `GameArtwork` takes plain values, so SwiftUI could skip it. The cards were the only
+    /// thing in the grid it couldn't.
+    ///
+    /// `Game` is a class and `@Observable`, so a binding bought nothing anyway: the children
+    /// that still ask for one get ``boundGame``, which writes to the same object.
+    let game: Game
 
     /// Shown on shelves, where the row itself already says what these games have in common.
     var isCompact: Bool = false
@@ -81,6 +129,12 @@ struct GameCard: View {
 
     private var isHovering: Bool { hover.gameID == game.id }
 
+    /// For the children that still take a `Binding<Game>`.
+    ///
+    /// `.constant` is honest here rather than lossy: `Game` is a reference type, so every
+    /// one of those children is mutating the same object this card was handed.
+    private var boundGame: Binding<Game> { .constant(game) }
+
     var body: some View {
 #if DEBUG
         RenderCounter.record("GameCard")
@@ -91,6 +145,10 @@ struct GameCard: View {
         }
         .contentShape(.rect)
         .onHover { hovering in
+            // Not mid-scroll: see `CardHoverState.isScrolling`. Read here rather than in the
+            // body on purpose — an event handler registers no observation dependency.
+            guard !hover.isScrolling else { return }
+
             withAnimation(Theme.Motion.hover) {
                 if hovering {
                     hover.gameID = game.id
@@ -100,12 +158,12 @@ struct GameCard: View {
             }
         }
         .contextMenu {
-            GameCard.ContextMenuItems(game: $game,
+            GameCard.ContextMenuItems(game: boundGame,
                                       isSettingsPresented: $isSettingsPresented,
                                       isUninstallPresented: $isUninstallPresented)
         }
-        .gameSettingsSheet(game: $game, isPresented: $isSettingsPresented)
-        .gameUninstallSheet(game: $game, isPresented: $isUninstallPresented)
+        .gameSettingsSheet(game: boundGame, isPresented: $isSettingsPresented)
+        .gameUninstallSheet(game: boundGame, isPresented: $isUninstallPresented)
     }
 
     // MARK: Artwork
@@ -154,7 +212,7 @@ struct GameCard: View {
 
                 Spacer(minLength: 0)
 
-                FavouriteToggle(game: $game)
+                FavouriteToggle(game: boundGame)
                     .revealedOnHover(game.isFavourited || isHovering)
             }
 
@@ -168,7 +226,7 @@ struct GameCard: View {
             // its state was destroyed and the sheet closed by itself a moment after opening.
             // The Play button's launch-error alert and its "install the engine first" sheet
             // were one failed launch away from disappearing the same way.
-            GameCard.OperationOrAction(game: $game)
+            GameCard.OperationOrAction(game: boundGame)
                 .revealedOnHover(isHovering)
 
             Spacer(minLength: 0)
@@ -192,15 +250,21 @@ struct GameCard: View {
                     .help(game.title)
 
                 HStack(spacing: Theme.Spacing.xsmall) {
-                    GameCard.CaptionBadges(game: $game, isCompact: isCompact, cardSize: cardSize)
+                    GameCard.CaptionBadges(game: boundGame, isCompact: isCompact, cardSize: cardSize)
                 }
             }
 
             Spacer(minLength: 0)
 
-            GameCard.MenuView(game: $game,
+            // `isPopulated` rather than `if isHovering { … }`: same view, same identity, same
+            // size, so nothing shifts — but the four command views are only built while the
+            // pointer is on the card, which is the only time this can be opened. Built
+            // unconditionally they were constructed in every card body evaluation, two
+            // hundred a second while scrolling, for a control nobody could click.
+            GameCard.MenuView(game: boundGame,
                               isSettingsPresented: $isSettingsPresented,
-                              isUninstallPresented: $isUninstallPresented)
+                              isUninstallPresented: $isUninstallPresented,
+                              isPopulated: isHovering)
                 .buttonStyle(.portalQuietCompact)
                 .menuIndicator(.hidden)
                 .fixedSize()
@@ -327,7 +391,7 @@ struct FadeInModifier: ViewModifier {
         LazyVGrid(columns: [.init(.adaptive(minimum: 170), spacing: Theme.Grid.spacing)],
                   spacing: Theme.Grid.spacing) {
             ForEach(0..<4, id: \.self) { _ in
-                GameCard(game: .constant(placeholderGame(type: Game.self)), hover: .init())
+                GameCard(game: placeholderGame(type: Game.self), hover: .init())
             }
         }
         .padding(Theme.Spacing.xlarge)

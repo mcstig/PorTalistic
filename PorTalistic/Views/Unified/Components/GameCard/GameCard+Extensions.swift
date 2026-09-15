@@ -354,14 +354,24 @@ extension GameCard {
         @Binding var isSettingsPresented: Bool
         @Binding var isUninstallPresented: Bool
 
+        /// Whether to build the commands at all.
+        ///
+        /// A card grid sets this from hover, so a hundred and thirty menus' worth of command
+        /// views aren't constructed on every redraw of a list nobody is pointing at. Every
+        /// one of these commands is also on the card's right-click menu, which is always
+        /// populated, so nothing is unreachable while this is false.
+        var isPopulated: Bool = true
+
         var body: some View {
             Menu {
-                GameCard.Buttons.SettingsButton(game: $game, withLabel: true,
-                                                isGameSettingsSheetPresented: $isSettingsPresented)
-                GameCard.Buttons.UpdateButton(game: $game, withLabel: true)
-                GameCard.Buttons.FavouriteButton(game: $game, withLabel: true)
-                GameCard.Buttons.DeleteButton(game: $game, withLabel: true,
-                                              isUninstallSheetPresented: $isUninstallPresented)
+                if isPopulated {
+                    GameCard.Buttons.SettingsButton(game: $game, withLabel: true,
+                                                    isGameSettingsSheetPresented: $isSettingsPresented)
+                    GameCard.Buttons.UpdateButton(game: $game, withLabel: true)
+                    GameCard.Buttons.FavouriteButton(game: $game, withLabel: true)
+                    GameCard.Buttons.DeleteButton(game: $game, withLabel: true,
+                                                  isUninstallSheetPresented: $isUninstallPresented)
+                }
             } label: {
                 Image(systemName: "ellipsis")
                     .imageScale(.medium)

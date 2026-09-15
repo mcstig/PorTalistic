@@ -62,7 +62,7 @@ struct GameListView: View {
                             spacing: Theme.Spacing.xlarge
                         ) {
                             ForEach(games) { game in
-                                GameCard(game: .constant(game),
+                                GameCard(game: game,
                                          hover: hover,
                                          glowRadius: glowRadius,
                                          cardSize: cardSize)
@@ -72,7 +72,7 @@ struct GameListView: View {
                     case .list:
                         LazyVStack(spacing: Theme.Spacing.small) {
                             ForEach(games) { game in
-                                ListGameCard(game: .constant(game))
+                                ListGameCard(game: game)
                             }
                         }
                         .padding(Theme.Spacing.large)
@@ -81,6 +81,7 @@ struct GameListView: View {
                 // The grid's cards report hover here rather than each keeping its own flag;
                 // this is the half that clears it when the pointer leaves the grid entirely,
                 // which no individual card is in a position to notice.
+                .modifier(ScrollPhaseReporter(hover: hover))
                 .onHover { if !$0 { hover.gameID = nil } }
                 .searchable(text: $viewModel.searchString,
                             tokens: $viewModel.searchTokens,
