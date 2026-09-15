@@ -346,8 +346,11 @@ final class Provisioner {
     /// answer.
     func planLaunch(for game: Game) async throws -> LaunchPlan {
         let profile = await profile(for: game)
-        let runtime = try await prepare(game)
-        let container = try await container(for: runtime)
+        let preferred = try await prepare(game)
+
+        let (runtime, container) = try await usableContainer(for: profile.requirements,
+                                                             preferring: preferred,
+                                                             titled: game.title)
 
         if game.containerURL != container.url {
             Self.log.notice("Moving \(game.title, privacy: .public) to the \(container.name, privacy: .public) container")
@@ -357,11 +360,67 @@ final class Provisioner {
 
         pendingReverts[container.url] = await apply(profile.settings, to: container)
 
+        var reasons = profile.reasons
+
+        // Said out loud, because the game is now running on something other than what its
+        // profile asked for and the page that explains how it runs would otherwise lie.
+        if runtime.id != preferred.id {
+            reasons.append(String(localized: """
+                \(preferred.name) couldn't set up a Windows installation on this Mac,                 so this is running on \(runtime.name) instead.
+                """))
+        }
+
         return .init(containerURL: container.url,
                      runtimeName: runtime.name,
-                     reasons: profile.reasons,
+                     reasons: reasons,
                      settings: profile.settings)
     }
+
+    /// The best runtime that can actually boot a prefix, and that prefix.
+    ///
+    /// Walks the ranking instead of trusting the top of it. `Runtime.isInstalled` means the
+    /// files are on disk, not that Wine can start: DXMT's only build cannot create a
+    /// container at all on some Macs, and this used to let `UnableToBootError` end the
+    /// launch — so the machines the wined3d fallback existed for were exactly the machines
+    /// that never reached it.
+    private func usableContainer(for requirements: RuntimeProfile.Requirements,
+                                 preferring preferred: Runtime,
+                                 titled title: String) async throws -> (Runtime, Wine.Container) {
+        var candidates = await Task.detached {
+            Runtime.ranked(satisfying: requirements)
+        }.value
+
+        // `prepare` may have just installed something, and it decided; keep its answer first.
+        candidates.removeAll { $0.id == preferred.id }
+        candidates.insert(preferred, at: 0)
+
+        var lastError: Error?
+
+        for candidate in candidates {
+            guard !Self.runtimesThatCannotBoot.contains(candidate.id) else { continue }
+
+            do {
+                return (candidate, try await container(for: candidate))
+            } catch {
+                Self.runtimesThatCannotBoot.insert(candidate.id)
+                lastError = error
+
+                Self.log.error("""
+                    \(candidate.name, privacy: .public) couldn't create a container for                     \(title, privacy: .public), so it won't be tried again until the app                     restarts: \(error.localizedDescription, privacy: .public)
+                    """)
+            }
+        }
+
+        throw lastError ?? NoViableRuntimeError(title: title)
+    }
+
+    /// Runtimes that failed to create a container, for the life of the process.
+    ///
+    /// Remembered so that a first run across a whole library doesn't pay the same boot
+    /// timeout once per game. Deliberately not persisted: a transient failure — a full disk,
+    /// a `wineserver` that hadn't finished dying — shouldn't demote a build permanently and
+    /// leave the user no way to say otherwise.
+    private static var runtimesThatCannotBoot: Set<String> = .init()
 
     /// Put the container back the way the user left it.
     ///

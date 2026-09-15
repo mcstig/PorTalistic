@@ -314,8 +314,23 @@ Not finished:
 
 ## A second DXMT-capable Wine build
 
-DXMT still rests on `wine-sikarugir-11.0` alone, and that build can't create a
-container at all on some Macs. What the research says:
+DXMT still rests on `wine-sikarugir-11.0` alone. That is now survivable rather
+than fatal — `Provisioner.usableContainer` walks the whole ranking and falls
+through to the next Wine when one can't boot a prefix, and the game's page says
+so — but "the one DXMT build failed, so this runs on wined3d instead" is a bad
+day, not a good one.
+
+**Licensing is not the constraint here.** Wine is LGPL-2.1+, aquadran's DXMT
+patch is compatible with it, and the app *downloads* runtimes from the
+publisher's own release rather than shipping any — it redistributes no Wine at
+all. What is ruled out is narrower and specific: Apple's `D3DMetal.framework`
+(GPTK), whose licence is non-commercial, and CrossOver's proprietary binaries.
+Sikarugir's own README says the same thing in writing — GPTK "cannot be used for
+commercial ports" — and lists DXMT among the renderers that can. The engine this
+app already fetches is `WineSikarugir`, not their `WineCX` or `WineGPTK`, so
+what ships today is on the right side of that line.
+
+What the research says about a second source:
 
   - **The requirement is specific.** DXMT needs a Wine whose `winemac.drv` *exports*
     the API declared in `dxmt/include/winemacdrv.h` — the Metal escape functions.
@@ -326,6 +341,10 @@ container at all on some Macs. What the research says:
     exposed". It is hosted on paulthetall.com, which is not in
     `CompatibilityManifest.allowedDownloadHosts` and whose redistribution terms are
     unknown — so it needs asking, not assuming.
+  - **Kegworks is a dead end.** Its engine list is `WineCX` (CrossOver-derived),
+    `WineGPTK` (Apple's), `WhiskyWine` and `WineSikarugir` — and none of the
+    CrossOver ones are documented as DXMT-capable. Nothing there is both clean and
+    DXMT-capable that isn't already in the manifest.
   - **`athei/wine-build` is the wrong shape.** It builds CrossOver-sourced Wine for
     macOS as a `.tar.xz` on GitHub releases, which fits the manifest exactly, but its
     own notes put DXMT on 32-bit D3D10/11 and *Apple GPTK* on 64-bit. GPTK's
@@ -341,7 +360,14 @@ container at all on some Macs. What the research says:
   - **The open question in that recipe** is `winemetal.so`, which the script copies
     out of a donor Porting Kit wrapper rather than building. Whether the patched Wine
     can produce it, or whether it has to come from DXMT's own releases, decides
-    whether a from-source build is genuinely self-contained.
+    whether a from-source build is genuinely self-contained — and it is the first
+    thing to resolve before committing to a build pipeline.
+  - **Mirroring is legal, which the host list obscures.**
+    `allowedDownloadHosts` is this project's own rule, not a licence term. An LGPL
+    Wine build may be re-hosted in this repository's own releases provided the
+    corresponding source is offered — so Porting Kit's engine could be mirrored onto
+    a permitted host without anyone's permission. Asking first is courtesy, and
+    worth it, but it is not a blocker.
 
 ## The design system's remaining gaps
 

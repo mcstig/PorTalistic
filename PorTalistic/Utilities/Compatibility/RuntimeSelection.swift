@@ -113,34 +113,68 @@ extension Runtime {
     /// and "newest" would have sent every Direct3D 11 game to a runtime with no way to draw.
     static func select(satisfying requirements: RuntimeProfile.Requirements,
                        from candidates: [Runtime]? = nil) -> Runtime? {
+        ranked(satisfying: requirements, from: candidates).first
+    }
+
+    /**
+     Every runtime that can serve these requirements, best first.
+
+     One answer was not enough. A runtime that is *installed* is not necessarily a runtime
+     that can *boot a prefix*: DXMT's only build cannot create a container at all on some
+     Macs — that is written into its own catalogue entry — and the launch path took the top
+     of the ranking, got `UnableToBootError`, and stopped. Which meant the machines the
+     fallback existed for were precisely the machines that never reached it.
+
+     So the ranking is the whole list, and nothing below the top is dropped. A Direct3D 11
+     game that ends up on wined3d runs badly, and badly beats a build that won't start.
+     */
+    static func ranked(satisfying requirements: RuntimeProfile.Requirements,
+                       from candidates: [Runtime]? = nil) -> [Runtime] {
         let viable = (candidates ?? discoverAll())
             .filter { $0.isInstalled && $0.satisfies(requirements) }
 
-        guard !viable.isEmpty else { return nil }
+        guard !viable.isEmpty else { return [] }
 
         if requirements.modernNetworking {
-            return preferredByCatalogue(among: viable) ?? viable.first
+            return byCatalogueOrder(viable)
         }
 
         if requirements.direct3DOnMetal {
-            let byDXMT = viable.filter { $0.capabilities.direct3DOnMetal == .dxmt }
+            let byDXMT = byCatalogueOrder(viable.filter { $0.capabilities.direct3DOnMetal == .dxmt })
 
-            if !byDXMT.isEmpty {
-                return preferredByCatalogue(among: byDXMT) ?? byDXMT.first
-            }
-
-            let byD3DMetal = viable.filter { $0.capabilities.direct3DOnMetal == .appleD3DMetal }
-
-            // Among Apple's implementations, prefer one Mythic didn't put there. A Game
+            // Among Apple's implementations, prefer one this app didn't put there. A Game
             // Porting Toolkit or Whisky install is the user's own copy under their own
-            // licence; the bundled engine is a copy Mythic fetched, which is the one with a
+            // licence; the bundled engine is a copy the app fetched, which is the one with a
             // question mark over it.
-            return byD3DMetal.first(where: { $0.origin != .bundledEngine })
-                ?? byD3DMetal.first
-                ?? viable.first
+            let d3dMetal = viable.filter { $0.capabilities.direct3DOnMetal == .appleD3DMetal }
+            let byD3DMetal = d3dMetal.filter { $0.origin != .bundledEngine }
+                + d3dMetal.filter { $0.origin == .bundledEngine }
+
+            let placed = Set((byDXMT + byD3DMetal).map(\.id))
+            let rest = byCatalogueOrder(viable.filter { !placed.contains($0.id) })
+
+            return byDXMT + byD3DMetal + rest
         }
 
-        return viable.first(where: { $0.origin == .bundledEngine }) ?? viable.first
+        // The bundled engine first: the most exercised path for everything that goes through
+        // wined3d. The others stay reachable behind it for the same reason as above.
+        return viable.filter { $0.origin == .bundledEngine }
+            + byCatalogueOrder(viable.filter { $0.origin != .bundledEngine })
+    }
+
+    /// Catalogue order is preference order. Anything the catalogue doesn't mention keeps its
+    /// own order, after everything it does.
+    private static func byCatalogueOrder(_ runtimes: [Runtime]) -> [Runtime] {
+        var remaining = runtimes
+        var ordered: [Runtime] = []
+
+        for release in RuntimeRelease.catalogue {
+            if let index = remaining.firstIndex(where: { $0.id == "managed:\(release.id)" }) {
+                ordered.append(remaining.remove(at: index))
+            }
+        }
+
+        return ordered + remaining
     }
 
     /// Catalogue order is preference order, so first match wins.
