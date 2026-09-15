@@ -333,12 +333,16 @@ enum GOGDL {
 
     /// Directories whose immediate children are worth checking for a forgotten install.
     ///
-    /// The configured install directory first, because that is where everything normally
-    /// goes. Then the root of every mounted volume and the obvious folder names under it:
-    /// the games this has to rescue are precisely the ones on a disk that was unplugged, and
-    /// a game installed to a chosen path on that disk has no record left to say where. One
-    /// level deep in a handful of places is a few dozen `stat` calls, and it is the
-    /// difference between the game coming back on its own and being re-imported by hand.
+    /// Only places the app already knows games live: the configured install directory, and
+    /// the parent of every location an install record names. Nothing is enumerated to find
+    /// them.
+    ///
+    /// The first version of this walked every mounted volume and looked under `Games`,
+    /// `GOG Games` and `GOG` on each. That found more, and cost more than it was worth:
+    /// touching a removable volume is what makes macOS ask "PorTalistic would like to access
+    /// files on a removable volume", so a routine library refresh could provoke that prompt
+    /// about a disk with no games on it at all. A forgotten install is beside its siblings
+    /// in practice, and its siblings are in this list.
     private static func searchBases() -> [URL] {
         var bases: [URL] = .init()
 
@@ -346,14 +350,9 @@ enum GOGDL {
             bases.append(configured)
         }
 
-        let volumes = FileManager.default.mountedVolumeURLs(includingResourceValuesForKeys: nil,
-                                                            options: [.skipHiddenVolumes]) ?? []
-
-        for volume in volumes {
-            bases.append(volume)
-            for name in ["Games", "GOG Games", "GOG"] {
-                bases.append(volume.appending(path: name))
-            }
+        for record in installRecords().values {
+            guard let location = recordedLocation(record) else { continue }
+            bases.append(location.deletingLastPathComponent())
         }
 
         // The same directory reached two ways is the same directory.

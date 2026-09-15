@@ -2,6 +2,12 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!-- Shown in macOS's own prompt when a game lives on an external disk. Without it the
+	     prompt is the system's generic sentence, which doesn't say why an app called
+	     PorTalistic wants the drive. It does not stop the prompt: that grant belongs to
+	     Privacy & Security, not to the app. -->
+	<key>NSRemovableVolumesUsageDescription</key>
+	<string>PorTalistic needs this to find and launch the games you keep on this drive.</string>
 	<key>LSSupportsGameMode</key>
 	<true/>
 	<key>NSApplicationCrashOnExceptions</key>
