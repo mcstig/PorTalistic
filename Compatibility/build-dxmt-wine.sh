@@ -264,6 +264,16 @@ export LDFLAGS="-L$DEPPREFIX/lib"
 # which do include Homebrew's arm64 `.pc` files.
 export PKG_CONFIG_PATH="$DEPPREFIX/lib/pkgconfig"
 
+# freetype's install name is a bare `libfreetype.6.dylib`, on purpose: that is what makes
+# the shipped Wine resolve it out of the runtime's `Frameworks` directory. The cost is that
+# nothing finds it during the build either, and Wine builds a host tool that links against
+# it — `sfnt2fon`, which rasterizes the bitmap .fon fonts. Without this the build dies on
+# `fonts/coure.fon` with "Library not loaded: libfreetype.6.dylib".
+#
+# The default entries have to be repeated: setting this variable replaces the defaults
+# rather than adding to them, and Wine's tools do use system libraries.
+export DYLD_FALLBACK_LIBRARY_PATH="$DEPPREFIX/lib:/usr/local/lib:/usr/lib"
+
 BUILD="$WORK/build"
 mkdir -p "$BUILD"
 
@@ -346,10 +356,14 @@ mkdir -p "$PREFIX/Frameworks"
 find "$DEPPREFIX/lib" -maxdepth 1 -name "*.dylib" -exec cp -a {} "$PREFIX/Frameworks/" \;
 ok "$(find "$PREFIX/Frameworks" -name '*.dylib' | wc -l | tr -d ' ') support libraries bundled"
 
-if "$PREFIX/bin/wine" --version >/dev/null 2>&1; then
-    ok "wine still starts with the bundled libraries"
+# Deliberately not the build's own fallback path: this runs wine with only the bundled
+# directory visible, which is the arrangement it will actually ship in.
+if DYLD_FALLBACK_LIBRARY_PATH="$PREFIX/Frameworks:/usr/local/lib:/usr/lib" \
+    "$PREFIX/bin/wine" --version >/dev/null 2>&1; then
+    ok "wine starts with only the bundled libraries on the path"
 else
-    warn "wine --version failed after bundling — check DYLD_FALLBACK_LIBRARY_PATH resolution"
+    warn "wine --version failed with only $PREFIX/Frameworks on the path"
+    warn "PorTalistic sets DYLD_FALLBACK_LIBRARY_PATH to exactly that, so check it before shipping"
 fi
 
 # A marker, so PorTalistic can tell this build apart from a stock one.
