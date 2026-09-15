@@ -105,7 +105,22 @@ extension Wine.Container {
         var dxvk: Bool
         var dxvkAsync: Bool
         var windowsVersion: Wine.WindowsVersion
+        /// Stored, but no longer what decides the prefix's DPI — see ``displayScaling``. Kept
+        /// so containers written before that decode, and because a slider for it is still on
+        /// the backlog.
         var scaling: Int
+
+        /// The DPI that has to accompany ``retinaMode``.
+        ///
+        /// Not independent of it, which is how this went wrong. Wine's macOS driver reports
+        /// the display at its backing resolution with Retina Mode on and at logical size with
+        /// it off, so 192 belongs to the first and 96 to the second. A container carrying 192
+        /// with Retina off tells applications the display is 2× while handing them a 1×
+        /// desktop, and a DPI-aware game then sizes its window for twice the pixels it is
+        /// going to get — which is the small window Horizon Chase Turbo kept opening in,
+        /// every time, after Retina Mode was defaulted off and the 192 that only made sense
+        /// with it on stayed behind.
+        var displayScaling: Int { retinaMode ? 192 : 96 }
         var avx2: Bool
 
         /// wined3d's command-stream thread, which Wine calls CSMT.
@@ -136,7 +151,7 @@ extension Wine.Container {
              dxvk: Bool = false,
              dxvkAsync: Bool = false,
              windowsVersion: Wine.WindowsVersion = .win11,
-             scaling: Int = 192,
+             scaling: Int = 96,
              avx2: Bool = true,
              commandStreamThread: Bool = true,
              runtimeID: String? = nil) {

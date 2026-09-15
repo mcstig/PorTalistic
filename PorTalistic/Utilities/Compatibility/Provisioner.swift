@@ -528,8 +528,23 @@ final class Provisioner {
         let url = container.url
         let settings = container.settings
 
+        // Both halves, not just the flag.
+        //
+        // `toggleRetinaMode` writes RetinaMode *and* the DPI that has to accompany it, and
+        // this used to run only when the flag disagreed. So a container created while the
+        // default was Retina-on kept LogPixels at 192 after the flag went off — a 1× desktop
+        // advertised as 2× — and nothing ever corrected it, because the flag already
+        // matched. Horizon Chase Turbo opened in a small window every single time, and the
+        // setting that caused it was one the interface doesn't even show.
         let retinaMode = overrides.retinaMode ?? settings.retinaMode
-        if (try? await Wine.getRetinaMode(containerURL: url)) != retinaMode {
+        let expectedScaling = retinaMode ? 192 : 96
+
+        // Read before the comparison: `||` takes its right operand as an autoclosure, which
+        // cannot be `await`ed.
+        let currentRetinaMode = try? await Wine.getRetinaMode(containerURL: url)
+        let currentScaling = try? await Wine.getDisplayScaling(containerURL: url)
+
+        if currentRetinaMode != retinaMode || currentScaling != expectedScaling {
             try? await Wine.toggleRetinaMode(containerURL: url, toggle: retinaMode)
         }
         if overrides.retinaMode != nil, overrides.retinaMode != settings.retinaMode {

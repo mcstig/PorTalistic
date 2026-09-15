@@ -666,7 +666,8 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
 
             try await toggleRetinaMode(containerURL: url, toggle: settings.retinaMode)
             try await setWindowsVersion(containerURL: url, version: settings.windowsVersion)
-            try await setDisplayScaling(containerURL: url, dpi: settings.scaling)
+            // Derived from the mode, not the stored number — see `Settings.displayScaling`.
+            try await setDisplayScaling(containerURL: url, dpi: settings.displayScaling)
 
             // An empty root store makes every HTTPS request inside the container fail in a
             // way that doesn't mention certificates. See ``Wine/Certificates``.

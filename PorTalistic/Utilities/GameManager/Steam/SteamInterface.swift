@@ -150,7 +150,10 @@ final class Steam {
         // container was created. A setting changed afterwards otherwise says one thing while
         // the prefix's registry keeps doing another — which for DPI is the difference between
         // a login window on screen and one at 805240832, 805240832.
-        try? await Wine.setDisplayScaling(containerURL: container.url, dpi: container.settings.scaling)
+        // Derived from Retina Mode, not the stored number — a container advertising 192 with
+        // Retina off is a 1x desktop claiming to be 2x. See `Wine.Container.Settings`.
+        try? await Wine.setDisplayScaling(containerURL: container.url,
+                                          dpi: container.settings.displayScaling)
         try? await Wine.toggleRetinaMode(containerURL: container.url, toggle: container.settings.retinaMode)
 
         // The client needs Direct3D 11, and on a managed runtime that means DXMT. Say so
