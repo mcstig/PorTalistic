@@ -307,5 +307,5 @@ struct ContainerSettingsView: View {
             withPicker: true
         )
     }
-    .formStyle(.grouped)
+    .portalForm()
 }

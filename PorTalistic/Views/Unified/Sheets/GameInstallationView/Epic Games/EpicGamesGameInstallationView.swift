@@ -80,7 +80,7 @@ struct EpicGamesGameInstallationView: View {
                                 }
                             }
                         }
-                        .formStyle(.grouped)
+                        .portalForm()
                     }
 
                     Form {
@@ -142,7 +142,7 @@ struct EpicGamesGameInstallationView: View {
                             }
                         )
                     }
-                    .formStyle(.grouped)
+                    .portalForm()
                 }
             }
 

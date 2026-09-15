@@ -127,7 +127,7 @@ struct EpicGamesGameImportView: View {
                     
                     Toggle("Verify game files' integrity", systemImage: "checkmark.app", isOn: $checkIntegrity)
                 }
-                .formStyle(.grouped)
+                .portalForm()
             }
             
             HStack {

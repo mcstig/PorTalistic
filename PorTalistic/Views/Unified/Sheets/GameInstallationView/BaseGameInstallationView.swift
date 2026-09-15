@@ -65,7 +65,7 @@ struct BaseGameInstallationView<Content>: View where Content: View {
             Form {
                 Text("Content goes here!!!")
             }
-            .formStyle(.grouped)
+            .portalForm()
         }
     )
     .padding()

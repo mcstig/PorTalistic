@@ -73,7 +73,7 @@ struct ContainersView: View {
 
         .sheet(isPresented: $isContainerCreationViewPresented) {
             ContainerCreationView(isPresented: $isContainerCreationViewPresented)
-                .brandedSurface()
+                .sheetSurface(minWidth: 640, minHeight: 460)
         }
     }
 }

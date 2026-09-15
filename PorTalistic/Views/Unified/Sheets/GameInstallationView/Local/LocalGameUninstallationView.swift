@@ -41,7 +41,7 @@ struct LocalGameUninstallationView: View {
                            systemImage: "trash",
                            isOn: $removeFromDisk)
                 }
-                .formStyle(.grouped)
+                .portalForm()
             }
         )
         .navigationTitle("Uninstall \(game.description)")

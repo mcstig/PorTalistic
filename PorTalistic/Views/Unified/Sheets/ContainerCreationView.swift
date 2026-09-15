@@ -18,6 +18,16 @@ struct ContainerCreationView: View {
 
     @State private var isContainerURLFileImporterPresented: Bool = false
 
+    /// Which Wine build the new prefix is created by.
+    ///
+    /// Previously there was no choice: every container was booted by the bundled engine, and
+    /// a container is effectively married to its runtime — Wine migrates a prefix forward on
+    /// first run and has no downgrade path. So the only way to get a prefix on a newer Wine
+    /// was to let the provisioner make one, and the only way to name it was to accept the
+    /// name the provisioner chose.
+    @State private var runtimeID: String = Runtime.bundled.id
+    @State private var availableRuntimes: [Runtime] = []
+
     @State private var isBooting: Bool = false
     @State private var isCancellationAlertPresented: Bool = false
     
@@ -25,17 +35,52 @@ struct ContainerCreationView: View {
     @State private var isBootFailureAlertPresented: Bool = false
     
     var body: some View {
-        VStack {
-            Text("Create Container")
-                .font(.title)
-                .padding([.horizontal, .top])
+        VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: Theme.Spacing.xsmall) {
+                Text("NEW CONTAINER")
+                    .font(Theme.Text.heroEyebrow)
+                    .tracking(1.2)
+                    .foregroundStyle(.secondary)
+
+                Text("A fresh Windows installation")
+                    .font(.system(.title2, weight: .bold))
+
+                Text("""
+                    Its own registry, its own C: drive, and its own Wine. Games are assigned to \
+                    one automatically — this is for when you want a separate one.
+                    """)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(Theme.Spacing.xlarge)
+
+            Divider()
 
             Form {
-                TextField("Choose a name for your container:", text: $containerName)
-                
+                TextField("Name", text: $containerName)
+
+                if nameIsTaken {
+                    Label("A container is already called that.", systemImage: "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Picker("Wine build", selection: $runtimeID) {
+                    ForEach(availableRuntimes) { runtime in
+                        Text(runtime.description).tag(runtime.id)
+                    }
+                }
+                .task { availableRuntimes = Runtime.discoverAll() }
+                .help("""
+                    Wine upgrades a container the first time it runs it and can't downgrade it \
+                    again, so this can't be changed back later.
+                    """)
+
                 HStack {
                     VStack(alignment: .leading) {
-                        Text("Where do you want the container's base path to be located?")
+                        Text("Location")
 
                         Text(containerURL.prettyPath)
                             .foregroundStyle(.secondary)
@@ -62,7 +107,7 @@ struct ContainerCreationView: View {
                     }
                 }
             }
-            .formStyle(.grouped)
+            .portalForm()
             
             HStack {
                 Button("Cancel", role: .cancel) {
@@ -93,7 +138,14 @@ struct ContainerCreationView: View {
                     Task(priority: .userInitiated) {
                         withAnimation { isBooting = true }
                         do {
-                            _ = try await Wine.createContainer(baseURL: containerURL, name: containerName)
+                            // `nil` is how a container says "the bundled engine", so that
+                            // every prefix created before runtimes existed still resolves.
+                            var settings: Wine.Container.Settings = .init()
+                            settings.runtimeID = runtimeID == Runtime.bundled.id ? nil : runtimeID
+
+                            _ = try await Wine.createContainer(baseURL: containerURL,
+                                                               name: containerName,
+                                                               settings: settings)
                             withAnimation { isBooting = false }
                             isPresented = false
                         } catch {
@@ -106,7 +158,7 @@ struct ContainerCreationView: View {
                 .buttonStyle(.portalProminent)
                 .disabled(isBooting)
                 .disabled(!FileLocations.isWritableFolder(url: containerURL))
-                .disabled((Wine.containerURLs.first(where: { $0.lastPathComponent == containerName}) != nil))
+                .disabled(nameIsTaken)
             }
             .padding()
         }
@@ -132,6 +184,13 @@ struct ContainerCreationView: View {
     }
 }
 
+private extension ContainerCreationView {
+    var nameIsTaken: Bool {
+        Wine.containerURLs.contains { $0.lastPathComponent == containerName }
+    }
+}
+
 #Preview {
     ContainerCreationView(isPresented: .constant(true))
+        .sheetSurface(minWidth: 640, minHeight: 440)
 }

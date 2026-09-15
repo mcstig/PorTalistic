@@ -21,49 +21,49 @@ struct SettingsView: View {
                         Form {
                             GeneralView()
                         }
-                        .formStyle(.grouped)
+                        .portalForm()
                     }
 
                     Tab("Views", systemImage: "document.viewfinder") {
                         Form {
                             ViewSettingsView()
                         }
-                        .formStyle(.grouped)
+                        .portalForm()
                     }
 
                     Tab("Launching", systemImage: "play") {
                         Form {
                             LaunchingView()
                         }
-                        .formStyle(.grouped)
+                        .portalForm()
                     }
 
                     Tab("Downloads", systemImage: "arrow.down.to.line") {
                         Form {
                             OperationsView()
                         }
-                        .formStyle(.grouped)
+                        .portalForm()
                     }
 
                     Tab("Updates", systemImage: "arrow.down.app") {
                         Form {
                             UpdatesView()
                         }
-                        .formStyle(.grouped)
+                        .portalForm()
                     }
 
                     Tab("Services", systemImage: "app.connected.to.app.below.fill") {
                         Form {
                             ServicesView()
                         }
-                        .formStyle(.grouped)
+                        .portalForm()
                     }
 
                     Tab("Engine", systemImage: "gamecontroller.circle") {
                         Form {
                             EngineView()
                         }
-                        .formStyle(.grouped)
+                        .portalForm()
                     }
                 }
                 .tabViewStyle(.automatic)
@@ -77,7 +77,7 @@ struct SettingsView: View {
                     Section("Services", content: { ServicesView() })
                     Section("Engine", content: { EngineView() })
                 }
-                .formStyle(.grouped)
+                .portalForm()
             }
         }
         // Grouped `Form`s in a `TabView` are the right shape for a Settings window and stay

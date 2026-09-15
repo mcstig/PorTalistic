@@ -47,7 +47,7 @@ struct EpicGamesGameUninstallationView: View {
                            systemImage: "progress.indicator",
                            isOn: $runUninstaller)
                 }
-                .formStyle(.grouped)
+                .portalForm()
             }
         )
         .navigationTitle("Uninstall \(game.description)")

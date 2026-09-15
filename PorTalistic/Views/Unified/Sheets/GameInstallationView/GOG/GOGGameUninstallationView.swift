@@ -42,7 +42,7 @@ struct GOGGameUninstallationView: View {
                            systemImage: "trash",
                            isOn: $removeFromDisk)
                 }
-                .formStyle(.grouped)
+                .portalForm()
 
                 Text("The game stays in your library — it's still yours, it's just no longer installed.")
                     .font(.footnote)

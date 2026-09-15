@@ -116,7 +116,7 @@ struct LocalGameImportView: View {
                             imageURL: $game._verticalImageURL
                         )
                     }
-                    .formStyle(.grouped)
+                    .portalForm()
                 }
             }
             

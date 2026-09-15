@@ -494,8 +494,10 @@ extension View {
     func gameSettingsSheet(game: Binding<Game>, isPresented: Binding<Bool>) -> some View {
         sheet(isPresented: isPresented) {
             GameSettingsView(game: game, isPresented: isPresented)
-                .frame(width: 720, height: 420)
-                .brandedSurface()
+                // Resizable, and tall enough for the container settings. At 720 × 420 the
+                // form needed a thousand points, so the bottom bar sat on top of the rows
+                // and the last four toggles laid out below the window.
+                .sheetSurface(minWidth: 720, idealWidth: 760, minHeight: 560, idealHeight: 680)
         }
     }
 

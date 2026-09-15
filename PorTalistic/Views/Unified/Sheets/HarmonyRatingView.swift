@@ -54,7 +54,7 @@ struct HarmonyRatingView: View {
                     Text("Please choose a rating.")
                 }
             }
-            .formStyle(.grouped)
+            .portalForm()
             .lineLimit(2, reservesSpace: true)
             .scrollDisabled(true)
             .scrollIndicators(.hidden)

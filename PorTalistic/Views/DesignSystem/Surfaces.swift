@@ -434,6 +434,20 @@ extension View {
             .brandedSurface()
     }
 
+    /// A `Form` that belongs to this app rather than to System Settings.
+    ///
+    /// `.formStyle(.grouped)` is the right *structure* — labelled rows, sections, the
+    /// alignment macOS expects, and every `Toggle` and `Picker` in the app laid out the same
+    /// way without each view having to say so. It is the wrong *ground*: it paints the
+    /// system's grouped background, which is vibrant, takes a tint from the app's accent
+    /// while the window is active and washes out when it isn't — the same flicker the sheets
+    /// had before ``Theme/Palette/sheet``. So the structure is kept and the ground is
+    /// dropped, and whatever the form sits on shows through.
+    func portalForm() -> some View {
+        formStyle(.grouped)
+            .scrollContentBackground(.hidden)
+    }
+
     /// A panel of related controls inside a sheet or a page.
     func panelSurface(cornerRadius: CGFloat = Theme.Radius.card) -> some View {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
@@ -465,13 +479,20 @@ struct GameSheetHeader<Content: View>: View {
     /// Facts about what's about to happen: a download size, a platform.
     var badges: [PortalBadge] = []
 
+    /// How much of the sheet the cover gets.
+    ///
+    /// An installation sheet is mostly about the game, so the cover leads. A settings sheet
+    /// is mostly about a long list of controls, and a full-height cover there just pushes
+    /// them off the bottom — which is exactly what the old one did.
+    var coverWidth: CGFloat = 170
+
     @ViewBuilder var content: Content
 
     var body: some View {
         HStack(alignment: .top, spacing: Theme.Spacing.xlarge) {
             GameArtwork(game: game, url: game.verticalImageURL, cornerRadius: Theme.Radius.card)
                 .aspectRatio(Theme.Grid.artworkAspectRatio, contentMode: .fit)
-                .frame(width: 170)
+                .frame(width: coverWidth)
 
             VStack(alignment: .leading, spacing: Theme.Spacing.medium) {
                 VStack(alignment: .leading, spacing: Theme.Spacing.xsmall) {

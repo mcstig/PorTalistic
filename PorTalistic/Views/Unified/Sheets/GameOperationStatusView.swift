@@ -71,7 +71,7 @@ struct GameOperationStatusView: View {
                         }
                     }
                 }
-                .formStyle(.grouped)
+                .portalForm()
             } else {
                 ContentUnavailableView(
                     "This operation isn't currently running.",

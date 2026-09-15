@@ -135,7 +135,7 @@ struct ContainerListView: View {
             .buttonStyle(.portalProminent)
             .sheet(isPresented: $isContainerCreationViewPresented) {
                 ContainerCreationView(isPresented: $isContainerCreationViewPresented)
-                    .brandedSurface()
+                    .sheetSurface(minWidth: 640, minHeight: 460)
             }
         } else {
             Engine.NotInstalledView()
@@ -549,10 +549,24 @@ struct ContainerConfigurationView: View {
     
     var body: some View {
         if let container = try? Wine.getContainerObject(at: self.containerURL) {
-            VStack {
-                Text("Configure \"\(container.name)\"")
-                    .font(.title)
-                    .padding([.horizontal, .top])
+            VStack(spacing: 0) {
+                VStack(alignment: .leading, spacing: Theme.Spacing.xsmall) {
+                    Text("CONTAINER")
+                        .font(Theme.Text.heroEyebrow)
+                        .tracking(1.2)
+                        .foregroundStyle(.secondary)
+
+                    Text(container.name)
+                        .font(.system(.title2, weight: .bold))
+
+                    Text(Wine.runtime(forContainerAtURL: containerURL).name)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(Theme.Spacing.xlarge)
+
+                Divider()
 
                 Form {
                     ContainerSettingsView(
@@ -564,7 +578,7 @@ struct ContainerConfigurationView: View {
                     )
                     // TODO: Add slider for scaling
                 }
-                .formStyle(.grouped)
+                .portalForm()
                 
                 HStack {
                     Button("Open...") {
@@ -694,5 +708,5 @@ struct ContainerConfigurationView: View {
     Form {
         ContainerListView()
     }
-    .formStyle(.grouped)
+    .portalForm()
 }

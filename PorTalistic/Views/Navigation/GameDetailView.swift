@@ -166,58 +166,7 @@ private struct GameDetailContent: View {
     @ViewBuilder
     private var compatibility: some View {
         if let profile {
-            DetailPanel(title: String(localized: "How this game runs"),
-                        systemImage: "wand.and.sparkles") {
-                VStack(alignment: .leading, spacing: Theme.Spacing.medium) {
-                    HStack(spacing: Theme.Spacing.small) {
-                        PortalBadge(profile.graphicsBackend?.description
-                                    ?? String(localized: "Runtime default"),
-                                    systemImage: "square.stack.3d.up",
-                                    tint: Theme.Palette.brandSecondary)
-
-                        PortalBadge(sourceDescription(profile.source),
-                                    systemImage: profile.source == .userOverride ? "hand.raised" : "gearshape.2")
-
-                        if profile.requirements.thirtyTwoBit {
-                            PortalBadge(String(localized: "32-bit"), tint: .orange)
-                        }
-
-                        if profile.requirements.nativeVulkan {
-                            PortalBadge(String(localized: "Needs Vulkan"), tint: .red)
-                        }
-                    }
-
-                    if profile.reasons.isEmpty {
-                        Text("Nothing in this game's files said how it renders, so it gets the runtime's own defaults.")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                    } else {
-                        VStack(alignment: .leading, spacing: Theme.Spacing.small) {
-                            ForEach(profile.reasons, id: \.self) { reason in
-                                HStack(alignment: .firstTextBaseline, spacing: Theme.Spacing.small) {
-                                    Image(systemName: "checkmark.circle")
-                                        .foregroundStyle(Theme.Palette.brandSecondary)
-                                        .imageScale(.small)
-
-                                    Text(reason)
-                                        .font(.callout)
-                                        .foregroundStyle(.secondary)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    private func sourceDescription(_ source: RuntimeProfile.Source) -> String {
-        switch source {
-        case .userOverride: String(localized: "Your choice")
-        case .database:     String(localized: "Known-good settings")
-        case .inspection:   String(localized: "Read from the game")
-        case .fallback:     String(localized: "Defaults")
+            RuntimeProfilePanel(profile: profile)
         }
     }
 
@@ -306,6 +255,74 @@ private struct GameDetailContent: View {
             total += Int64(size)
         }
         return total
+    }
+}
+
+// MARK: - Runtime profile
+
+/**
+ What the app decided about a game, and why.
+
+ Shared by the game's page and its settings sheet. "Automatic, but not silent" is only true
+ where the reasoning is on screen, and it needs to be on screen in both places — the page
+ you land on from a card, and the sheet you open to change something.
+ */
+struct RuntimeProfilePanel: View {
+    let profile: RuntimeProfile
+
+    var body: some View {
+        DetailPanel(title: String(localized: "How this game runs"),
+                    systemImage: "wand.and.sparkles") {
+            VStack(alignment: .leading, spacing: Theme.Spacing.medium) {
+                HStack(spacing: Theme.Spacing.small) {
+                    PortalBadge(profile.graphicsBackend?.description
+                                ?? String(localized: "Runtime default"),
+                                systemImage: "square.stack.3d.up",
+                                tint: Theme.Palette.brandSecondary)
+
+                    PortalBadge(Self.sourceDescription(profile.source),
+                                systemImage: profile.source == .userOverride ? "hand.raised" : "gearshape.2")
+
+                    if profile.requirements.thirtyTwoBit {
+                        PortalBadge(String(localized: "32-bit"), tint: .orange)
+                    }
+
+                    if profile.requirements.nativeVulkan {
+                        PortalBadge(String(localized: "Needs Vulkan"), tint: .red)
+                    }
+                }
+
+                if profile.reasons.isEmpty {
+                    Text("Nothing in this game's files said how it renders, so it gets the runtime's own defaults.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                } else {
+                    VStack(alignment: .leading, spacing: Theme.Spacing.small) {
+                        ForEach(profile.reasons, id: \.self) { reason in
+                            HStack(alignment: .firstTextBaseline, spacing: Theme.Spacing.small) {
+                                Image(systemName: "checkmark.circle")
+                                    .foregroundStyle(Theme.Palette.brandSecondary)
+                                    .imageScale(.small)
+
+                                Text(reason)
+                                    .font(.callout)
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    static func sourceDescription(_ source: RuntimeProfile.Source) -> String {
+        switch source {
+        case .userOverride: String(localized: "Your choice")
+        case .database:     String(localized: "Known-good settings")
+        case .inspection:   String(localized: "Read from the game")
+        case .fallback:     String(localized: "Defaults")
+        }
     }
 }
 

@@ -317,14 +317,20 @@ Not finished:
 Buttons, sheet surfaces and panels are routed through `Views/DesignSystem/` now, which
 carried the look into most of the app for free. What it did not reach:
 
-  - ~~The Settings window~~, ~~Containers~~, ~~Onboarding~~ and ~~the installation
-    sheets' headers~~ are done. What's left below.
-  - **`ContainerCreationView` and `ContainerSettingsView`** have the app's ground
-    and buttons but their own layout inside.
-  - **`GameSettingsView`**, which is where a per-game runtime override will have to
-    live once `RuntimeProfile.Source.userOverride` is reachable from the interface.
-    Also `HarmonyRatingView`, `RosettaInstallationView`, `EngineInstallationView`,
-    and the four `GameImportView` tabs below their new chrome.
+  - ~~The Settings window~~, ~~Containers~~, ~~Onboarding~~, ~~the installation
+    sheets' headers~~, ~~`ContainerCreationView`~~, ~~`ContainerConfigurationView`~~
+    and ~~`GameSettingsView`~~ are done. Every `Form` in the app now goes through
+    `portalForm()`, which keeps `.grouped`'s structure and drops the system's
+    grouped background — so the remaining views below have the app's ground already
+    and need only their own layout looked at.
+  - **`HarmonyRatingView`, `RosettaInstallationView`, `EngineInstallationView`**, and
+    the four `GameImportView` tabs below their new chrome.
+  - **A per-game runtime override still isn't reachable.**
+    `RuntimeProfile.Source.userOverride` and `SettingsOverride` both exist and both
+    work; nothing in the interface can produce one. `GameSettingsView`'s container
+    panel deliberately shows the assignment read-only rather than offering a picker,
+    because the provisioner reassigns from the profile at every launch and a picker
+    there would be a control that lies.
   - **`SteamGameImportView`'s `Spacer()`** has the same shape as the bug that made
     the GOG import tab appear blank — it is only safe because the tab container
     now proposes an ordinary height. Worth removing on principle.

@@ -131,7 +131,7 @@ struct GOGGameInstallationView: View {
                             Label("Language", systemImage: "character.bubble")
                         }
                     }
-                    .formStyle(.grouped)
+                    .portalForm()
 
                     // Only the error. The "asking GOG how big this download is…" line that
                     // used to sit here said in a sentence what a spinner beside the Install
