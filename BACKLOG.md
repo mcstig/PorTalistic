@@ -292,9 +292,9 @@ Not finished:
   - **`HeroGameCard` is still an `EmptyView()` stub** with a `#Preview` that
     describes what it was going to be. `HomeHero` in `HomeView` is the thing that
     got built. Delete the stub or move `HomeHero` into it.
-  - **`StoreView` renders as a blank rectangle** when Epic's page doesn't load —
-    no loading state, no empty state, no way to tell a slow network from a broken
-    view.
+  - ~~**`StoreView` renders as a blank rectangle** when Epic's page doesn't load~~ —
+    it reports the failure and offers to retry now. It still has no *loading* state,
+    so a slow first paint looks like nothing happening.
   - **The grid is the only layout with hover owned by its container.** `GameCard`
     takes a `hoveredGameID` binding because `.onHover` in a `LazyVGrid` does not
     reliably deliver the exit event, and a card that keeps its own flag gets stuck
@@ -339,6 +339,20 @@ Also outstanding from this round:
     `GameSettingsView`, `EpicGamesGameImportView`, `EngineInstallationView` and
     `OnboardingView`. `OperationCard`'s four are gone.
   - **`HeroGameCard` is still an `EmptyView()` stub.**
+
+  - **Nobody has watched an Epic store sign-in finish.** The web views can open the
+    windows a sign-in asks for now, and the store page renders where it used to show
+    Epic's own error, but the sign-in itself has only been reasoned about — a
+    background-automated click never reaches a `WKWebView`'s page (hover does; the
+    click is spent activating the window), so this needs a person at the machine.
+  - **GOG's sign-in still sends WebKit's own user agent**, which does not name a
+    browser. Epic's identity service answers that with a generic error; GOG has never
+    complained, so it was left alone rather than changed under a flow that works. If
+    GOG ever starts erroring on sign-in, this is the first thing to try.
+  - **`WebViewWindowOpener` implements no JavaScript dialogs.** `alert()`, `confirm()`
+    and `prompt()` are still silently ignored, because a `WKUIDelegate` that doesn't
+    implement them declines them. A store page that gates something behind a confirm
+    would deadlock the user, not the app.
 
   - **The sidebar no longer has arrow-key navigation.** It stopped being a `List`
     (see the commit for why), and a `ScrollView` of buttons doesn't move selection
