@@ -71,7 +71,7 @@ struct LibraryView: View {
                 // and zoom controls are two buttons everywhere else on the system. Each step
                 // is 30%; they disable themselves at the ends so the current size is always
                 // legible from the toolbar without opening anything.
-                if gameListLayout == .grid, !gameListViewModel.sortedLibrary.isEmpty {
+                if gameListLayout == .grid, gameListViewModel.hasAnyGames(inStorefront: storefront) {
                     ToolbarItemGroup(placement: .automatic) {
                         Button("Smaller Cards", systemImage: "minus.magnifyingglass") {
                             if let smaller = cardSize.stepped(by: -1) { cardSize = smaller }
@@ -95,7 +95,11 @@ struct LibraryView: View {
                 }
                 
                 // MARK: GameListView filter views
-                if !gameListViewModel.sortedLibrary.isEmpty {
+                //
+                // `hasAnyGames`, not `sortedLibrary.isEmpty`: these are the controls that undo
+                // a filter, so testing them against the filtered result is what made a filter
+                // matching nothing unrecoverable.
+                if gameListViewModel.hasAnyGames(inStorefront: storefront) {
                     ToolbarItem(placement: .automatic) {
                         Picker("Layout", systemImage: "macwindow", selection: $gameListLayout) {
                             Label("List", systemImage: "rectangle.grid.1x3")
@@ -140,6 +144,17 @@ struct LibraryView: View {
                             
                             Section {
                                 Toggle("Favourited", isOn: searchTokenBinding(for: .favourited))
+                            }
+
+                            // A way out from inside the control that got you here, so undoing
+                            // a filter never depends on whatever the filtered result happens
+                            // to be showing.
+                            if gameListViewModel.isFiltering {
+                                Section {
+                                    Button("Clear Filters", systemImage: "xmark.circle") {
+                                        gameListViewModel.clearFilters()
+                                    }
+                                }
                             }
                         }
                         .menuIndicator(.hidden)

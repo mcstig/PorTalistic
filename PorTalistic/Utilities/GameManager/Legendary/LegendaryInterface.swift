@@ -885,6 +885,9 @@ final class Legendary {
     static func refreshLibraryMetadata(forceRefresh: Bool = false) async throws {
         guard isSignedIn else { throw NotSignedInError() }
 
+        // Whatever is about to be rewritten on disk.
+        forgetMetadata()
+
         let process: Process = .init()
         process.arguments = ["list"] + (forceRefresh ? ["--force-refresh"] : [])
         await transformProcess(process)
@@ -955,16 +958,41 @@ final class Legendary {
         }()
     }
 
-    static func getGameMetadata(gameID: String) throws -> GameMetadata {
-        let metadataDirectory: URL = configurationFolder.appending(path: "metadata")
-        let metadataDirectoryContents = try FileManager.default.contentsOfDirectory(atPath: metadataDirectory.path)
+    /// Parsed `metadata/<id>.json`, kept for the life of the launch.
+    ///
+    /// These answers are read while views are drawn — `getSupportedPlatforms()` is asked once
+    /// per Epic game by the library's platform filter — and each one used to cost a listing
+    /// of the whole metadata directory plus a JSON decode. The files change only when the
+    /// catalogue is refreshed, which empties this.
+    private nonisolated(unsafe) static var memoizedMetadata: [String: GameMetadata] = .init()
+    private static let metadataLock: NSLock = .init()
 
-        guard let metadataFileName: String = metadataDirectoryContents.first(where: { $0 == gameID.appending(".json") }) else {
+    static func forgetMetadata() {
+        metadataLock.lock()
+        memoizedMetadata = .init()
+        metadataLock.unlock()
+    }
+
+    static func getGameMetadata(gameID: String) throws -> GameMetadata {
+        metadataLock.lock()
+        let memoized = memoizedMetadata[gameID]
+        metadataLock.unlock()
+
+        if let memoized { return memoized }
+
+        // Named directly rather than found by listing the directory. The old version read
+        // every filename in `metadata/` to pick the one it already knew the name of.
+        let file = configurationFolder.appending(path: "metadata").appending(path: "\(gameID).json")
+
+        guard FileManager.default.fileExists(atPath: file.path) else {
             throw CocoaError(.fileNoSuchFile)
         }
 
-        let data: Data = try .init(contentsOf: URL(filePath: metadataDirectory.appending(path: metadataFileName).path))
-        let metadata: GameMetadata = try JSONDecoder().decode(GameMetadata.self, from: data)
+        let metadata: GameMetadata = try JSONDecoder().decode(GameMetadata.self, from: try Data(contentsOf: file))
+
+        metadataLock.lock()
+        memoizedMetadata[gameID] = metadata
+        metadataLock.unlock()
 
         return metadata
     }

@@ -68,8 +68,16 @@ import OSLog
                 return searchTokens.isEmpty || searchTokens.allSatisfy { token in
                     switch token {
                     case .platform(let platform):
-                        guard case .installed(_, let gamePlatform) = game.installationState else { return false }
-                        return gamePlatform == platform
+                        // An installed game is the platform it was installed as; one that
+                        // isn't is every platform it *offers*. Matching only the installed
+                        // case meant these filters hid every uninstalled game in the library
+                        // as well — a hundred and thirty of them — and filtering by a
+                        // platform nothing happened to be installed as emptied the list.
+                        if case .installed(_, let installedPlatform) = game.installationState {
+                            return installedPlatform == platform
+                        }
+
+                        return game.getSupportedPlatforms()?.contains(platform) ?? false
                     case .storefront(let tokenStorefront):
                         return game.storefront == tokenStorefront
                     case .installed:
@@ -121,6 +129,16 @@ import OSLog
 
     /// Whether anything is narrowing the library right now.
     var isFiltering: Bool { !searchString.isEmpty || !searchTokens.isEmpty }
+
+    /// Whether this shelf holds any games at all, filters ignored.
+    ///
+    /// The toolbar has to ask *this*, not whether the filtered result is empty. Gating the
+    /// Layout picker, the card-size buttons and the Filters menu on `sortedLibrary.isEmpty`
+    /// meant a filter that matched nothing removed the only controls that could undo it —
+    /// so picking Steam, or macOS, left a blank library and no way back.
+    func hasAnyGames(inStorefront storefront: Game.Storefront?) -> Bool {
+        GameDataStore.shared.library.contains { storefront == nil || $0.storefront == storefront }
+    }
 
     func clearFilters() {
         searchString = .init()
