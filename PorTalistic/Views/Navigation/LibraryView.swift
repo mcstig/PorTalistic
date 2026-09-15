@@ -121,7 +121,10 @@ struct LibraryView: View {
                             // make the list wrong.
                             if storefront == nil {
                                 Section("Storefront") {
-                                    ForEach(Game.Storefront.allCases, id: \.self) { candidate in
+                                    // `.available`, not `allCases`: Steam is behind a flag,
+                                    // so offering it as a filter meant filtering the library
+                                    // down to nothing on purpose.
+                                    ForEach(Game.Storefront.available, id: \.self) { candidate in
                                         Toggle(candidate.description,
                                                isOn: searchTokenBinding(for: .storefront(candidate)))
                                     }

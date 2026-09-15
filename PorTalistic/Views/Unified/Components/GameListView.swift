@@ -52,8 +52,6 @@ struct GameListView: View {
                 empty
             } else {
                 ScrollView(.vertical) {
-                    // FIXME: sortedLibrary should not be appended to or it'll cause overwrites.
-                    // FIXME: a dirtyfix is to directly set to the underlying library
                     switch layout {
                     case .grid:
                         LazyVGrid(
@@ -83,23 +81,28 @@ struct GameListView: View {
                 // which no individual card is in a position to notice.
                 .modifier(ScrollPhaseReporter(hover: hover))
                 .onHover { if !$0 { hover.gameID = nil } }
-                .searchable(text: $viewModel.searchString,
-                            tokens: $viewModel.searchTokens,
-                            suggestedTokens: .constant(viewModel.suggestedTokens),
-                            placement: .toolbar) { token in
-                    switch token {
-                    case .platform(let platform):
-                        Text(platform.description)
-                    case .storefront(let storefront):
-                        Text(storefront.description)
-                    case .installed:
-                        Text("Installed")
-                    case .notInstalled:
-                        Text("Not Installed")
-                    case .favourited:
-                        Text("Favourited")
-                    }
-                }
+            }
+        }
+        // On the `Group`, so it outlives its own result. Attached to the scroll view inside
+        // the `else`, a filter that matched nothing took the branch away — and the search
+        // field with it, tokens included — leaving no way to undo the filter that had just
+        // emptied the library. Filtering by Steam, which is behind a flag and owns no games,
+        // did exactly that.
+        .searchable(text: $viewModel.searchString,
+                    tokens: $viewModel.searchTokens,
+                    suggestedTokens: .constant(viewModel.suggestedTokens),
+                    placement: .toolbar) { token in
+            switch token {
+            case .platform(let platform):
+                Text(platform.description)
+            case .storefront(let storefront):
+                Text(storefront.description)
+            case .installed:
+                Text("Installed")
+            case .notInstalled:
+                Text("Not Installed")
+            case .favourited:
+                Text("Favourited")
             }
         }
         .animation(Theme.Motion.layout, value: layout)
@@ -110,7 +113,37 @@ struct GameListView: View {
         .animation(.default, value: games.count)
     }
 
+    @ViewBuilder
     private var empty: some View {
+        if viewModel.isFiltering {
+            filteredToNothing
+        } else {
+            nothingHere
+        }
+    }
+
+    /// The library isn't empty — the filter is just too narrow.
+    ///
+    /// Worth its own state rather than reusing "Nothing here yet.": that copy told someone
+    /// with a hundred and thirty-seven games that they had none, and offered to import one,
+    /// which is not the problem and not the fix.
+    private var filteredToNothing: some View {
+        VStack(spacing: Theme.Spacing.large) {
+            ContentUnavailableView(
+                String(localized: "No matches."),
+                systemImage: "line.3.horizontal.decrease.circle",
+                description: Text("Nothing in this library matches what you're filtering by.")
+            )
+
+            Button("Clear Filters", systemImage: "xmark.circle") {
+                withAnimation(Theme.Motion.layout) { viewModel.clearFilters() }
+            }
+            .buttonStyle(.portalProminent)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var nothingHere: some View {
         VStack(spacing: Theme.Spacing.large) {
             ContentUnavailableView(
                 emptyTitle,

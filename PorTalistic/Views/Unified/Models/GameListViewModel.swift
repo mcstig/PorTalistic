@@ -105,7 +105,9 @@ import OSLog
         let hasInstallation: Bool = searchTokens.contains { $0 == .installed || $0 == .notInstalled }
         
         if !hasPlatform { suggestions.append(contentsOf: Game.Platform.allCases.map { .platform($0) }) }
-        if !hasStorefront { suggestions.append(contentsOf: Game.Storefront.allCases.map { .storefront($0) }) }
+        // `.available`, not `allCases`. Steam is behind a flag and has no games, so
+        // suggesting it was offering a token whose only effect is to empty the library.
+        if !hasStorefront { suggestions.append(contentsOf: Game.Storefront.available.map { .storefront($0) }) }
         if !hasInstallation { suggestions += [.installed, .notInstalled] }
         if !searchTokens.contains(.favourited) { suggestions.append(.favourited) }
         
@@ -116,6 +118,14 @@ import OSLog
     private let logger: Logger = .custom(category: "GameListViewModel")
     
     var isUpdatingLibrary: Bool = false
+
+    /// Whether anything is narrowing the library right now.
+    var isFiltering: Bool { !searchString.isEmpty || !searchTokens.isEmpty }
+
+    func clearFilters() {
+        searchString = .init()
+        searchTokens = .init()
+    }
 }
 
 extension GameListViewModel {
