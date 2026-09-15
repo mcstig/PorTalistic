@@ -138,6 +138,99 @@ else
     ok "unpacked and patched"
 fi
 
+# ── x86_64 dependencies ──────────────────────────────────────────────────────────────────
+say "Getting x86_64 freetype and gnutls"
+
+# Without freetype Wine renders no text at all, which for most games means no menus. The
+# obstacle is that `$BREW_PREFIX` is arm64 and an x86_64 Wine cannot link against it.
+#
+# Rather than install a whole second Homebrew under /usr/local through Rosetta, this pulls
+# the x86_64 *bottles* — the same binaries that Homebrew would pour — and unpacks them into
+# the build tree. Nothing is installed system-wide and nothing outside $WORK is touched.
+#
+# The cost is three fixups, all of which exist because a bottle that was never poured is
+# still full of placeholders:
+#
+#   1. Its `.pc` files say `@@HOMEBREW_PREFIX@@` instead of a path.
+#   2. Each dylib's own install name says the same, so anything linked against it would
+#      record a path that doesn't exist and fail at load time.
+#   3. Rewriting an install name invalidates the signature, so each one has to be re-signed.
+#
+# The install names become bare leaf names, which makes dyld resolve them through
+# `DYLD_FALLBACK_LIBRARY_PATH` — and that is exactly what PorTalistic sets to a runtime's
+# `Frameworks` directory. It is also how the Sikarugir engines are arranged, which is the
+# one arrangement known to work with this app.
+
+DEPS="$WORK/deps"
+CELLAR="$DEPS/cellar"
+DEPPREFIX="$DEPS/prefix"
+
+if [[ -f "$DEPS/.ready" ]]; then
+    ok "already unpacked (delete $DEPS to redo)"
+else
+    rm -rf "$DEPS"
+    mkdir -p "$CELLAR" "$DEPPREFIX/include" "$DEPPREFIX/lib"
+
+    # Homebrew names x86_64 bottles after the macOS release with no prefix; arm64 ones get
+    # `arm64_`. Read the available tags rather than guess a codename.
+    TAG="$(brew info --json=v2 freetype 2>/dev/null | python3 -c '
+import json, sys
+try:
+    files = json.load(sys.stdin)["formulae"][0]["bottle"]["stable"]["files"]
+except Exception:
+    sys.exit(0)
+tags = [t for t in files if not t.startswith("arm64_") and t != "all"]
+print(tags[0] if tags else "")
+')"
+    [[ -n "$TAG" ]] || die "couldn't work out the x86_64 bottle tag from \`brew info freetype\`"
+    ok "bottle tag: $TAG"
+
+    # Everything freetype and gnutls link against, not just the two themselves.
+    mapfile -t FORMULAE < <(printf '%s\n' freetype gnutls $(brew deps --union freetype gnutls) | sort -u)
+    ok "${#FORMULAE[@]} formulae: ${FORMULAE[*]}"
+
+    brew fetch --bottle-tag="$TAG" "${FORMULAE[@]}" >/dev/null \
+        || die "couldn't fetch x86_64 bottles for $TAG"
+
+    for formula in "${FORMULAE[@]}"; do
+        bottle="$(brew --cache --bottle-tag="$TAG" "$formula" 2>/dev/null)"
+        [[ -f "$bottle" ]] || die "no cached bottle for $formula"
+        tar -xzf "$bottle" -C "$CELLAR"
+    done
+    ok "unpacked into the build tree"
+
+    # Flatten the Cellar layout into one prefix Wine's configure can be pointed at.
+    for kegdir in "$CELLAR"/*/*/; do
+        [[ -d "$kegdir/include" ]] && cp -R "$kegdir/include/." "$DEPPREFIX/include/" 2>/dev/null
+        [[ -d "$kegdir/lib" ]] && cp -R "$kegdir/lib/." "$DEPPREFIX/lib/" 2>/dev/null
+    done
+
+    # 1. Placeholders in pkg-config files.
+    find "$DEPPREFIX" -name "*.pc" -print0 | xargs -0 -r sed -i '' \
+        -e "s|@@HOMEBREW_PREFIX@@|$DEPPREFIX|g" \
+        -e "s|@@HOMEBREW_CELLAR@@|$CELLAR|g"
+
+    # 2 and 3. Install names, their dependents, and the signature.
+    for dylib in "$DEPPREFIX"/lib/*.dylib; do
+        [[ -f "$dylib" && ! -L "$dylib" ]] || continue
+
+        install_name_tool -id "$(basename "$dylib")" "$dylib" 2>/dev/null
+
+        otool -L "$dylib" | awk 'NR>1 {print $1}' | while read -r dependency; do
+            case "$dependency" in
+                @@HOMEBREW*|"$DEPPREFIX"*|"$CELLAR"*|"$BREW_PREFIX"*)
+                    install_name_tool -change "$dependency" "$(basename "$dependency")" "$dylib" 2>/dev/null
+                    ;;
+            esac
+        done
+
+        codesign --force --sign - "$dylib" 2>/dev/null
+    done
+
+    ok "$(find "$DEPPREFIX/lib" -name '*.dylib' -not -type l | wc -l | tr -d ' ') libraries ready"
+    touch "$DEPS/.ready"
+fi
+
 # ── Configure and build ──────────────────────────────────────────────────────────────────
 say "Configuring"
 
@@ -155,28 +248,20 @@ say "Configuring"
 # The guard was right and the build was wrong.
 export CC="clang -arch x86_64"
 export CXX="clang++ -arch x86_64"
-export CFLAGS="-O2 -g"
+export CFLAGS="-O2 -g -I$DEPPREFIX/include"
 export CXXFLAGS="$CFLAGS"
-export LDFLAGS=""
+export LDFLAGS="-L$DEPPREFIX/lib"
 
-# Deliberately *not* pointed at Homebrew. `$BREW_PREFIX` is arm64, and linking an x86_64
-# Wine against arm64 libraries fails at the first link. Getting x86_64 freetype and gnutls
-# means a second Homebrew under /usr/local installed through Rosetta, which is a big thing
-# to do to a machine for an experiment — so the experiment goes without them, and a build
-# meant for release gets them properly.
-#
-# What that costs: no font rendering inside Wine, and no TLS for Windows apps. Neither is
-# in the way of the question being asked, which is whether a Direct3D 11 swap chain can
-# present through this driver at all.
-WITHOUT_DEPS=(--without-freetype --without-gnutls)
-unset PKG_CONFIG_PATH
+# The unpacked x86_64 bottles, never `$BREW_PREFIX` — that one is arm64 and linking an
+# x86_64 Wine against it fails at the first link.
+export PKG_CONFIG_PATH="$DEPPREFIX/lib/pkgconfig"
 
 BUILD="$WORK/build"
 mkdir -p "$BUILD"
 
 # The first run's build directory is configured for arm64 and reusing it would repeat the
 # failure, so it goes when the architecture it was configured for isn't the one we want.
-if [[ -f "$BUILD/Makefile" && ! -f "$BUILD/.configured-x86_64" ]]; then
+if [[ -f "$BUILD/Makefile" && ! -f "$BUILD/.configured-x86_64-with-deps" ]]; then
     warn "existing build directory was configured for another architecture; starting it over"
     rm -rf "$BUILD"
     mkdir -p "$BUILD"
@@ -194,11 +279,10 @@ else
             --host=x86_64-apple-darwin \
             --enable-archs=i386,x86_64 \
             --disable-tests \
-            "${WITHOUT_DEPS[@]}" \
             --without-oss \
             --without-v4l2
     ) || die "configure failed — the tail of $BUILD/config.log says why"
-    touch "$BUILD/.configured-x86_64"
+    touch "$BUILD/.configured-x86_64-with-deps"
     ok "configured for x86_64"
 fi
 
@@ -241,6 +325,20 @@ if (( ${#missing_markers[@]} == 0 )); then
     ok "the DXMT hooks are compiled into winemac.so"
 else
     die "winemac.so is missing ${missing_markers[*]} — the patch didn't take"
+fi
+
+# The dylibs travel with the runtime. `Frameworks` is not an arbitrary name:
+# `RuntimeInstaller.supportLibrariesDirectoryName` is "Frameworks", and
+# `Wine.transformProcess` puts that directory on `DYLD_FALLBACK_LIBRARY_PATH` — which is how
+# the bare install names set above get resolved. Same arrangement as the Sikarugir engines.
+mkdir -p "$PREFIX/Frameworks"
+find "$DEPPREFIX/lib" -maxdepth 1 -name "*.dylib" -exec cp -a {} "$PREFIX/Frameworks/" \;
+ok "$(find "$PREFIX/Frameworks" -name '*.dylib' | wc -l | tr -d ' ') support libraries bundled"
+
+if "$PREFIX/bin/wine" --version >/dev/null 2>&1; then
+    ok "wine still starts with the bundled libraries"
+else
+    warn "wine --version failed after bundling — check DYLD_FALLBACK_LIBRARY_PATH resolution"
 fi
 
 # A marker, so PorTalistic can tell this build apart from a stock one.
