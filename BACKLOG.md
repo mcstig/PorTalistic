@@ -314,6 +314,25 @@ Not finished:
 
 ## A second DXMT-capable Wine build
 
+**Built, and it boots.** `Compatibility/build-dxmt-wine.sh` produces Wine 11.16 from
+winehq source with CodeWeavers' `winemac.drv` patch, x86_64 throughout. On the
+machine where Sikarugir cannot create a prefix at all, this one created
+`Containers/Wine 11.16 (DXMT)` cleanly, took DXMT v0.80's `-builtin` release
+(`installed 11 libraries`), and put `winemetal.dll`, `d3d11.dll`, `dxgi.dll` and the
+`d3d10` set into the prefix. That is both halves in one runtime for the first time.
+
+Still open on it:
+
+  - **Whether a game actually renders through it** — the infrastructure is verified,
+    the pixels are not.
+  - **It is built without freetype and gnutls**, so no font rendering inside Wine and
+    no TLS for Windows apps. Fixing that means x86_64 builds of both, which means a
+    second Homebrew under /usr/local through Rosetta. Necessary before release, not
+    before the rendering question is answered.
+  - **The catalogue entry is `#if DEBUG`** in `RuntimeRelease.unreleased`, because its
+    `downloadURL` points at a release that doesn't exist. Cut the release, move the
+    entry into `Compatibility/manifest.json`, re-sign.
+
 DXMT still rests on `wine-sikarugir-11.0` alone. That is now survivable rather
 than fatal — `Provisioner.usableContainer` walks the whole ranking and falls
 through to the next Wine when one can't boot a prefix, and the game's page says
