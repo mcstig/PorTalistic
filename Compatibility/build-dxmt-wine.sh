@@ -171,29 +171,35 @@ else
     rm -rf "$DEPS"
     mkdir -p "$CELLAR" "$DEPPREFIX/include" "$DEPPREFIX/lib"
 
-    # Homebrew names x86_64 bottles after the macOS release with no prefix; arm64 ones get
-    # `arm64_`. The first attempt at this parsed `brew info --json=v2` and came up empty, so
-    # ask Homebrew what tag it would use for this machine instead: `brew ruby` runs with
-    # Homebrew's own libraries loaded, and `Utils::Bottles.tag` is the same answer it uses
-    # when pouring. Version-proof, where a hard-coded codename isn't.
-    TAG="${BOTTLE_TAG:-}"
+    # Which macOS release's x86_64 bottles to use.
+    #
+    # Not this one. Homebrew builds x86_64 bottles only for the releases Apple still ships
+    # Intel Macs for, and macOS 26 is not one of them — asking for `tahoe` gets "Bottle for
+    # tag :tahoe is unavailable" eleven times out of twelve. The native tag is no help either
+    # for the same reason; it is `arm64_tahoe`, and stripping the prefix names a bottle that
+    # was never built.
+    #
+    # An x86_64 bottle built for an older macOS runs fine on a newer one, so take the newest
+    # tag that actually has one. Found by asking for it: availability is not something worth
+    # predicting when one fetch settles it, and the fetch warms the cache either way.
+    ok "looking for the newest macOS with x86_64 bottles"
+    TAG=""
+    for candidate in ${BOTTLE_TAG:-sequoia sonoma ventura monterey}; do
+        if brew fetch --bottle-tag="$candidate" freetype >/dev/null 2>&1; then
+            TAG="$candidate"
+            break
+        fi
+        printf '  \033[33m!\033[0m no x86_64 bottle for %s\n' "$candidate"
+    done
 
     if [[ -z "$TAG" ]]; then
-        TAG="$(brew ruby -e 'puts Utils::Bottles.tag' 2>/dev/null | tr -d '[:space:]')"
-        TAG="${TAG#arm64_}"
+        printf "\n  no macOS release has an x86_64 freetype bottle, which shouldn't happen.\n\n" >&2
+        printf "  To see what Homebrew actually has:\n" >&2
+        printf "      brew info --json=v2 freetype | python3 -m json.tool | grep -A25 files\n\n" >&2
+        printf "  Then rerun with that tag:\n" >&2
+        printf "      BOTTLE_TAG=<tag> bash Compatibility/build-dxmt-wine.sh\n" >&2
+        die "no usable bottle tag"
     fi
-
-    # And if that ever stops working, the codename for this macOS.
-    if [[ -z "$TAG" ]]; then
-        case "$(sw_vers -productVersion | cut -d. -f1)" in
-            26) TAG="tahoe" ;;
-            15) TAG="sequoia" ;;
-            14) TAG="sonoma" ;;
-            13) TAG="ventura" ;;
-        esac
-    fi
-
-    [[ -n "$TAG" ]] || die "couldn't work out this Mac's x86_64 bottle tag — rerun with BOTTLE_TAG=tahoe (or whatever your macOS is called)"
     ok "bottle tag: $TAG"
 
     # Everything freetype and gnutls link against, not just the two themselves.
@@ -203,27 +209,42 @@ else
         [[ -n "$formula" ]] && FORMULAE+=("$formula")
     done < <(printf '%s\n' freetype gnutls $(brew deps --union freetype gnutls) | sort -u)
 
-    (( ${#FORMULAE[@]} )) || die "\`brew deps\` returned nothing for freetype and gnutls"
+    (( ${#FORMULAE[@]} )) || die "brew deps returned nothing for freetype and gnutls"
     ok "${#FORMULAE[@]} formulae: ${FORMULAE[*]}"
 
-    # No heredoc inside `$( )` here, however tidy it would look: bash 3.2 — which is what
-    # /bin/bash is on macOS — cannot parse one, and it doesn't fail on the line that has it.
-    # It loses its place and reports a syntax error at the next `(` in the file, which was
-    # ninety lines further down and had nothing wrong with it.
-    if ! brew fetch --bottle-tag="$TAG" "${FORMULAE[@]}" >/dev/null; then
-        printf "\n  couldn't fetch x86_64 bottles for tag '%s'.\n\n" "$TAG" >&2
-        printf "  If that tag is wrong for this macOS, rerun with the right one:\n" >&2
-        printf "      BOTTLE_TAG=tahoe bash Compatibility/build-dxmt-wine.sh\n\n" >&2
-        printf "  To see what Homebrew has:\n" >&2
-        printf "      brew info --json=v2 freetype | python3 -m json.tool | grep -A20 files\n" >&2
-        die "bottle fetch failed"
-    fi
-
+    # Per formula rather than all at once, so a failure can name the formula instead of
+    # leaving twelve possibilities. A bottle with no architecture — `ca-certificates` is one —
+    # is tagged `all`, and `brew --cache` files it under that tag rather than this one, so
+    # both are tried.
+    MISSING=""
     for formula in "${FORMULAE[@]}"; do
-        bottle="$(brew --cache --bottle-tag="$TAG" "$formula" 2>/dev/null)"
-        [[ -f "$bottle" ]] || die "no cached bottle for $formula"
+        brew fetch --bottle-tag="$TAG" "$formula" >/dev/null 2>&1
+
+        bottle=""
+        for cachetag in "$TAG" all; do
+            candidate="$(brew --cache --bottle-tag="$cachetag" "$formula" 2>/dev/null)"
+            if [[ -f "$candidate" ]]; then
+                bottle="$candidate"
+                break
+            fi
+        done
+
+        if [[ -z "$bottle" ]]; then
+            MISSING="$MISSING $formula"
+            continue
+        fi
+
         tar -xzf "$bottle" -C "$CELLAR"
     done
+
+    # freetype and gnutls are the point; a missing dependency of theirs would only fail later
+    # and less clearly, so all of them are required.
+    if [[ -n "$MISSING" ]]; then
+        printf "\n  no x86_64 bottle for:%s\n\n" "$MISSING" >&2
+        printf "  Try an older release:\n" >&2
+        printf "      BOTTLE_TAG=sonoma bash Compatibility/build-dxmt-wine.sh\n" >&2
+        die "incomplete dependency set"
+    fi
     ok "unpacked into the build tree"
 
     # Flatten the Cellar layout into one prefix Wine's configure can be pointed at.
