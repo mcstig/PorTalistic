@@ -320,6 +320,35 @@ through to the next Wine when one can't boot a prefix, and the game's page says
 so — but "the one DXMT build failed, so this runs on wined3d instead" is a bad
 day, not a good one.
 
+**Sikarugir does not work on this Mac, and it isn't our integration.** The engine
+reaches Windows code and then every process is killed — `err:environ:run_wineboot
+failed to start wineboot 1`, exit 1, no crash report, while `wine --version`
+answers `wine-11.0 (Sikarugir)` perfectly. Ruled out, each with evidence, by
+pulling both engines apart and comparing them:
+
+  - **Not a bad download.** The tarball's SHA-256 matches the manifest exactly.
+  - **Not code signing, entitlements or the hardened runtime.** Sikarugir's
+    `bin/wine` and `lib/wine/x86_64-unix/wine` are ad-hoc signed (`cd_flags=0x2`),
+    carry *no* embedded entitlements and are x86_64-only — which is byte-for-byte
+    the same posture as Gcenx's `wine-stable-11.0`, and that one boots a prefix
+    here fine.
+  - **Not packaging.** `wineboot.exe`, `wine.inf`, `winemac.drv` (both arches),
+    `winemac.so` and all of `share/wine` are present.
+  - **Not the support libraries.** Every `LC_LOAD_DYLIB` across `wineserver` and all
+    31 unix-side `.so` files resolves to something the paired
+    `Template-1.0.14.app/Contents/Frameworks` actually contains, and not one binary
+    references `@rpath` without an `LC_RPATH` — so the failure in
+    `transformProcess`'s comment isn't this one.
+  - **Not Rosetta, and not the architecture split.** Both engines are x86_64-only
+    with identical `i386-windows` / `x86_64-windows` / `x86_64-unix` layouts and the
+    same wow64 pieces. Gcenx's works.
+  - **Not `CX_ROOT` leaking.** It is absent from the environment dump, correctly.
+
+Structurally the two are near-identical Wine 11 builds. What differs is the code —
+the Metal patching that is the entire point of the Sikarugir build. Nothing about
+that is fixable from outside it, which is why a second build stopped being about
+redundancy: **it is the only way this Mac gets DXMT at all.**
+
 **Licensing is not the constraint here.** Wine is LGPL-2.1+, aquadran's DXMT
 patch is compatible with it, and the app *downloads* runtimes from the
 publisher's own release rather than shipping any — it redistributes no Wine at
@@ -350,6 +379,14 @@ What the research says about a second source:
     own notes put DXMT on 32-bit D3D10/11 and *Apple GPTK* on 64-bit. GPTK's
     `D3DMetal.framework` is Apple's and non-commercial only, which rules it out for a
     paid product.
+  - **Test before building.** Sikarugir and Porting Kit's engine are both
+    Wineskin-lineage (`WS11…`, `WS12…`), so if Porting Kit's DXMT engine is killed
+    the same way, the cause is this machine or this OS and a from-source build of
+    the same lineage may gain nothing. A build from winehq source is a different
+    lineage and so a genuinely different experiment — but it is a day's work, and
+    trying an existing engine is an afternoon's. The cheapest test of all is whether
+    Sikarugir's *own* app can make a bottle on this Mac: if it can't, the engine is
+    broken here regardless of PorTalistic.
   - **Building one is the robust answer**, and there is a working recipe in
     `macgameport/cities-skylines-2-macos/scripts/build-engine-1116.sh`: Wine 11.16
     from `dl.winehq.org` (sha256 `c66e2090343dcd727f7f7fd2f87ee0bfb0b118790c1d745ab7b8a4c3a4197f2f`),
