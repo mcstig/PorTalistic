@@ -93,7 +93,8 @@ class LocalGameManager {
                     """)
 
                 var environment: [String: String] = .init()
-                environment = try Wine.assembleEnvironmentVariables(forContainerAtURL: containerURL)
+                environment = try Wine.assembleEnvironmentVariables(forContainerAtURL: containerURL,
+                                                                   overriding: plan.settings)
 
                 if UserDefaults.standard.bool(forKey: "minimiseOnGameLaunch") {
                     NSApp.windows.first?.miniaturize(nil)

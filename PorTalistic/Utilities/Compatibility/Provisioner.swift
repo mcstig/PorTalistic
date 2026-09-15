@@ -315,6 +315,18 @@ final class Provisioner {
         /// now and for the game's settings sheet later.
         let runtimeName: String
         let reasons: [String]
+
+        /// The settings that can only be applied to a launch, never to a container.
+        ///
+        /// `msync`, `avx2`, `dxvk`, `dxvkAsync` and `metalHUD` are read out of the container's
+        /// persisted settings each time environment variables are assembled, so a per-game
+        /// value has to be handed to that assembly — see
+        /// ``Wine/assembleEnvironmentVariables(forContainerAtURL:container:overriding:)``.
+        /// The other three are in the prefix's registry and ``apply(_:to:)`` has already
+        /// written them, which is why this is the whole overlay rather than a filtered one:
+        /// the registry half is simply ignored downstream, and a setting that later moves
+        /// from one half to the other doesn't have to be remembered in two places.
+        let settings: RuntimeProfile.SettingsOverride
     }
 
     /// How to put each container back, keyed by the container rather than by the launch.
@@ -347,7 +359,8 @@ final class Provisioner {
 
         return .init(containerURL: container.url,
                      runtimeName: runtime.name,
-                     reasons: profile.reasons)
+                     reasons: profile.reasons,
+                     settings: profile.settings)
     }
 
     /// Put the container back the way the user left it.
@@ -414,12 +427,12 @@ final class Provisioner {
     /// and Prey wants Retina Mode off in the same prefix where Blades of Time wants it on. So
     /// each launch states the whole answer and the previous one stops mattering.
     ///
-    /// Limited to the three settings that live in the container's registry, which are also the
-    /// three a curated entry can currently ask for. `msync`, `metalHUD`, `avx2` and `dxvk` are
-    /// read from the container's *persisted* settings when the launch assembles its
-    /// environment, so applying those per-game means writing to the container and hoping to
-    /// write back — and a crash mid-game would leave someone's container changed. Overriding
-    /// them belongs in environment assembly instead, where nothing has to be put back.
+    /// Limited to the three settings that live in the container's registry. The other five —
+    /// `msync`, `avx2`, `dxvk`, `dxvkAsync` and `metalHUD` — are read from the container's
+    /// *persisted* settings when a launch assembles its environment, so applying them here
+    /// would mean writing to the container and hoping to write back, and a crash mid-game
+    /// would leave someone's container changed. They ride on ``LaunchPlan/settings`` instead,
+    /// where nothing has to be put back.
     private func apply(_ overrides: RuntimeProfile.SettingsOverride,
                        to container: Wine.Container) async -> [@Sendable () async -> Void] {
         var reverts: [@Sendable () async -> Void] = .init()

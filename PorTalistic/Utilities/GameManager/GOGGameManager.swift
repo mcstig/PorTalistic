@@ -200,7 +200,8 @@ class GOGGameManager {
                 let process: Process = .init()
                 process.arguments = [target.executable.path] + target.arguments + game.launchArguments
 
-                var environment = try Wine.assembleEnvironmentVariables(forContainerAtURL: containerURL)
+                var environment = try Wine.assembleEnvironmentVariables(forContainerAtURL: containerURL,
+                                                                      overriding: plan.settings)
 
                 // Wine's default channels print a `fixme` for every Direct3D present — two
                 // per frame, each a formatted write to stderr. Blades of Time's first two

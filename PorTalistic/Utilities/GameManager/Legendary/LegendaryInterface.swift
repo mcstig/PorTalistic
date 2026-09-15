@@ -626,7 +626,8 @@ final class Legendary {
                 //     wine client error:0: version mismatch 762/930.
                 let invocation = Wine.runtimeInvocation(forContainerAtURL: containerURL)
 
-                environment = try Wine.assembleEnvironmentVariables(forContainerAtURL: containerURL)
+                environment = try Wine.assembleEnvironmentVariables(forContainerAtURL: containerURL,
+                                                                   overriding: resolved.settings)
                 environment.merge(invocation.environment, uniquingKeysWith: { $1 })
 
                 // legendary requires this, since it calls wine directly.

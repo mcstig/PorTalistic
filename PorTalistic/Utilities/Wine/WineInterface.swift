@@ -582,16 +582,37 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
     }
 
     /// - Returns: Relevant environment variables as configured in a container for game launch.
-    static func assembleEnvironmentVariables(forContainerAtURL containerURL: URL, container: Container? = nil) throws -> [String: String] {
+    /// The environment a container's settings ask for, with a game allowed the last word.
+    ///
+    /// `overrides` is how a per-game setting reaches a launch at all. Five of the eight
+    /// settings a profile can express — `msync`, `avx2`, `dxvk`, `dxvkAsync` and `metalHUD` —
+    /// don't live in the prefix's registry; they are read from the container's *persisted*
+    /// settings right here, every launch. Applying them per game by writing to the container
+    /// and writing back afterwards would leave someone's container changed by any crash mid
+    /// game. Passing them through instead means nothing has to be put back.
+    ///
+    /// They are resolved as `the game's opinion ?? the container's own setting`, and resolved
+    /// *before* the rules below run, because these settings are not independent: which
+    /// variable turns the HUD on depends on whether DXVK is in play, and `DXVK_ASYNC` means
+    /// nothing without it. Overlaying finished variables afterwards would get both wrong.
+    static func assembleEnvironmentVariables(forContainerAtURL containerURL: URL,
+                                             container: Container? = nil,
+                                             overriding overrides: RuntimeProfile.SettingsOverride = .init()) throws -> [String: String] {
         guard containerExists(at: containerURL) else { throw Wine.Container.DoesNotExistError() }
 
         let container = try container ?? getContainerObject(at: containerURL)
         var environmentVariables: [String: String] = [:]
 
-        environmentVariables["WINEMSYNC"] = container.settings.msync.numericalValue.description
-        environmentVariables["ROSETTA_ADVERTISE_AVX"] = container.settings.avx2.numericalValue.description
+        let msync = overrides.msync ?? container.settings.msync
+        let avx2 = overrides.avx2 ?? container.settings.avx2
+        let dxvk = overrides.dxvk ?? container.settings.dxvk
+        let dxvkAsync = overrides.dxvkAsync ?? container.settings.dxvkAsync
+        let metalHUD = overrides.metalHUD ?? container.settings.metalHUD
 
-        if container.settings.dxvk {
+        environmentVariables["WINEMSYNC"] = msync.numericalValue.description
+        environmentVariables["ROSETTA_ADVERTISE_AVX"] = avx2.numericalValue.description
+
+        if dxvk {
             // `dxgi` is listed for completeness rather than because a file is expected: the
             // macOS DXVK builds are compiled against Wine's own DXGI and ship no dxgi.dll, so
             // this half of the override normally falls straight through to `b`. It matters
@@ -606,11 +627,11 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
             // the Steam client to give up on drawing. ``createContainer`` installing DXVK when
             // the setting asks for it is what makes the promise true.
             environmentVariables["WINEDLLOVERRIDES"] = "dxgi,d3d10core,d3d11=n,b"
-            environmentVariables["DXVK_ASYNC"] = container.settings.dxvkAsync.numericalValue.description
+            environmentVariables["DXVK_ASYNC"] = dxvkAsync.numericalValue.description
         }
 
-        if container.settings.metalHUD {
-            if container.settings.dxvk {
+        if metalHUD {
+            if dxvk {
                 environmentVariables["DXVK_HUD"] = "full"
             } else {
                 environmentVariables["MTL_HUD_ENABLED"] = "1"
