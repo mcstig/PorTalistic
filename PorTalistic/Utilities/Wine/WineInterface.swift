@@ -220,6 +220,76 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
                     [frameworks.path, "/usr/local/lib", "/usr/lib"].joined(separator: ":")]
     }
 
+    /// A path another program can exec to get this runtime's Wine *with* its own libraries.
+    ///
+    /// Handing out `bin/wine` is not enough when the caller is someone else's launcher.
+    /// `legendary` is a signed binary, so dyld strips every DYLD_* variable from its
+    /// environment before it starts — children included — and a runtime that keeps its Unix
+    /// libraries in `Frameworks` has no other way to find them. Wine then comes up without
+    /// freetype, draws no text in any game, and mentions it only on stderr:
+    ///
+    ///     Wine cannot find the FreeType font library.
+    ///
+    /// Rewriting install names in the build does not help: Wine reaches freetype through
+    /// `dlopen("libfreetype.6.dylib")` rather than linking it, so there is no load command
+    /// to change, and a bare `dlopen` name is resolved through exactly that variable.
+    ///
+    /// A shell script sets it *after* the stripping has happened and `exec`s Wine, which is
+    /// ad-hoc signed and keeps what it is handed. `/bin/sh` losing the inherited copy on the
+    /// way in costs nothing, because the script writes its own.
+    ///
+    /// Falls back to the executable itself for a runtime that ships no support libraries, or
+    /// if the script can't be written — which is no worse than before this existed.
+    static func launcherURL(forContainerAtURL containerURL: URL) -> URL {
+        let runtime = runtime(forContainerAtURL: containerURL)
+        let executableURL = runtime.executableURL
+        let root = executableURL.deletingLastPathComponent().deletingLastPathComponent()
+        let frameworks = root.appending(path: RuntimeInstaller.supportLibrariesDirectoryName)
+
+        guard FileManager.default.fileExists(atPath: frameworks.path),
+              let directory = Bundle.appHome?.appending(path: "Launchers") else {
+            return executableURL
+        }
+
+        let script = directory.appending(
+            path: "\(runtime.id.replacingOccurrences(of: ":", with: "-")
+                .replacingOccurrences(of: "/", with: "-")).sh")
+
+        let contents = """
+            #!/bin/sh
+            #
+            # Written by PorTalistic, and rewritten whenever it changes. Runs \(runtime.name)
+            # with the libraries that shipped with it.
+            #
+            # This exists because a launcher that takes a path to Wine — legendary's `--wine`
+            # — cannot be handed DYLD_FALLBACK_LIBRARY_PATH: it is signed, so dyld strips the
+            # variable before it starts. Setting it here is the only place it survives to
+            # reach Wine, which needs it to dlopen freetype.
+            DYLD_FALLBACK_LIBRARY_PATH="\(frameworks.path):/usr/local/lib:/usr/lib"
+            export DYLD_FALLBACK_LIBRARY_PATH
+            exec "\(executableURL.path)" "$@"
+
+            """
+
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+            if (try? String(contentsOf: script, encoding: .utf8)) != contents {
+                try contents.write(to: script, atomically: true, encoding: .utf8)
+            }
+
+            try FileManager.default.setAttributes([.posixPermissions: 0o755],
+                                                 ofItemAtPath: script.path)
+            return script
+        } catch {
+            log.warning("""
+                Couldn't write a launcher for \(runtime.description, privacy: .public): \
+                \(error.localizedDescription, privacy: .public)
+                """)
+            return executableURL
+        }
+    }
+
     /// Whether the container's selected runtime can actually talk to the `wineserver` that
     /// currently owns this prefix.
     ///

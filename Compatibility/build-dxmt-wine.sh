@@ -356,19 +356,16 @@ mkdir -p "$PREFIX/Frameworks"
 find "$DEPPREFIX/lib" -maxdepth 1 -name "*.dylib" -exec cp -a {} "$PREFIX/Frameworks/" \;
 ok "$(find "$PREFIX/Frameworks" -name '*.dylib' -not -type l | wc -l | tr -d ' ') support libraries bundled"
 
-# …and that environment variable is not enough on its own.
+# Wine does not link freetype. It reaches it with `dlopen("libfreetype.6.dylib")`, and a
+# bare `dlopen` name is resolved through `DYLD_FALLBACK_LIBRARY_PATH` and nothing else — so
+# for fonts, that variable is the whole mechanism, and there is no install name in this
+# build to rewrite instead. Getting the variable as far as Wine is the app's problem, and
+# `Wine.launcherURL` is where it is solved: a launcher that is handed Wine's *path* rather
+# than its environment gets a shell script that sets the variable itself.
 #
-# It works when PorTalistic runs Wine itself, which is how a GOG or a local game starts. An
-# Epic game does not: `legendary` is what calls Wine there, and it is a signed binary, so
-# dyld strips every DYLD_* variable before it starts — children included. Wine then loads
-# with no freetype at all and says so on a stderr nobody was keeping:
-#
-#     Wine cannot find the FreeType font library.
-#
-# The game ran, with no text in any of its menus, while the library sat in `Frameworks`.
-#
-# So every dependent records a path relative to itself instead. `@loader_path` needs no
-# environment, and there is nothing there for dyld to strip.
+# What follows is for support libraries that are genuinely *linked*. None are today — which
+# is why this stage prints nothing — but a bare install name in a linked dependency fails
+# the same way and is worth catching here rather than in a game.
 say "Pointing Wine at the bundled libraries by relative path"
 
 # Everything in the tree that could link a dylib. Not a blanket `find`: the install has
@@ -413,8 +410,7 @@ done < <(bare_dependencies)
 
 (( rewrites > 0 )) || warn "nothing linked the bundled libraries by a bare name"
 
-# Nothing may be left needing the variable. This is the check that would have caught the
-# fontless launch before the game did.
+# Nothing linked may be left needing the variable.
 LEFTOVERS="$(bare_dependencies)"
 if [[ -z "$LEFTOVERS" ]]; then
     ok "no binary depends on DYLD_FALLBACK_LIBRARY_PATH any more"
@@ -423,12 +419,18 @@ else
     die "still resolved only through DYLD_FALLBACK_LIBRARY_PATH"
 fi
 
-# Wine, with the fallback path pointed somewhere useless. If it still starts, the relative
-# paths are carrying it and an Epic launch will get its fonts.
-if DYLD_FALLBACK_LIBRARY_PATH="/nonexistent" "$PREFIX/bin/wine" --version >/dev/null 2>&1; then
-    ok "wine starts with no usable library path set"
+# The library Wine will ask dlopen for, under the name it will ask for.
+if [[ -f "$PREFIX/Frameworks/libfreetype.6.dylib" ]]; then
+    ok "libfreetype.6.dylib is where dlopen will look"
 else
-    warn "wine --version failed without a library path — an Epic launch would too"
+    die "no Frameworks/libfreetype.6.dylib — games would render no text"
+fi
+
+if DYLD_FALLBACK_LIBRARY_PATH="$PREFIX/Frameworks:/usr/local/lib:/usr/lib" \
+    "$PREFIX/bin/wine" --version >/dev/null 2>&1; then
+    ok "wine starts with only the bundled libraries on the path"
+else
+    warn "wine --version failed with only $PREFIX/Frameworks on the path"
 fi
 
 # A marker, so PorTalistic can tell this build apart from a stock one.

@@ -633,7 +633,11 @@ final class Legendary {
                 // legendary requires this, since it calls wine directly.
                 environment["WINEPREFIX"] = containerURL.path(percentEncoded: false)
 
-                arguments += ["--wine", invocation.executableURL.path]
+                // Not `invocation.executableURL`: legendary is signed, so the environment
+                // assembled above loses every DYLD_* variable on the way into it, and Wine
+                // needs one of those to find the freetype it dlopens. `launcherURL` hands
+                // back a script that sets it on the other side of the stripping.
+                arguments += ["--wine", Wine.launcherURL(forContainerAtURL: containerURL).path]
             }
 
             arguments.append(contentsOf: game.launchArguments.map({ "'\($0)'" }))
