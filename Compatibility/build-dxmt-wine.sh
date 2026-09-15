@@ -141,14 +141,46 @@ fi
 # ── Configure and build ──────────────────────────────────────────────────────────────────
 say "Configuring"
 
-# Wine's own dependencies come from Homebrew, and its configure does not look there.
-export CFLAGS="-I$BREW_PREFIX/include -O2 -g"
+# The whole thing has to be x86_64, including the unix side, and that is not the default on
+# an Apple Silicon Mac.
+#
+# Two reasons, and either one alone decides it. DXMT ships `winemetal.so` as x86_64, and a
+# unix library cannot load into a Wine whose unix side is arm64. And both builds that work
+# on this machine — Gcenx's and Sikarugir's — are x86_64-only, running under Rosetta, so
+# that is the configuration with any evidence behind it.
+#
+# The first attempt left this out and built an arm64 unix side. `dxmt_objc.h` wraps
+# everything it declares in `#if defined(__x86_64__)`, so on arm64 the patch compiled to
+# nothing and `cocoa_window.m` failed on `use of undeclared identifier 'WineMetalLayer'`.
+# The guard was right and the build was wrong.
+export CC="clang -arch x86_64"
+export CXX="clang++ -arch x86_64"
+export CFLAGS="-O2 -g"
 export CXXFLAGS="$CFLAGS"
-export LDFLAGS="-L$BREW_PREFIX/lib"
-export PKG_CONFIG_PATH="$BREW_PREFIX/lib/pkgconfig:$BREW_PREFIX/share/pkgconfig"
+export LDFLAGS=""
+
+# Deliberately *not* pointed at Homebrew. `$BREW_PREFIX` is arm64, and linking an x86_64
+# Wine against arm64 libraries fails at the first link. Getting x86_64 freetype and gnutls
+# means a second Homebrew under /usr/local installed through Rosetta, which is a big thing
+# to do to a machine for an experiment — so the experiment goes without them, and a build
+# meant for release gets them properly.
+#
+# What that costs: no font rendering inside Wine, and no TLS for Windows apps. Neither is
+# in the way of the question being asked, which is whether a Direct3D 11 swap chain can
+# present through this driver at all.
+WITHOUT_DEPS=(--without-freetype --without-gnutls)
+unset PKG_CONFIG_PATH
 
 BUILD="$WORK/build"
 mkdir -p "$BUILD"
+
+# The first run's build directory is configured for arm64 and reusing it would repeat the
+# failure, so it goes when the architecture it was configured for isn't the one we want.
+if [[ -f "$BUILD/Makefile" && ! -f "$BUILD/.configured-x86_64" ]]; then
+    warn "existing build directory was configured for another architecture; starting it over"
+    rm -rf "$BUILD"
+    mkdir -p "$BUILD"
+fi
 
 if [[ -f "$BUILD/Makefile" ]]; then
     ok "already configured (delete $BUILD to redo)"
@@ -159,12 +191,15 @@ else
         # engines that work here have one. DXMT itself is 64-bit only.
         "$SRC/configure" \
             --prefix="$PREFIX" \
+            --host=x86_64-apple-darwin \
             --enable-archs=i386,x86_64 \
             --disable-tests \
+            "${WITHOUT_DEPS[@]}" \
             --without-oss \
             --without-v4l2
     ) || die "configure failed — the tail of $BUILD/config.log says why"
-    ok "configured"
+    touch "$BUILD/.configured-x86_64"
+    ok "configured for x86_64"
 fi
 
 say "Building (this is the hour)"
@@ -184,6 +219,13 @@ say "Checking what came out"
 [[ -f "$PREFIX/lib/wine/x86_64-unix/winemac.so" ]] || die "winemac.so missing — the patch may not have applied"
 
 ok "$("$PREFIX/bin/wine" --version 2>/dev/null || echo 'wine --version failed')"
+
+ARCHS="$(lipo -archs "$PREFIX/lib/wine/x86_64-unix/winemac.so" 2>/dev/null || echo unknown)"
+if [[ "$ARCHS" == *x86_64* ]]; then
+    ok "winemac.so is $ARCHS"
+else
+    die "winemac.so is $ARCHS, not x86_64 — DXMT's winemetal.so could not load into it"
+fi
 
 # The patch's whole purpose: these have to be visible in the driver, not hidden.
 if nm -gU "$PREFIX/lib/wine/x86_64-unix/winemac.so" 2>/dev/null | grep -q dxmt_client_surface; then
