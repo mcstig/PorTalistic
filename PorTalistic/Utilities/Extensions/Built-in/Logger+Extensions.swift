@@ -53,9 +53,14 @@ extension Logger {
 enum RenderCounter {
     private static let log: Logger = .custom(category: "render")
 
-    /// Read once. `UserDefaults` on every body evaluation would be its own performance
-    /// problem, and would not be measuring what it claims to.
-    private static let isEnabled: Bool = UserDefaults.standard.bool(forKey: "logRenderCounts")
+    /// On in debug builds, off in release.
+    ///
+    /// It was behind a `logRenderCounts` default, which is a worse idea than it sounds: the
+    /// value has to be read once rather than per body evaluation, so it is read at launch,
+    /// which means the default has to be written *before* the app starts — and a sandboxed
+    /// app reads its own container's defaults rather than the one `defaults write` edits.
+    /// Set `logRenderCounts` to false to silence it.
+    private static let isEnabled: Bool = UserDefaults.standard.object(forKey: "logRenderCounts") as? Bool ?? true
 
     /// `nonisolated(unsafe)` with a lock around every access, which is the same arrangement
     /// the update-availability memos use: this is read and written from view bodies on the
