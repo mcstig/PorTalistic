@@ -304,19 +304,105 @@ enum GOGDL {
         case .installed(let location, _):
             guard !FileManager.default.fileExists(atPath: location.path) else { return false }
 
+            // Not there *right now* is not the same as gone. Unplugging an external disk
+            // takes every game on it out of reach at once, and this used to answer that by
+            // marking them uninstalled *and deleting their install records* — so plugging
+            // the disk back in could not undo it, because the recovery below has nothing
+            // left to read. The record is the thing that has to survive.
+            if location.isOnAnUnmountedVolume {
+                log.notice("""
+                    \(game.title, privacy: .public) is on a volume that isn't mounted;                     leaving it as installed
+                    """)
+                return false
+            }
+
             log.notice("\(game.title, privacy: .public) is recorded as installed but isn't on disk; marking it uninstalled")
             game.installationState = .uninstalled
             forgetInstall(ofGameID: game.id)
             return true
 
         case .uninstalled:
-            guard let record, let recordedURL,
-                  FileManager.default.fileExists(atPath: recordedURL.path) else { return false }
+            guard let record, let recordedURL else { return rediscoverInstall(of: game) }
+            guard FileManager.default.fileExists(atPath: recordedURL.path) else { return false }
 
             log.notice("Recovering \(game.title, privacy: .public) from its install record")
             game.installationState = .installed(location: recordedURL, platform: record.platform)
             return true
         }
+    }
+
+    /// Directories whose immediate children are worth checking for a forgotten install.
+    ///
+    /// The configured install directory first, because that is where everything normally
+    /// goes. Then the root of every mounted volume and the obvious folder names under it:
+    /// the games this has to rescue are precisely the ones on a disk that was unplugged, and
+    /// a game installed to a chosen path on that disk has no record left to say where. One
+    /// level deep in a handful of places is a few dozen `stat` calls, and it is the
+    /// difference between the game coming back on its own and being re-imported by hand.
+    private static func searchBases() -> [URL] {
+        var bases: [URL] = .init()
+
+        if let configured = UserDefaults.standard.url(forKey: "installBaseURL") {
+            bases.append(configured)
+        }
+
+        let volumes = FileManager.default.mountedVolumeURLs(includingResourceValuesForKeys: nil,
+                                                            options: [.skipHiddenVolumes]) ?? []
+
+        for volume in volumes {
+            bases.append(volume)
+            for name in ["Games", "GOG Games", "GOG"] {
+                bases.append(volume.appending(path: name))
+            }
+        }
+
+        // The same directory reached two ways is the same directory.
+        var seen: Set<String> = .init()
+        return bases.filter { seen.insert($0.resolvingSymlinksInPath().path).inserted }
+    }
+
+    /// Looks for a game's files where they were left, for a game whose record is gone.
+    ///
+    /// The install record is what normally proves a game is installed, and the bug above
+    /// deleted it for every game on a disk that got unplugged. A GOG install identifies
+    /// itself, though: each one carries a `goggame-<product id>.info` at its root, so the
+    /// files can be recognised with no record, no network call and no guessing from the
+    /// title. This is what brings those games back.
+    ///
+    /// - Returns: `true` if the game's state was changed.
+    @discardableResult
+    @MainActor static func rediscoverInstall(of game: GOGGame) -> Bool {
+        let candidates = searchBases().flatMap { base in
+            (try? FileManager.default.contentsOfDirectory(at: base,
+                                                          includingPropertiesForKeys: [.isDirectoryKey],
+                                                          options: [.skipsHiddenFiles])) ?? []
+        }
+
+        guard let location = candidates.first(where: {
+            FileManager.default.fileExists(atPath: $0.appending(path: "goggame-\(game.id).info").path)
+        }) else { return false }
+
+        // Read from the files rather than assumed: a macOS build is an app bundle where a
+        // Windows one is a tree of executables, and the wrong answer here sends the game to
+        // a runtime that can't start it.
+        let entries = (try? FileManager.default.contentsOfDirectory(atPath: location.path)) ?? []
+        let platform: Game.Platform = entries.contains { $0.hasSuffix(".app") } ? .macOS : .windows
+
+        log.notice("""
+            Found \(game.title, privacy: .public) at \(location.prettyPath, privacy: .public)             with no install record; putting it back
+            """)
+
+        // No build ID: nothing on disk says which one this is, and claiming one would make
+        // the update check answer confidently about a version it never saw.
+        setInstallRecord(.init(buildID: nil,
+                               versionName: nil,
+                               folderName: location.lastPathComponent,
+                               platform: platform,
+                               location: location),
+                         forGameID: game.id)
+
+        game.installationState = .installed(location: location, platform: platform)
+        return true
     }
 
     private static func setInstallRecord(_ record: InstallRecord?, forGameID id: String) {
