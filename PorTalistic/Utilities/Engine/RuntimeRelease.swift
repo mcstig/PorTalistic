@@ -146,7 +146,7 @@ extension RuntimeRelease {
             name: "Wine 11.16 (DXMT)",
             version: .init(11, 16, 0),
             downloadURL: .init(string: "https://github.com/mcstig/PorTalistic/releases/download/wine-dxmt-11.16/wine-dxmt-11.16.tar.xz")!,
-            sha256: "f78b1d81768c212d3a40e089837f2ff44e9702da9556f8e8355f0f2b5ebd5c4a",
+            sha256: "55248a10f9771bb5d73e7fcaac3d52ca40414cb8601c4bb9bc330fbb2e81c54b",
             payloadSubpath: "wine-dxmt-11.16",
             executableSubpath: "bin/wine",
             summary: """
