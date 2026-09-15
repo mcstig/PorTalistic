@@ -73,15 +73,29 @@ import DockProgress
             // present any unhandled errors within the operation to the ui.
             Task { @MainActor in
                 guard let error = operation.error else { return }
-                
+
                 let alert = NSAlert()
                 alert.messageText = String(localized: "Unable to complete operation [\(operation.description)].")
                 alert.informativeText = error.localizedDescription
                 alert.alertStyle = .critical
                 alert.addButton(withTitle: String(localized: "OK"))
-                
-                if let window = NSApp.windows.first {
+
+                // This used to be `NSApp.windows.first`, and that is how a failed launch
+                // became "nothing happens". `windows.first` is whatever window happens to be
+                // first — the About panel, or a Settings window the user had dragged onto
+                // another display — and worse, a window can host only one sheet: attach an
+                // alert to a window that already has one and it waits, invisibly, for the
+                // first to be dismissed. Which it may never be.
+                //
+                // So: the window the user is actually looking at, and only if it is free.
+                // Otherwise a plain modal, which cannot be hidden behind anything.
+                let candidate = NSApp.keyWindow ?? NSApp.mainWindow
+
+                if let window = candidate, window.attachedSheet == nil, window.isVisible {
                     alert.beginSheetModal(for: window)
+                } else {
+                    NSApp.activate()
+                    alert.runModal()
                 }
             }
 

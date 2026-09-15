@@ -449,6 +449,17 @@ Also outstanding from this round:
     `swift Compatibility/sign-manifest.swift` has to run and `manifest.json.sig` has
     to be committed before the repository goes public, or published corrections reach
     nobody. Every later edit to `manifest.json` needs the same.
+  - **A failed launch needs somewhere to say so that isn't an `NSAlert`.** The
+    operation manager's alert now goes to the key window, or runs modal if that window
+    is busy, which is enough to stop a failure being invisible. It is still a modal
+    interruption for something the game's own card could show in place, and it still
+    only fires once — reopen the app and there is no record that a launch failed at
+    all. `GameOperation.error` is right there and nothing in the library reads it.
+  - **`Wine.boot` has no timeout.** `runWrapped()` waits as long as Wine wants. A
+    `wineboot --init` that exits 1 is handled; one that hangs would stall the launch
+    operation forever, with the same "nothing happens" symptom and no log written,
+    because the transcript is only written after the process returns.
+    `Process.runBounded(timeout:)` exists for exactly this.
   - **Nobody has watched an Epic store sign-in finish.** The web views can open the
     windows a sign-in asks for now, and the store page renders where it used to show
     Epic's own error, but the sign-in itself has only been reasoned about — a

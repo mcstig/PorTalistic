@@ -162,6 +162,38 @@ extension Runtime {
             + byCatalogueOrder(viable.filter { $0.origin != .bundledEngine })
     }
 
+    /**
+     The strict ranking, and then everything else that could still start the game.
+
+     ``ranked(satisfying:from:)`` only offers runtimes that *satisfy* the profile, which is
+     the right answer to "what should this game run on" and the wrong answer to "what now?".
+     When the one build that satisfies it cannot boot a prefix, the alternative isn't another
+     satisfying build — there isn't one — it is a worse one.
+
+     `direct3DOnMetal` tolerates that: a Direct3D 11 game on wined3d runs badly, and badly
+     beats not starting at all. `modernNetworking` does not. The bundled engine cannot do it
+     at all, and a game that needs it would fail later, further in, and less legibly than a
+     refusal here.
+
+     - Note: this is what makes the fallback in `Runtime.select`'s own documentation true.
+       It said "the engine stays reachable behind it", and it wasn't: ``satisfies(_:)``
+       filtered every non-DXMT runtime out before the ranking was built, so the list had one
+       entry and there was nothing behind anything. Horizon Chase Turbo found that out.
+     */
+    static func rankedWithCompromises(satisfying requirements: RuntimeProfile.Requirements,
+                                      from candidates: [Runtime]? = nil) -> [Runtime] {
+        let all = candidates ?? discoverAll()
+        let strict = ranked(satisfying: requirements, from: all)
+
+        guard !requirements.modernNetworking else { return strict }
+
+        let placed = Set(strict.map(\.id))
+        let compromises = ranked(satisfying: .init(),
+                                 from: all.filter { !placed.contains($0.id) })
+
+        return strict + compromises
+    }
+
     /// Catalogue order is preference order. Anything the catalogue doesn't mention keeps its
     /// own order, after everything it does.
     private static func byCatalogueOrder(_ runtimes: [Runtime]) -> [Runtime] {

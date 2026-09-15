@@ -387,7 +387,7 @@ final class Provisioner {
                                  preferring preferred: Runtime,
                                  titled title: String) async throws -> (Runtime, Wine.Container) {
         var candidates = await Task.detached {
-            Runtime.ranked(satisfying: requirements)
+            Runtime.rankedWithCompromises(satisfying: requirements)
         }.value
 
         // `prepare` may have just installed something, and it decided; keep its answer first.

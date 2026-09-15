@@ -550,6 +550,19 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
 
             // swiftlint:disable:next force_try
             guard result.standardError?.contains(try! Regex(#"wine: configuration in (.*?) has been updated\."#)) == true else {
+                // `wineboot --init` gets far enough to create `drive_c`, `system.reg` and
+                // friends before it gives up, and `containerExists(at:)` looks for exactly
+                // `drive_c` — so a half-built prefix left here is handed back as a finished
+                // container by the *next* call, which takes the early return above, reports
+                // success, and launches the game into a Windows that was never finished
+                // being installed. Worse than the failure it followed, and invisible.
+                //
+                // So the failure cleans up after itself. Nothing in here is the user's: this
+                // call created the directory seconds ago, and a retry wants to start from
+                // nothing anyway.
+                preserveBootFailureLog(from: url, named: name)
+                try? FileManager.default.removeItem(at: url)
+
                 throw Container.UnableToBootError()
             }
 
@@ -579,6 +592,24 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
             log.error("\(formatLog(containerURL: url, description: "Unable to create container", error: error))")
             throw error
         }
+    }
+
+    /// Moves a failed prefix's `wineboot.log` up beside the containers, before the prefix goes.
+    ///
+    /// The transcript is the only record of *why* a container couldn't be created, and it is
+    /// written inside the container — which the failure path then deletes. Keeping it one
+    /// level up, named after the attempt, is what makes the next question answerable.
+    private static func preserveBootFailureLog(from containerURL: URL, named name: String) {
+        guard let destination = containersDirectory?
+            .appending(path: "\(name) — failed wineboot.log") else { return }
+
+        let source = containerURL.appending(path: "wineboot.log")
+        guard FileManager.default.fileExists(atPath: source.path) else { return }
+
+        try? FileManager.default.removeItem(at: destination)
+        try? FileManager.default.moveItem(at: source, to: destination)
+
+        log.notice("Kept the failed wineboot transcript at \(destination.prettyPath, privacy: .public)")
     }
 
     /// - Returns: Relevant environment variables as configured in a container for game launch.
