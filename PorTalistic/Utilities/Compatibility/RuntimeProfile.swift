@@ -217,8 +217,10 @@ extension RuntimeProfile {
         //
         // A curated entry still wins: Blades of Time crashes with it off, and that is what
         // the database is for. So does the user, if they set it by hand.
+        // Stated in the settings panel rather than in `reasons`: a line here would be
+        // repeated for every game in the library, and would contradict itself whenever a
+        // curated entry turned it back on two lines later.
         settings.retinaMode = false
-        reasons.append("Retina Mode off, which is the default here: a game that doesn't ask for the full display resolution ends up drawing into a corner of it.")
 
         switch executable.architecture {
         case .arm64:
@@ -285,7 +287,7 @@ extension RuntimeProfile {
         // should be handed a full-resolution desktop it never asked for.
         settings: .init(retinaMode: false),
         source: .fallback,
-        reasons: ["PorTalistic hasn't read this game's files yet, so it gets the defaults — including Retina Mode off."]
+        reasons: ["PorTalistic hasn't read this game's files yet, so it gets the defaults."]
     )
 
     /// This profile with a curated entry's opinions applied over it.

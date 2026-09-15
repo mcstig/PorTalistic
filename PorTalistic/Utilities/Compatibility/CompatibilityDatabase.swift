@@ -122,11 +122,12 @@ struct CompatibilityDatabase: Codable, Hashable {
         .init(
             identifiers: [.init(storefront: .gog, id: "1164193173")],
             titles: ["Blades of Time"],
-            settings: .init(retinaMode: true),
             note: """
-                Retina Mode on. It is the opposite of what Prey wants in the same container: \
-                with it off, this reaches wined3d's fullscreen path — different code from the \
-                windowed one — and crashes there with a stack overflow on the render thread.
+                On wined3d, Retina Mode off sent this down the fullscreen path — different \
+                code from the windowed one — where it crashed with a stack overflow on the \
+                render thread. That was wined3d; it runs on DXMT now, so the entry no longer \
+                forces Retina Mode on and it follows the default with everything else. If \
+                that crash comes back, turning Retina Mode on for this game is the fix.
                 """
         )
     ])

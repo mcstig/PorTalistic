@@ -82,9 +82,16 @@ struct GameSettingsView: View {
         .task(priority: .background) { setDiscordPresence() }
     }
 
+    /// Whether this sheet should offer the Wine side of things at all.
+    ///
+    /// Everything except a native macOS build, rather than a strict `.installed(_, .windows)`
+    /// match. That match hid both the container and the settings for a GOG game that was
+    /// running under Wine as anyone could see — because its recorded state said otherwise —
+    /// and a settings sheet that hides the settings is worse than one that shows a panel
+    /// saying nothing has been assigned yet, which is what these panels already do.
     private var isWindowsGame: Bool {
-        if case .installed(_, .windows) = game.installationState { return true }
-        return false
+        if case .installed(_, .macOS) = game.installationState { return false }
+        return true
     }
 }
 

@@ -563,8 +563,13 @@ final class Provisioner {
 
         @MainActor
         init?(game: Game) {
+            // Anything but a native macOS build. `platform == .windows` was too strict: a
+            // game whose recorded platform never got filled in is still a Windows game with
+            // an executable worth reading, and skipping it meant the profile fell all the
+            // way back to "PorTalistic hasn't read this game's files yet" for games that
+            // were plainly running under Wine.
             guard case .installed(let location, let platform) = game.installationState,
-                  platform == .windows else { return nil }
+                  platform != .macOS else { return nil }
 
             self.id = game.id
             self.title = game.title
