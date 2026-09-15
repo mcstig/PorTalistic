@@ -129,7 +129,10 @@ extension Wine.Container {
 
         init(metalHUD: Bool = false,
              msync: Bool = true,
-             retinaMode: Bool = true,
+             // Off, like every game's profile asks for. On, Wine gives the game a desktop at
+             // the display's full backing resolution, and one that doesn't ask for that draws
+             // into a corner of it with the other displays blanked.
+             retinaMode: Bool = false,
              dxvk: Bool = false,
              dxvkAsync: Bool = false,
              windowsVersion: Wine.WindowsVersion = .win11,

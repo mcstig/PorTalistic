@@ -208,6 +208,18 @@ extension RuntimeProfile {
         // never chooses it — only a curated entry does.
         settings.dxvk = false
 
+        // Retina Mode off unless something knows better.
+        //
+        // On, Wine hands the game a desktop at the display's full backing resolution, and a
+        // game that does not ask for that renders its own picture into one corner of it —
+        // which is exactly what Prey did, at 2048×1330 inside a 4096×2660 desktop, with
+        // every attached display captured and blanked. Most games do not ask.
+        //
+        // A curated entry still wins: Blades of Time crashes with it off, and that is what
+        // the database is for. So does the user, if they set it by hand.
+        settings.retinaMode = false
+        reasons.append("Retina Mode off, which is the default here: a game that doesn't ask for the full display resolution ends up drawing into a corner of it.")
+
         switch executable.architecture {
         case .arm64:
             // Named rather than guessed about. No runtime in the catalogue runs a native
@@ -268,9 +280,12 @@ extension RuntimeProfile {
     static let unknownGame: RuntimeProfile = .init(
         requirements: .init(),
         graphicsBackend: nil,
-        settings: .init(),
+        // Retina Mode off even here. It is the default for every game for the reason given
+        // in `inferred(from:)`, and a game nothing is known about is the last one that
+        // should be handed a full-resolution desktop it never asked for.
+        settings: .init(retinaMode: false),
         source: .fallback,
-        reasons: ["PorTalistic hasn't read this game's files yet."]
+        reasons: ["PorTalistic hasn't read this game's files yet, so it gets the defaults — including Retina Mode off."]
     )
 
     /// This profile with a curated entry's opinions applied over it.
