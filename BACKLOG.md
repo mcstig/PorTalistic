@@ -357,11 +357,36 @@ What the research says about a second source:
     `mingw-w64 bison make pkgconf freetype gnutls` from Homebrew. Published as a
     release in this repository it would satisfy the allowed hosts, the digest pin and
     the licensing position at once, and DXMT would stop depending on one upstream.
-  - **The open question in that recipe** is `winemetal.so`, which the script copies
-    out of a donor Porting Kit wrapper rather than building. Whether the patched Wine
-    can produce it, or whether it has to come from DXMT's own releases, decides
-    whether a from-source build is genuinely self-contained — and it is the first
-    thing to resolve before committing to a build pipeline.
+  - ~~**The open question in that recipe** is `winemetal.so`~~ — settled, and it was
+    never a question this codebase needed to ask. `winemetal.so` comes from DXMT's own
+    `-builtin` release, and ``Wine/DXMT/install(into:)`` has been downloading and
+    placing it all along. The build script copies it out of a donor Porting Kit
+    wrapper only because a Porting Kit engine already had DXMT installed and the file
+    was sitting there. Nothing needs a donor.
+
+    What the patch *does* supply is the other half. Aquadran's patch touches only
+    `dlls/winemac.drv` — it adds `dxmt_objc.h`/`.m` and edits `cocoa_window.m`,
+    `event.c`, `window.c`, `macdrv.h` and the driver Makefile: client surfaces, Metal
+    layer presentation, the interoperability entry points. So the split is
+    **`winemetal.so` issues the Metal commands, the patched driver presents them**, and
+    a build needs the patch for the same reason DXMT's own guide tells custom builders
+    to un-hide the `winemacdrv.h` API. A stock Wine plus DXMT's release would draw into
+    nowhere.
+
+    Which makes the build scope smaller than it looked: Wine from winehq, one patch, and
+    then the DXMT installer the app already has. No donor wrapper, no Porting Kit, no
+    CrossOver, no GPTK.
+  - **The real risk in a build is version skew, not the build.** Aquadran's patch was
+    written against a particular DXMT era — the wiki's developer note cites the `v0.41`
+    headers, and ``Wine/DXMT/version`` is `v0.80`. Whether `dxmt_objc.m` still matches
+    what v0.80 calls is the thing to check first, and it is checkable by reading
+    `include/winemacdrv.h` at the v0.80 tag against the patch.
+  - **Sikarugir takes a third route**, worth remembering before assuming there is only
+    one. Its engines put the Metal entry points inside their own `winemac.so` and DXMT
+    reaches them through `ExtEscape`, so they ship `winemetal.dll` and no
+    `winemetal.so` — which is what ``Wine/DXMT/isShippedByRuntime(_:)`` and the
+    `dxmt_extescape` marker exist to detect. A from-source build would be the
+    `winemetal.so` shape instead, and the installer already tells them apart.
   - **Mirroring is legal, which the host list obscures.**
     `allowedDownloadHosts` is this project's own rule, not a licence term. An LGPL
     Wine build may be re-hosted in this repository's own releases provided the
