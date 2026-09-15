@@ -163,6 +163,9 @@ private struct EpicInterceptorWebView: NSViewRepresentable {
     class Coordinator: NSObject, WKNavigationDelegate {
         let parent: EpicInterceptorWebView
 
+        /// Held strongly: `uiDelegate` is weak, and nothing else would keep this alive.
+        let windowOpener: WebViewWindowOpener = .init()
+
         init(parent: EpicInterceptorWebView) {
             self.parent = parent
         }
@@ -234,8 +237,19 @@ private struct EpicInterceptorWebView: NSViewRepresentable {
 
         config.websiteDataStore = WKWebsiteDataStore(forIdentifier: Legendary.webDataStoreIdentifier)
 
+        // Appended to WebKit's own user agent rather than replacing it, which produces a
+        // genuine Safari-shaped string without this having to invent — and then maintain —
+        // a whole one. Epic's identity service answers a user agent that does not name a
+        // browser with a generic "something went wrong", whatever the credentials are.
+        config.applicationNameForUserAgent = "Version/18.0 Safari/605.1.15"
+
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = context.coordinator
+
+        // Without this, "Sign in with Google" and its siblings — which open a window — do
+        // nothing at all, silently.
+        webView.uiDelegate = context.coordinator.windowOpener
+
         webView.load(URLRequest(url: URL(string: "https://legendary.gl/epiclogin")!))
         return webView
     }

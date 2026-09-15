@@ -135,6 +135,9 @@ private struct GOGInterceptorWebView: NSViewRepresentable {
     /// below only *nearly* match their requirements and WebKit never calls them, which is a
     /// warning rather than an error and so exactly the kind of thing that gets shipped.
     @MainActor final class Coordinator: NSObject, WKNavigationDelegate {
+        /// Held strongly: `uiDelegate` is weak, and nothing else would keep this alive.
+        let windowOpener: WebViewWindowOpener = .init()
+
         let completion: (String) -> Void
         let failure: () -> Void
 
@@ -225,6 +228,11 @@ private struct GOGInterceptorWebView: NSViewRepresentable {
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
+
+        // Without this, GOG's "sign in with" buttons — which open a window — do nothing at
+        // all, silently. Email and password never needed it, which is why nobody noticed.
+        webView.uiDelegate = context.coordinator.windowOpener
+
         context.coordinator.observe(webView)
         webView.load(URLRequest(url: GOG.authorizationURL))
         return webView

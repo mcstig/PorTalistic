@@ -1,97 +1,105 @@
 //
 //  StoreView.swift
-//  Mythic
+//  PorTalistic
 //
 //  Created by vapidinfinity (esi) on 10/9/2023.
+//  Rebuilt by Claude Opus 5 on 15/9/2026.
 //
 
 // Copyright © 2023-2025 vapidinfinity
+// Copyright © 2026 Michael Stoian
 
 import SwiftUI
 import SwordRPC
 import WebKit
 
+/**
+ Epic's store, in a web view.
+
+ - Note: signing in here is *not* the same as signing in to the launcher. Accounts shows the
+   `legendary` token, which is what reads your library; this page needs ordinary website
+   cookies. They share a `WKWebsiteDataStore` — see ``Legendary/webDataStoreIdentifier`` —
+   so a sign-in in either place is visible to the other, but the launcher's sign-in goes
+   through `legendary.gl/epiclogin`, which returns an authorization code and never
+   establishes a store session. Being signed in to one and not the other is expected.
+ */
 struct StoreView: View {
-    private var canGoBack = false
-    private var canGoForward = false
-    @State private var url: URL = .init(string: "https://store.epicgames.com/")!
+    private static let home: URL = .init(string: "https://store.epicgames.com/")!
 
-    @State private var refreshIconRotation: Angle = .degrees(0)
-
+    @State private var controller: WebViewController = .init()
+    @State private var loadError: Error?
 
     var body: some View {
-        WebView(
-            url: url,
-            datastore: .init(forIdentifier: Legendary.webDataStoreIdentifier),
-            error: .constant(nil),
-            canGoBack: canGoBack,
-            canGoForward: canGoForward
-        )
-
+        Group {
+            if let loadError {
+                ContentUnavailableView {
+                    Label("Can't reach the Epic Games Store.", systemImage: "wifi.exclamationmark")
+                } description: {
+                    Text(loadError.localizedDescription)
+                } actions: {
+                    Button("Try Again", systemImage: "arrow.clockwise") {
+                        self.loadError = nil
+                        controller.reload()
+                    }
+                    .buttonStyle(.portalProminent)
+                }
+            } else {
+                WebView(url: Self.home,
+                        datastore: .init(forIdentifier: Legendary.webDataStoreIdentifier),
+                        controller: controller,
+                        error: $loadError)
+            }
+        }
         .navigationTitle("Store")
+        .standardTitleBar()
 
         .task(priority: .background) {
             discordRPC.setPresence({
                 var presence: RichPresence = .init()
-                presence.details = "Currently browsing \(url)"
+                presence.details = "Currently browsing the Epic Games Store"
                 presence.state = "Looking for games to purchase"
                 presence.timestamps.start = .now
                 presence.assets.largeImage = "macos_512x512_2x"
-                
+
                 return presence
             }())
         }
-        
+
         .toolbar {
-            ToolbarItem(placement: .confirmationAction) {
-                Button {
-                    if canGoBack {
-                        url = .init(string: "javascript:history.back();")!
-                    }
-                } label: {
-                    Image(systemName: "arrow.left")
-                        .symbolVariant(.circle)
+            ToolbarItemGroup(placement: .automatic) {
+                // These used to be `private var canGoBack = false` on the view and a
+                // `URLRequest(url: "javascript:history.back()")` on press: permanently
+                // disabled, and pressing them loaded a URL `WKWebView` refuses. They work
+                // now, because the web view reports its own state back through
+                // `WebViewController`.
+                Button("Back", systemImage: "chevron.backward") {
+                    controller.goBack()
                 }
-                .disabled(!canGoBack)
-            }
-            
-            ToolbarItem(placement: .confirmationAction) {
-                Button {
-                    if canGoForward {
-                        url = .init(string: "javascript:history.forward();")!
-                    }
-                } label: {
-                    Image(systemName: "arrow.right")
-                        .symbolVariant(.circle)
+                .disabled(!controller.canGoBack)
+
+                Button("Forward", systemImage: "chevron.forward") {
+                    controller.goForward()
                 }
-                .disabled(!canGoForward)
-            }
-            
-            ToolbarItem(placement: .confirmationAction) {
-                Button {
-                    url = .init(string: "javascript:location.reload();")!
-                    withAnimation(.default) {
-                        refreshIconRotation = .degrees(360)
-                    } completion: {
-                        refreshIconRotation = .degrees(0)
-                    }
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                        .symbolVariant(.circle)
-                        .rotationEffect(refreshIconRotation)
+                .disabled(!controller.canGoForward)
+
+                Button("Reload", systemImage: "arrow.clockwise") {
+                    controller.reload()
                 }
             }
-            ToolbarItem(placement: .confirmationAction) {
-                Button {
-                    NSWorkspace.shared.open(url)
-                } label: {
-                    Image(systemName: "arrow.up.forward")
+
+            ToolbarItem(placement: .automatic) {
+                Button("Open in Browser", systemImage: "arrow.up.forward") {
+                    NSWorkspace.shared.open(controller.currentURL ?? Self.home)
                 }
+                .help("Open this page in your usual browser")
             }
         }
     }
 }
 
 #Preview {
-    StoreView()
+    NavigationStack {
+        StoreView()
+    }
+    .frame(width: 900, height: 600)
 }
