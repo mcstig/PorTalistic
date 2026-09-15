@@ -94,23 +94,34 @@ struct PorTalisticApp: App {
             CommandGroup(replacing: .help) {
                 Link("Documentation", destination: Branding.readmeURL)
                 Link("Discussions", destination: Branding.discussionsURL)
-                Link("Games compability",
-                     destination: URL(string: "https://docs.google.com/spreadsheets/d/1W_1UexC1VOcbP2CHhoZBR5-8koH-ZPxJBDWntwH-tsc/")!)
+                Link("Report an Issue", destination: Branding.issuesURL)
 
-                Section("Support the project") {
-                    Link("GitHub Sponsors", destination: URL(string: "https://github.com/sponsors/PorTalisticApp")!)
-                    Link("Ko-Fi", destination: URL(string: "https://ko-fi.com/vapidinfinity")!)
+                // Mythic's, and labelled as Mythic's. This used to be a "Support the
+                // project" section holding upstream's Ko-Fi and a GitHub Sponsors page for
+                // "PorTalisticApp", which does not exist — the rebrand's find-and-replace
+                // went through a URL. Asking for money on behalf of a page that isn't there,
+                // in an app people paid for, is the worst of both.
+                Section("Upstream") {
+                    Link("Mythic on GitHub", destination: Branding.upstreamRepositoryURL)
+                    Link("Support Mythic's Author", destination: Branding.upstreamDonationURL)
+                    Link("Mythic's Game Compatibility Sheet",
+                         destination: URL(string: "https://docs.google.com/spreadsheets/d/1W_1UexC1VOcbP2CHhoZBR5-8koH-ZPxJBDWntwH-tsc/")!)
                 }
-                
+
                 Section("More") {
-                    Link("GitHub repository", destination: Branding.repositoryURL)
-                    Link("Project home", destination: Branding.repositoryURL)
+                    Link("GitHub Repository", destination: Branding.repositoryURL)
                 }
             }
         }
 
         Window("About PorTalistic", id: "about") {
             AboutView()
+                // Every scene needs its own: `.tint` lives in the environment and each
+                // window gets a fresh one. Without it the About window and the Settings
+                // window drew their controls in the *system* accent — which is how the
+                // Discord switch and the selected settings tab came out salmon in an
+                // otherwise violet app.
+                .tint(Theme.Palette.brand)
                 .frame(width: 285, height: 400)
                 .onAppear {
                     if let window = NSApp.window(withID: "about") {
@@ -121,6 +132,7 @@ struct PorTalisticApp: App {
         
         Settings {
             SettingsView()
+                .tint(Theme.Palette.brand)
         }
     }
 }

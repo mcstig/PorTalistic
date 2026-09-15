@@ -354,6 +354,12 @@ Also outstanding from this round:
     `OnboardingView`. `OperationCard`'s four are gone.
   - **`HeroGameCard` is still an `EmptyView()` stub.**
 
+  - ~~**The pre-macOS-26 appearance has never been seen on a machine that renders
+    it.**~~ Checked with Settings ▸ Views ▸ "Draw the pre-macOS 26 appearance": the
+    sidebar, Home's hero, the library grid, a game's page and the settings sheet all
+    lay out identically. The visible difference is that floating controls get a drawn
+    capsule instead of glass, which is what the fallback is for. **Light mode is
+    still unchecked** — it needs the system appearance switched, not an app toggle.
   - **The manifest signing key doesn't exist yet.** `ManifestSignature.trustedPublicKey`
     is `nil`, which means *no* fetched manifest is trusted and the app uses the
     catalogue it shipped with — the same behaviour as today, because the repository

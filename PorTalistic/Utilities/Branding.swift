@@ -40,6 +40,15 @@ enum Branding {
     static let repositoryURL: URL = .init(string: "https://github.com/mcstig/PorTalistic")!
 
     static var issuesURL: URL { repositoryURL.appending(path: "issues") }
+
+    /// Where this fork came from.
+    ///
+    /// Linked in the Help menu, under upstream's own name rather than this one. GPLv3 asks
+    /// for the notices to be kept; presenting Mythic's author's donation links as "support
+    /// the project" under this app's name would keep the letter of that and none of the
+    /// point.
+    static let upstreamRepositoryURL: URL = .init(string: "https://github.com/MythicApp/Mythic")!
+    static let upstreamDonationURL: URL = .init(string: "https://ko-fi.com/vapidinfinity")!
     static var discussionsURL: URL { repositoryURL.appending(path: "discussions") }
     static var readmeURL: URL { repositoryURL }
 
