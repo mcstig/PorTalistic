@@ -142,7 +142,9 @@ private struct GameDetailContent: View {
             HStack(spacing: Theme.Spacing.medium) {
                 GameCard.PrimaryActionButton(game: $game, isCompact: false)
 
-                GameCard.MenuView(game: $game)
+                GameCard.MenuView(game: $game,
+                                  isSettingsPresented: $isSettingsPresented,
+                                  isUninstallPresented: $isUninstallPresented)
                     .buttonStyle(.portalQuietCompact)
                     .menuIndicator(.hidden)
                     .fixedSize()

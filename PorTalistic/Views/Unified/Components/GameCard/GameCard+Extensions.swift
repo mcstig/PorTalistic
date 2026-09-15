@@ -344,26 +344,30 @@ extension GameCard {
 
     struct MenuView: View {
         @Binding var game: Game
-        @State private var isGameSettingsSheetPresented: Bool = false
-        @State private var isUninstallSheetPresented: Bool = false
+
+        /// The host's flags, not this view's own.
+        ///
+        /// This used to hold both as `@State` and attach both sheets itself — so a card that
+        /// already had a settings sheet and an uninstall sheet carried four presenters, and
+        /// a grid of a hundred and thirty games carried five hundred. They are the same two
+        /// sheets either way: whichever view shows the menu also shows them.
+        @Binding var isSettingsPresented: Bool
+        @Binding var isUninstallPresented: Bool
 
         var body: some View {
-            Group { // annoying, but the only way two sheets'll fit in here
-                Menu {
-                    GameCard.Buttons.SettingsButton(game: $game, withLabel: true, isGameSettingsSheetPresented: $isGameSettingsSheetPresented)
-                    GameCard.Buttons.UpdateButton(game: $game, withLabel: true)
-                    GameCard.Buttons.FavouriteButton(game: $game, withLabel: true)
-                    GameCard.Buttons.DeleteButton(game: $game, withLabel: true, isUninstallSheetPresented: $isUninstallSheetPresented)
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .imageScale(.medium)
-                        .frame(width: 22, height: 18)
-                        .contentShape(.rect)
-                }
-                .help("More options for \(game.description)")
-                .gameSettingsSheet(game: $game, isPresented: $isGameSettingsSheetPresented)
+            Menu {
+                GameCard.Buttons.SettingsButton(game: $game, withLabel: true,
+                                                isGameSettingsSheetPresented: $isSettingsPresented)
+                GameCard.Buttons.UpdateButton(game: $game, withLabel: true)
+                GameCard.Buttons.FavouriteButton(game: $game, withLabel: true)
+                GameCard.Buttons.DeleteButton(game: $game, withLabel: true,
+                                              isUninstallSheetPresented: $isUninstallPresented)
+            } label: {
+                Image(systemName: "ellipsis")
+                    .imageScale(.medium)
+                    .frame(width: 22, height: 18)
+                    .contentShape(.rect)
             }
-            .gameUninstallSheet(game: $game, isPresented: $isUninstallSheetPresented)
         }
     }
 
@@ -399,37 +403,10 @@ extension GameCard {
         }
     }
 
-    struct ButtonsView: View {
-        @Binding var game: Game
-        var withLabel = false
-        var isCompact: Bool = false
-
-        @Bindable private var operationManager: GameOperationManager = .shared
-        @EnvironmentObject var networkMonitor: NetworkMonitor
-
-        var body: some View {
-            // Queued counts, not just executing. An operation that's waiting — on a
-            // dependency, or on Legendary's data lock — used to leave the card showing an
-            // ordinary Install or Play button that silently did nothing when pressed, because
-            // every one of those buttons disables itself while its game has work outstanding.
-            // `StatusView` already knows how to render a pending operation, and offers to
-            // cancel it, which is the answer to "why can't I click this".
-            if let operation = operationManager.queue.first(where: {
-                $0.game == game && ($0.isExecuting || $0.type.modifiesFiles)
-            }) {
-                OperationCard.StatusView(operation: .constant(operation), withLabel: withLabel)
-            } else if case .installed = game.installationState {
-                Buttons.Prominent.PlayButton(game: $game, withLabel: withLabel, isCompact: isCompact)
-                MenuView(game: $game)
-                    .buttonStyle(.portalQuietCompact)
-                    .menuIndicator(.hidden)
-                    .fixedSize()
-                    .layoutPriority(1)
-            } else {
-                Buttons.Prominent.InstallButton(game: $game, withLabel: withLabel, isCompact: isCompact)
-            }
-        }
-    }
+    // `ButtonsView` used to live here: a Play-or-Install button with its own copy of the
+    // card menu beside it. Nothing in the app referenced it, and its menu was the last
+    // caller that relied on `MenuView` carrying its own two sheets — so it is deleted
+    // rather than updated.
 
     struct SubscriptedInfoView: View {
         @Binding var game: Game

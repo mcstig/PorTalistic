@@ -21,9 +21,15 @@ struct GameListView: View {
 
     @CodableAppStorage("gameListLayout") var layout: GameListViewModel.Layout = .grid
     @AppStorage(GameCardSize.storageKey) private var cardSize: GameCardSize = .regular
+    // Read once here and handed to the cards, rather than each card keeping its own
+    // defaults observer.
+    @AppStorage("gameImageCardBlur") private var glowRadius: Double = 0
 
     @State private var isGameImportViewPresented: Bool = false
-    @State private var hoveredGameID: Game.ID?
+
+    /// Which card the pointer is over. An object, so a hover doesn't come back through this
+    /// view's own state and rebuild the grid.
+    @State private var hover: CardHoverState = .init()
 
     private var games: [Game] { viewModel.library(inStorefront: storefront) }
 
@@ -33,7 +39,10 @@ struct GameListView: View {
     /// for `isEmpty`, for the `ForEach`, and again as an `.animation` value — so every
     /// redraw of the list did the whole thing three times over.
     var body: some View {
-        content(for: games)
+#if DEBUG
+        RenderCounter.record("GameListView")
+#endif
+        return content(for: games)
     }
 
     @ViewBuilder
@@ -53,7 +62,10 @@ struct GameListView: View {
                             spacing: Theme.Spacing.xlarge
                         ) {
                             ForEach(games) { game in
-                                GameCard(game: .constant(game), hoveredGameID: $hoveredGameID)
+                                GameCard(game: .constant(game),
+                                         hover: hover,
+                                         glowRadius: glowRadius,
+                                         cardSize: cardSize)
                             }
                         }
                         .padding(Theme.Spacing.xlarge)
@@ -69,7 +81,7 @@ struct GameListView: View {
                 // The grid's cards report hover here rather than each keeping its own flag;
                 // this is the half that clears it when the pointer leaves the grid entirely,
                 // which no individual card is in a position to notice.
-                .onHover { if !$0 { hoveredGameID = nil } }
+                .onHover { if !$0 { hover.gameID = nil } }
                 .searchable(text: $viewModel.searchString,
                             tokens: $viewModel.searchTokens,
                             suggestedTokens: .constant(viewModel.suggestedTokens),

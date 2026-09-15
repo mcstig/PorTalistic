@@ -11,6 +11,15 @@
 
 import SwiftUI
 
+/// Which card in a grid or shelf the pointer is over.
+///
+/// Its own observable object so that a hover change reaches the cards without going through
+/// the grid: as `@State` on the grid, every crossing re-ran the grid's body, and its body
+/// filters and sorts the whole library.
+@Observable @MainActor final class CardHoverState {
+    var gameID: Game.ID?
+}
+
 /**
  One game in a grid or on a shelf.
 
@@ -43,25 +52,40 @@ struct GameCard: View {
     /// card in the library sitting there with its Play button and star revealed while the
     /// pointer was in the sidebar. One identifier for the whole grid can only ever name one
     /// card, and the grid clears it when the pointer leaves.
-    @Binding var hoveredGameID: Game.ID?
-
-    @State private var isSettingsPresented: Bool = false
-    @State private var isUninstallPresented: Bool = false
+    ///
+    /// An object rather than a `Binding` to the grid's `@State`, which is what it was: a
+    /// binding writes *through* to the grid, so every card the pointer crossed invalidated
+    /// the grid's own body — which filters and sorts the library and rebuilds every card in
+    /// it. Moving the pointer across a full-screen library did that once per card, and so
+    /// did scrolling, because the cards move under a pointer that is standing still.
+    let hover: CardHoverState
 
     /// Settings ▸ View calls this "Gamecard Glow". It used to draw a blurred copy of the
     /// artwork *behind the image itself*, to fill the margins of a letterboxed cover — so
     /// with artwork now filling its tile it had quietly stopped doing anything at all. A
     /// glow is what the label says, so a glow is what it does: the cover art bled out past
     /// the edges of its own tile. Nothing at all at the default of 0.
-    @AppStorage("gameImageCardBlur") private var glowRadius: Double = 0
+    ///
+    /// Passed in rather than read with `@AppStorage`, as is ``cardSize``. Each `@AppStorage`
+    /// is a defaults observer per card, and every one of them wakes on *any* defaults write
+    /// — including the library encoding itself into `UserDefaults`, which happens on every
+    /// library change. Two per card across a library is a few hundred observers taking a
+    /// look every time anything is saved.
+    var glowRadius: Double = 0
 
     /// Read here only to decide how much of a badge fits.
-    @AppStorage(GameCardSize.storageKey) private var cardSize: GameCardSize = .regular
+    var cardSize: GameCardSize = .regular
 
-    private var isHovering: Bool { hoveredGameID == game.id }
+    @State private var isSettingsPresented: Bool = false
+    @State private var isUninstallPresented: Bool = false
+
+    private var isHovering: Bool { hover.gameID == game.id }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.small) {
+#if DEBUG
+        RenderCounter.record("GameCard")
+#endif
+        return VStack(alignment: .leading, spacing: Theme.Spacing.small) {
             artwork
             caption
         }
@@ -69,9 +93,9 @@ struct GameCard: View {
         .onHover { hovering in
             withAnimation(Theme.Motion.hover) {
                 if hovering {
-                    hoveredGameID = game.id
-                } else if hoveredGameID == game.id {
-                    hoveredGameID = nil
+                    hover.gameID = game.id
+                } else if hover.gameID == game.id {
+                    hover.gameID = nil
                 }
             }
         }
@@ -174,7 +198,9 @@ struct GameCard: View {
 
             Spacer(minLength: 0)
 
-            GameCard.MenuView(game: $game)
+            GameCard.MenuView(game: $game,
+                              isSettingsPresented: $isSettingsPresented,
+                              isUninstallPresented: $isUninstallPresented)
                 .buttonStyle(.portalQuietCompact)
                 .menuIndicator(.hidden)
                 .fixedSize()
@@ -301,8 +327,7 @@ struct FadeInModifier: ViewModifier {
         LazyVGrid(columns: [.init(.adaptive(minimum: 170), spacing: Theme.Grid.spacing)],
                   spacing: Theme.Grid.spacing) {
             ForEach(0..<4, id: \.self) { _ in
-                GameCard(game: .constant(placeholderGame(type: Game.self)),
-                         hoveredGameID: .constant(nil))
+                GameCard(game: .constant(placeholderGame(type: Game.self)), hover: .init())
             }
         }
         .padding(Theme.Spacing.xlarge)

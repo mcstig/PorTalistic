@@ -32,3 +32,57 @@ extension Logger {
     /// Logger instance for file-related logs.
     static let file = custom(category: "file")
 }
+
+// MARK: - Render counting
+
+#if DEBUG
+/**
+ Counts view-body evaluations and logs a summary once a second.
+
+ Guessing at SwiftUI performance is expensive, and the two explanations look identical from
+ the outside: too much work in one body, or far too many bodies. This separates them.
+
+ Off unless asked for, because it logs once a second forever:
+
+     defaults write com.mcstig.PorTalistic logRenderCounts -bool true
+
+ A line like `bodies/s: GameCard×2400  CardArtwork×2400  GameListView×40` says something
+ invalidates the whole grid forty times a second. `GameCard×60` while scrolling says the
+ renders are fine and the cost is inside one of them.
+ */
+enum RenderCounter {
+    private static let log: Logger = .custom(category: "render")
+
+    /// Read once. `UserDefaults` on every body evaluation would be its own performance
+    /// problem, and would not be measuring what it claims to.
+    private static let isEnabled: Bool = UserDefaults.standard.bool(forKey: "logRenderCounts")
+
+    private static let lock: NSLock = .init()
+    private static var counts: [String: Int] = .init()
+    private static var lastFlush: Date = .now
+
+    static func record(_ name: String) {
+        guard isEnabled else { return }
+
+        lock.lock()
+        counts[name, default: 0] += 1
+
+        guard Date.now.timeIntervalSince(lastFlush) >= 1 else {
+            lock.unlock()
+            return
+        }
+
+        let snapshot = counts
+        counts = .init()
+        lastFlush = .now
+        lock.unlock()
+
+        let summary = snapshot
+            .sorted { $0.value > $1.value }
+            .map { "\($0.key)×\($0.value)" }
+            .joined(separator: "  ")
+
+        log.notice("bodies/s: \(summary, privacy: .public)")
+    }
+}
+#endif

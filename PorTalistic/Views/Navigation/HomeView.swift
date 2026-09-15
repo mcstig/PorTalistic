@@ -226,8 +226,9 @@ struct GameShelf: View {
     /// which is the right answer for a shelf the user hasn't earned yet.
     var emptyMessage: String?
 
-    @State private var hoveredGameID: Game.ID?
+    @State private var hover: CardHoverState = .init()
     @AppStorage(GameCardSize.storageKey) private var cardSize: GameCardSize = .regular
+    @AppStorage("gameImageCardBlur") private var glowRadius: Double = 0
 
     var body: some View {
         if !games.isEmpty || emptyMessage != nil {
@@ -250,7 +251,9 @@ struct GameShelf: View {
                             ForEach(games) { game in
                                 GameCard(game: .constant(game),
                                          isCompact: true,
-                                         hoveredGameID: $hoveredGameID)
+                                         hover: hover,
+                                         glowRadius: glowRadius,
+                                         cardSize: cardSize)
                                     .frame(width: cardSize.shelfCardWidth)
                             }
                         }
@@ -260,7 +263,7 @@ struct GameShelf: View {
                         .padding(.vertical, Theme.Spacing.small)
                     }
                     .scrollIndicators(.hidden)
-                    .onHover { if !$0 { hoveredGameID = nil } }
+                    .onHover { if !$0 { hover.gameID = nil } }
                 }
             }
         }

@@ -32,7 +32,10 @@ struct ListGameCard: View {
     static let defaultHeight: CGFloat = 76
 
     var body: some View {
-        HStack(spacing: Theme.Spacing.large) {
+#if DEBUG
+        RenderCounter.record("ListGameCard")
+#endif
+        return HStack(spacing: Theme.Spacing.large) {
             NavigationLink(value: GameRoute(gameID: game.id)) {
                 HStack(spacing: Theme.Spacing.large) {
                     GameArtwork(game: game,
@@ -69,7 +72,9 @@ struct ListGameCard: View {
             // second.
             TrailingControl(game: $game, isHovering: isHovering)
 
-            GameCard.MenuView(game: $game)
+            GameCard.MenuView(game: $game,
+                              isSettingsPresented: $isSettingsPresented,
+                              isUninstallPresented: $isUninstallPresented)
                 .buttonStyle(.portalQuietCompact)
                 .menuIndicator(.hidden)
                 .fixedSize()

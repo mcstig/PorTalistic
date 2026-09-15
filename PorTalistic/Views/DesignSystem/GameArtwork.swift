@@ -73,6 +73,9 @@ struct GameArtwork: View {
     private var shape: RoundedRectangle { .init(cornerRadius: cornerRadius, style: .continuous) }
 
     var body: some View {
+#if DEBUG
+        RenderCounter.record("GameArtwork")
+#endif
         // `Color.clear` takes whatever size it is offered, and an overlay never reports its
         // own size upward — which is the whole point of the arrangement.
         //
@@ -82,7 +85,7 @@ struct GameArtwork: View {
         // happened to hold: GOG publishes larger covers than Epic, so a row of GOG games was
         // visibly taller and wider than a row of Epic ones in the same grid, and the outer
         // `aspectRatio` never got a look in.
-        Color.clear
+        return Color.clear
             .overlay {
                 ZStack {
                     // The placeholder is drawn *instead of* the artwork, not underneath it.

@@ -22,7 +22,25 @@ import OSLog
     var library: Set<Game> = .init() {
         didSet {
             guard !isUpdatingFromObserver else { return }
-            try? UserDefaults.standard.encodeAndSet(library.map({ AnyGame($0) }), forKey: "games")
+            schedulePersist()
+        }
+    }
+
+    /// Coalesces saving the library into one write per quarter-second.
+    ///
+    /// A save encodes every game in the library, and a refresh calls `library.update(with:)`
+    /// once per game — so refreshing a hundred-game library encoded that library a hundred
+    /// times. Each write also posts a `UserDefaults` change notification, which every
+    /// `@AppStorage` in the app wakes up to check, so the cost was not only the encoding.
+    private var persistTask: Task<Void, Never>?
+
+    private func schedulePersist() {
+        persistTask?.cancel()
+        persistTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled, let self else { return }
+
+            try? UserDefaults.standard.encodeAndSet(self.library.map({ AnyGame($0) }), forKey: "games")
         }
     }
 
