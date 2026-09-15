@@ -321,10 +321,14 @@ machine where Sikarugir cannot create a prefix at all, this one created
 (`installed 11 libraries`), and put `winemetal.dll`, `d3d11.dll`, `dxgi.dll` and the
 `d3d10` set into the prefix. That is both halves in one runtime for the first time.
 
+**And a game renders through it.** Horizon Chase Turbo — 64-bit Direct3D 12, the
+profile's own reason for wanting DXMT — starts and is playable on it. That is the
+first time Direct3D on Metal has worked on this machine without Apple's D3DMetal,
+which settles the question the whole exercise was about: the shipping path is real,
+not theoretical.
+
 Still open on it:
 
-  - **Whether a game actually renders through it** — the infrastructure is verified,
-    the pixels are not.
   - **It is built without freetype and gnutls**, so no font rendering inside Wine and
     no TLS for Windows apps. Fixing that means x86_64 builds of both, which means a
     second Homebrew under /usr/local through Rosetta. Necessary before release, not
