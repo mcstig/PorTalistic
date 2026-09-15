@@ -348,22 +348,87 @@ else
     die "winemac.so is missing ${missing_markers[*]} — the patch didn't take"
 fi
 
-# The dylibs travel with the runtime. `Frameworks` is not an arbitrary name:
+# The dylibs travel with the runtime, in `Frameworks` — not an arbitrary name:
 # `RuntimeInstaller.supportLibrariesDirectoryName` is "Frameworks", and
-# `Wine.transformProcess` puts that directory on `DYLD_FALLBACK_LIBRARY_PATH` — which is how
-# the bare install names set above get resolved. Same arrangement as the Sikarugir engines.
+# `Wine.transformProcess` puts that directory on `DYLD_FALLBACK_LIBRARY_PATH`. Same
+# arrangement as the Sikarugir engines.
 mkdir -p "$PREFIX/Frameworks"
 find "$DEPPREFIX/lib" -maxdepth 1 -name "*.dylib" -exec cp -a {} "$PREFIX/Frameworks/" \;
-ok "$(find "$PREFIX/Frameworks" -name '*.dylib' | wc -l | tr -d ' ') support libraries bundled"
+ok "$(find "$PREFIX/Frameworks" -name '*.dylib' -not -type l | wc -l | tr -d ' ') support libraries bundled"
 
-# Deliberately not the build's own fallback path: this runs wine with only the bundled
-# directory visible, which is the arrangement it will actually ship in.
-if DYLD_FALLBACK_LIBRARY_PATH="$PREFIX/Frameworks:/usr/local/lib:/usr/lib" \
-    "$PREFIX/bin/wine" --version >/dev/null 2>&1; then
-    ok "wine starts with only the bundled libraries on the path"
+# …and that environment variable is not enough on its own.
+#
+# It works when PorTalistic runs Wine itself, which is how a GOG or a local game starts. An
+# Epic game does not: `legendary` is what calls Wine there, and it is a signed binary, so
+# dyld strips every DYLD_* variable before it starts — children included. Wine then loads
+# with no freetype at all and says so on a stderr nobody was keeping:
+#
+#     Wine cannot find the FreeType font library.
+#
+# The game ran, with no text in any of its menus, while the library sat in `Frameworks`.
+#
+# So every dependent records a path relative to itself instead. `@loader_path` needs no
+# environment, and there is nothing there for dyld to strip.
+say "Pointing Wine at the bundled libraries by relative path"
+
+# Everything in the tree that could link a dylib. Not a blanket `find`: the install has
+# thousands of PE files that `otool` would be asked about one at a time.
+MACHOS="$WORK/machos.txt"
+find "$PREFIX/bin" -type f -perm -u+x >"$MACHOS" 2>/dev/null || true
+find "$PREFIX/lib" -type f \( -name '*.so' -o -name '*.dylib' \) \
+    -not -path "$PREFIX/Frameworks/*" >>"$MACHOS" 2>/dev/null || true
+
+# Which of them still name a bundled library by its bare leaf name, and so would need the
+# variable. Prints "<file> <leaf>" per dependency.
+bare_dependencies() {
+    local macho leaf
+    while read -r macho; do
+        for leaf in $BUNDLED_LEAVES; do
+            if otool -L "$macho" 2>/dev/null | awk 'NR>1 {print $1}' | grep -qx "$leaf"; then
+                printf '%s %s\n' "$macho" "$leaf"
+            fi
+        done
+    done <"$MACHOS"
+}
+
+BUNDLED_LEAVES=""
+for bundled in "$PREFIX/Frameworks"/*.dylib; do
+    [[ -f "$bundled" && ! -L "$bundled" ]] || continue
+    BUNDLED_LEAVES="$BUNDLED_LEAVES $(basename "$bundled")"
+done
+[[ -n "$BUNDLED_LEAVES" ]] || die "nothing in $PREFIX/Frameworks to point at"
+
+rewrites=0
+while read -r macho leaf; do
+    # How far this file sits below the runtime root, as that many `../`.
+    rel="$(dirname "${macho#$PREFIX/}")"
+    up=""
+    [[ "$rel" != "." ]] && up="$(printf '%s' "$rel" | awk -F/ '{for (i = 1; i <= NF; i++) printf "../"}')"
+
+    install_name_tool -change "$leaf" "@loader_path/${up}Frameworks/$leaf" "$macho" 2>/dev/null || continue
+    codesign --force --sign - "$macho" 2>/dev/null
+    printf '      %s -> @loader_path/%sFrameworks/%s\n' "${macho#$PREFIX/}" "$up" "$leaf"
+    rewrites=$((rewrites + 1))
+done < <(bare_dependencies)
+
+(( rewrites > 0 )) || warn "nothing linked the bundled libraries by a bare name"
+
+# Nothing may be left needing the variable. This is the check that would have caught the
+# fontless launch before the game did.
+LEFTOVERS="$(bare_dependencies)"
+if [[ -z "$LEFTOVERS" ]]; then
+    ok "no binary depends on DYLD_FALLBACK_LIBRARY_PATH any more"
 else
-    warn "wine --version failed with only $PREFIX/Frameworks on the path"
-    warn "PorTalistic sets DYLD_FALLBACK_LIBRARY_PATH to exactly that, so check it before shipping"
+    printf '%s\n' "$LEFTOVERS" >&2
+    die "still resolved only through DYLD_FALLBACK_LIBRARY_PATH"
+fi
+
+# Wine, with the fallback path pointed somewhere useless. If it still starts, the relative
+# paths are carrying it and an Epic launch will get its fonts.
+if DYLD_FALLBACK_LIBRARY_PATH="/nonexistent" "$PREFIX/bin/wine" --version >/dev/null 2>&1; then
+    ok "wine starts with no usable library path set"
+else
+    warn "wine --version failed without a library path — an Epic launch would too"
 fi
 
 # A marker, so PorTalistic can tell this build apart from a stock one.
