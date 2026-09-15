@@ -43,6 +43,7 @@ struct GameSettingsView: View {
     @State private var typingArgument: String = .init()
     @State private var isThumbnailURLChangeSheetPresented: Bool = false
     @State private var isConfiguringContainer: Bool = false
+    @State private var containerSettings: Wine.Container.Settings?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -54,6 +55,10 @@ struct GameSettingsView: View {
                 VStack(alignment: .leading, spacing: Theme.Spacing.xlarge) {
                     if let profile {
                         RuntimeProfilePanel(profile: profile)
+                    }
+
+                    if isWindowsGame {
+                        compatibility
                     }
 
                     options
@@ -70,7 +75,10 @@ struct GameSettingsView: View {
 
             bottomBar
         }
-        .task { profile = await Provisioner.shared.profile(for: game) }
+        .task {
+            loadContainerSettings()
+            await refreshProfile()
+        }
         .task(priority: .background) { setDiscordPresence() }
     }
 
@@ -305,8 +313,8 @@ private extension GameSettingsView {
                 // Deliberately not a picker. The provisioner assigns the container from the
                 // game's profile at every launch, so a container chosen here would be
                 // silently moved back the next time the game started — a control that lies.
-                // A real override wants `RuntimeProfile.Source.userOverride`, which exists
-                // and isn't reachable from the interface yet.
+                // Which Wine build a game runs on is the one thing this app is for deciding;
+                // the settings that ride on top of it are above, and those are the user's.
                 if let containerURL = game.containerURL,
                    let container = try? Wine.Container(knownURL: containerURL) {
                     DetailRow(String(localized: "Runs in"), value: container.name) {
@@ -479,4 +487,181 @@ struct FlowLayout: Layout {
 #Preview {
     GameSettingsView(game: .constant(placeholderGame(type: Game.self)), isPresented: .constant(true))
         .sheetSurface(minWidth: 720, idealWidth: 760, minHeight: 560, idealHeight: 680)
+}
+
+// MARK: - Compatibility
+
+private extension GameSettingsView {
+    /// The settings this game runs with, and who decides them.
+    ///
+    /// Automatic by default, and that is the product: nobody should have to know which Wine
+    /// build or which translation layer a game wants. But automatic is not the same as
+    /// unavailable — the first version of this panel explained the decision and gave no way
+    /// to disagree with it, which is a worse position than the old settings sheet was in.
+    ///
+    /// Switching automatic off hands over exactly what automatic had arrived at, rather than
+    /// a blank slate. An empty override is indistinguishable from "no opinion", so a game
+    /// would silently fall back to the shared container's values the moment someone took
+    /// control — losing the settings it was running with a second earlier.
+    var compatibility: some View {
+        DetailPanel(title: String(localized: "Settings for this game"),
+                    systemImage: "slider.horizontal.3") {
+            VStack(alignment: .leading, spacing: 0) {
+                Toggle(isOn: automaticSettings) {
+                    VStack(alignment: .leading, spacing: Theme.Spacing.xsmall) {
+                        Text("Set these up automatically")
+
+                        Text("""
+                            Read from the game's own files, refined by settings already known to \
+                            work for it, and applied for that launch only. Turn this off to set \
+                            them yourself — you get whatever it had arrived at, to change as \
+                            you like.
+                            """)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .toggleStyle(.switch)
+                .padding(.bottom, Theme.Spacing.medium)
+
+                ForEach(Self.settingSwitches, id: \.label) { entry in
+                    DetailRow(entry.label, value: nil) {
+                        Toggle("", isOn: binding(for: entry))
+                            .toggleStyle(.switch)
+                            .labelsHidden()
+                            .disabled(game.isSettingsAutomatic)
+                    }
+                    .help(entry.help)
+                }
+
+                DetailRow(String(localized: "Windows version"), value: nil) {
+                    Picker("", selection: windowsVersion) {
+                        ForEach(Wine.WindowsVersion.allCases, id: \.self) { version in
+                            Text("Windows® \(version.rawValue)").tag(version)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 170)
+                    .disabled(game.isSettingsAutomatic)
+                }
+                .help(String(localized: "What the game is told it is running on."))
+            }
+        }
+    }
+
+    /// One switch: where the game's answer lives, and where to read a starting value from.
+    struct SettingSwitch {
+        let label: String
+        let help: String
+        let override: WritableKeyPath<RuntimeProfile.SettingsOverride, Bool?>
+        let container: KeyPath<Wine.Container.Settings, Bool>
+    }
+
+    static var settingSwitches: [SettingSwitch] {
+        [
+            .init(label: String(localized: "Retina mode"),
+                  help: String(localized: """
+                      Full display resolution inside Windows. Off is right more often than it \
+                      sounds: a game that doesn't ask for it renders a corner of a 4K desktop.
+                      """),
+                  override: \.retinaMode, container: \.retinaMode),
+            .init(label: String(localized: "DXVK"),
+                  help: String(localized: """
+                      Direct3D 10 and 11 through Vulkan. Never the answer for a Direct3D 9 \
+                      game, and it cannot share a container with D3DMetal or DXMT.
+                      """),
+                  override: \.dxvk, container: \.dxvk),
+            .init(label: String(localized: "DXVK async"),
+                  help: String(localized: "Compiles shaders in the background. Means nothing without DXVK."),
+                  override: \.dxvkAsync, container: \.dxvkAsync),
+            .init(label: String(localized: "Command-stream thread"),
+                  help: String(localized: """
+                      Wine's own CSMT. Usually faster, and the first thing to turn off when a \
+                      game on wined3d hangs or crashes.
+                      """),
+                  override: \.commandStreamThread, container: \.commandStreamThread),
+            .init(label: String(localized: "Msync"),
+                  help: String(localized: "Faster thread synchronisation. Harmless to turn off if a game misbehaves."),
+                  override: \.msync, container: \.msync),
+            .init(label: String(localized: "AVX2"),
+                  help: String(localized: "Report AVX2 support to the game. A few refuse to start without it."),
+                  override: \.avx2, container: \.avx2),
+            .init(label: String(localized: "Metal HUD"),
+                  help: String(localized: "Apple's frame-rate overlay, drawn on top of the game."),
+                  override: \.metalHUD, container: \.metalHUD)
+        ]
+    }
+
+    /// Automatic on and off, seeding the override on the way out of automatic.
+    var automaticSettings: Binding<Bool> {
+        .init {
+            game.isSettingsAutomatic
+        } set: { isAutomatic in
+            if !isAutomatic {
+                game.settingsOverride = shownSettings
+            }
+
+            game.isSettingsAutomatic = isAutomatic
+            persistGame()
+            Task { await refreshProfile() }
+        }
+    }
+
+    func binding(for entry: SettingSwitch) -> Binding<Bool> {
+        .init {
+            shownSettings[keyPath: entry.override]
+                ?? containerSettings?[keyPath: entry.container]
+                ?? false
+        } set: { newValue in
+            game.settingsOverride[keyPath: entry.override] = newValue
+            persistGame()
+            Task { await refreshProfile() }
+        }
+    }
+
+    var windowsVersion: Binding<Wine.WindowsVersion> {
+        .init {
+            shownSettings.windowsVersion ?? containerSettings?.windowsVersion ?? .win10
+        } set: { newValue in
+            game.settingsOverride.windowsVersion = newValue
+            persistGame()
+            Task { await refreshProfile() }
+        }
+    }
+
+    /// What the switches show: the resolved profile's opinion, filled in from the container
+    /// where it has none. The profile is resolved exactly as a launch resolves it, overrides
+    /// included, so these are the values the game will actually run with.
+    var shownSettings: RuntimeProfile.SettingsOverride {
+        guard let settings = containerSettings else { return profile?.settings ?? .init() }
+
+        let floor: RuntimeProfile.SettingsOverride = .init(dxvk: settings.dxvk,
+                                                           dxvkAsync: settings.dxvkAsync,
+                                                           retinaMode: settings.retinaMode,
+                                                           commandStreamThread: settings.commandStreamThread,
+                                                           msync: settings.msync,
+                                                           metalHUD: settings.metalHUD,
+                                                           avx2: settings.avx2,
+                                                           windowsVersion: settings.windowsVersion)
+
+        return floor.overlaid(with: profile?.settings ?? .init())
+    }
+
+    @MainActor func refreshProfile() async {
+        profile = await Provisioner.shared.profile(for: game)
+    }
+
+    @MainActor func loadContainerSettings() {
+        guard let containerURL = game.containerURL,
+              let container = try? Wine.Container(knownURL: containerURL) else { return }
+
+        containerSettings = container.settings
+    }
+
+    /// The library is a `Set` of reference types, so changing a game in place doesn't reach
+    /// its `didSet`. Replacing the member does, and that is what writes it to disk.
+    func persistGame() {
+        Task { @MainActor in GameDataStore.shared.library.update(with: game) }
+    }
 }

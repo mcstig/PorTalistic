@@ -114,7 +114,7 @@ struct RuntimeProfile: Codable, Hashable {
     /// Prey wants Retina Mode off, where on it renders a quarter of a 4096×2660 desktop;
     /// Blades of Time wanted it on, and started crashing with it off. Same container, same
     /// setting, opposite answers, an hour apart.
-    struct SettingsOverride: Codable, Hashable {
+    struct SettingsOverride: Codable, Hashable, Sendable {
         var dxvk: Bool?
         var dxvkAsync: Bool?
         var retinaMode: Bool?

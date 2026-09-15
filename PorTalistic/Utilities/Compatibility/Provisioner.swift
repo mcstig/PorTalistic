@@ -574,24 +574,36 @@ final class Provisioner {
     }
 
     /// The profile for a game, from its files where they exist.
+    ///
+    /// The game's own settings are part of the answer, not a layer applied afterwards: with
+    /// ``Game/isSettingsAutomatic`` off, what the user set wins over anything read from the
+    /// executable or the curated database, and the profile says `.userOverride` so the
+    /// interface can show whose decision it was. With it on the override is not consulted at
+    /// all — it is kept, so turning automatic off again returns what was there before.
     func profile(for game: Game) async -> RuntimeProfile {
+        let override: RuntimeProfile.SettingsOverride? = game.isSettingsAutomatic
+            ? nil
+            : game.settingsOverride
+
         guard let facts = GameFacts(game: game) else {
             // Not installed, or not a Windows build: there is nothing on disk to read, but a
             // curated entry may still have something to say about it.
             let entry = CompatibilityDatabase.current.entry(for: game)
-            return RuntimeProfile.resolve(executable: nil, databaseEntry: entry)
+            return RuntimeProfile.resolve(executable: nil, databaseEntry: entry, userOverride: override)
         }
 
-        return await Task.detached { Self.resolveProfile(for: facts) }.value
+        return await Task.detached { Self.resolveProfile(for: facts, userOverride: override) }.value
     }
 
     /// Resolution proper, off any actor.
-    nonisolated static func resolveProfile(for facts: GameFacts) -> RuntimeProfile {
+    nonisolated static func resolveProfile(for facts: GameFacts,
+                                           userOverride: RuntimeProfile.SettingsOverride? = nil) -> RuntimeProfile {
         RuntimeProfile.resolve(
             executable: windowsExecutable(for: facts),
             databaseEntry: CompatibilityDatabase.current.entry(storefront: facts.storefront,
                                                                id: facts.id,
-                                                               title: facts.title)
+                                                               title: facts.title),
+            userOverride: userOverride
         )
     }
 

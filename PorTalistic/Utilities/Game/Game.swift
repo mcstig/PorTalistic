@@ -53,6 +53,21 @@ import AppKit
     final var isFavourited: Bool = false
     final var lastLaunched: Date?
 
+    /// Whether this game's compatibility settings are chosen for it at every launch.
+    ///
+    /// On by default, and the point of the app: nobody should have to know which Wine build
+    /// or which translation layer a game wants. Turning it off does not mean "no settings" —
+    /// it means the values in ``settingsOverride`` are used verbatim instead of being worked
+    /// out, so switching it off hands over exactly what automatic had arrived at rather than
+    /// a blank slate.
+    final var isSettingsAutomatic: Bool = true
+
+    /// The settings this game runs with when ``isSettingsAutomatic`` is off.
+    ///
+    /// Kept even while automatic is on, so turning it off and on again doesn't lose what was
+    /// set by hand.
+    final var settingsOverride: RuntimeProfile.SettingsOverride = .init()
+
     // override in subclass
     func getSupportedPlatforms() -> Set<Game.Platform>? { return nil }
 
@@ -79,6 +94,12 @@ import AppKit
         self.launchArguments = try container.decode([String].self, forKey: .launchArguments)
         self.isFavourited = try container.decode(Bool.self, forKey: .isFavourited)
         self.lastLaunched = try container.decodeIfPresent(Date.self, forKey: .lastLaunched)
+
+        // Defaulted rather than required: every game stored before these existed decodes
+        // as "let the app decide", which is what it was already doing.
+        self.isSettingsAutomatic = try container.decodeIfPresent(Bool.self, forKey: .isSettingsAutomatic) ?? true
+        self.settingsOverride = try container.decodeIfPresent(RuntimeProfile.SettingsOverride.self,
+                                                              forKey: .settingsOverride) ?? .init()
     }
 
     final var isFallbackImageAvailable: Bool {
@@ -233,6 +254,8 @@ extension Game {
         case launchArguments,
              isFavourited,
              lastLaunched
+        case isSettingsAutomatic,
+             settingsOverride
     }
 
     func encode(to encoder: Encoder) throws {
@@ -248,6 +271,8 @@ extension Game {
         try container.encode(launchArguments, forKey: .launchArguments)
         try container.encode(isFavourited, forKey: .isFavourited)
         try container.encodeIfPresent(lastLaunched, forKey: .lastLaunched)
+        try container.encode(isSettingsAutomatic, forKey: .isSettingsAutomatic)
+        try container.encode(settingsOverride, forKey: .settingsOverride)
     }
 }
 
@@ -266,6 +291,10 @@ extension Game: Mergeable {
         .init(\Game._containerURL, forCodingKey: ._containerURL, strategy: { $0 ?? $1 }),
         .init(\Game.launchArguments, forCodingKey: .launchArguments, strategy: { Array(Set($0 + $1)) }),
         .init(\Game.isFavourited, forCodingKey: .isFavourited, strategy: { $0 || $1 }),
+        // A hand-made choice outlives a merge: if either side has taken the wheel, it stays
+        // taken, and the two sets of values are overlaid rather than one replacing the other.
+        .init(\Game.isSettingsAutomatic, forCodingKey: .isSettingsAutomatic, strategy: { $0 && $1 }),
+        .init(\Game.settingsOverride, forCodingKey: .settingsOverride, strategy: { $0.overlaid(with: $1) }),
         AnyMergeRule(\Game.lastLaunched, forCodingKey: .lastLaunched) { current, new in
             guard current != nil || new != nil else { return current }
             return max(current ??  .distantPast, new ?? .distantPast)
