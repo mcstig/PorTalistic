@@ -79,7 +79,13 @@ import OSLog
         }
     }
 
-    func refreshFromStorefronts(_ storefronts: Game.Storefront...) async throws {
+    /// - Parameter probingExternalVolumes: Whether the refresh may reach for game files that
+    ///   aren't on the startup disk. False by default, because doing so makes macOS ask for
+    ///   permission to the drive — every launch, for a question nobody asked. The
+    ///   Force-refresh button passes true: the user pressed it, so the prompt is an answer
+    ///   to something rather than an interruption.
+    func refreshFromStorefronts(_ storefronts: Game.Storefront...,
+                                probingExternalVolumes: Bool = false) async throws {
         GameListViewModel.shared.isUpdatingLibrary = true
         defer {
             GameListViewModel.shared.isUpdatingLibrary = false
@@ -187,7 +193,9 @@ import OSLog
             // library entry lost to a failed write orphans a download that's sitting right
             // there. gogdl's install record is the third opinion that settles both.
             var reconciled = false
-            for game in library.compactMap({ $0 as? GOGGame }) where GOGDL.reconcileInstallationState(of: game) {
+            for game in library.compactMap({ $0 as? GOGGame })
+            where GOGDL.reconcileInstallationState(of: game,
+                                                   probingExternalVolumes: probingExternalVolumes) {
                 reconciled = true
                 library.update(with: game)
             }

@@ -295,13 +295,25 @@ enum GOGDL {
     /// opinion that settles it, which is the same reason legendary keeps `installed.json`.
     ///
     /// - Returns: `true` if the game's state was changed.
+    /// - Parameter probingExternalVolumes: Whether it may reach for paths that aren't on the
+    ///   startup disk. False on the automatic refresh, because doing so is what makes macOS
+    ///   put up "PorTalistic would like to access files on a removable volume" — and the app
+    ///   was provoking that at every launch purely to find out whether games it was not
+    ///   about to open were still on the drive. True when the user presses Force-refresh,
+    ///   where they have asked for exactly this and the prompt is not a surprise.
+    ///
+    ///   Nothing is lost by waiting: whether a game's files are there is checked again when
+    ///   it is launched, by ``GOGGameManager``, which refuses with an error that says so.
     @discardableResult
-    @MainActor static func reconcileInstallationState(of game: GOGGame) -> Bool {
+    @MainActor static func reconcileInstallationState(of game: GOGGame,
+                                                      probingExternalVolumes: Bool = false) -> Bool {
         let record = installRecord(forGameID: game.id)
         let recordedURL = record.flatMap(recordedLocation)
 
         switch game.installationState {
         case .installed(let location, _):
+            if location.isOnAnExternalVolume, !probingExternalVolumes { return false }
+
             guard !FileManager.default.fileExists(atPath: location.path) else { return false }
 
             // Not there *right now* is not the same as gone. Unplugging an external disk
@@ -322,7 +334,11 @@ enum GOGDL {
             return true
 
         case .uninstalled:
-            guard let record, let recordedURL else { return rediscoverInstall(of: game) }
+            guard let record, let recordedURL else {
+                return rediscoverInstall(of: game, probingExternalVolumes: probingExternalVolumes)
+            }
+
+            if recordedURL.isOnAnExternalVolume, !probingExternalVolumes { return false }
             guard FileManager.default.fileExists(atPath: recordedURL.path) else { return false }
 
             log.notice("Recovering \(game.title, privacy: .public) from its install record")
@@ -370,8 +386,11 @@ enum GOGDL {
     ///
     /// - Returns: `true` if the game's state was changed.
     @discardableResult
-    @MainActor static func rediscoverInstall(of game: GOGGame) -> Bool {
-        let candidates = searchBases().flatMap { base in
+    @MainActor static func rediscoverInstall(of game: GOGGame,
+                                             probingExternalVolumes: Bool = false) -> Bool {
+        let candidates = searchBases()
+            .filter { probingExternalVolumes || !$0.isOnAnExternalVolume }
+            .flatMap { base in
             (try? FileManager.default.contentsOfDirectory(at: base,
                                                           includingPropertiesForKeys: [.isDirectoryKey],
                                                           options: [.skipsHiddenFiles])) ?? []

@@ -89,9 +89,13 @@ struct LibraryView: View {
 
                 ToolbarItem(placement: .automatic) {
                     Button("Force-refresh", systemImage: "arrow.clockwise") {
-                        Task(priority: .userInitiated, operation: { try? await gameDataStore.refreshFromStorefronts() })
+                        // The one refresh that reaches for external drives. macOS may ask for
+                        // permission to them, which is fair here: the user pressed this.
+                        Task(priority: .userInitiated) {
+                            try? await gameDataStore.refreshFromStorefronts(probingExternalVolumes: true)
+                        }
                     }
-                    .help("Force a re-evaluation of your library contents.")
+                    .help("Re-check your library, including games on external drives.")
                 }
                 
                 // MARK: GameListView filter views
