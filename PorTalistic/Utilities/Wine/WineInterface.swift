@@ -156,11 +156,18 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
         return resolved
     }
 
-    static func transformProcess(_ process: Process, containerURL: URL) {
+    /// Which Wine a container belongs to, and what that Wine needs in its environment.
+    ///
+    /// Two callers want this, and they want it in two shapes.
+    /// ``transformProcess(_:containerURL:)`` runs a process that *is* Wine, so it takes both
+    /// halves and sets `executableURL` itself. `legendary` is not Wine — it calls Wine on our
+    /// behalf and is told which one on the command line — so it needs the executable as a
+    /// path to pass along and the environment to inherit. Splitting it here is what keeps the
+    /// two from drifting; they did, and Epic launches spent months on the bundled engine no
+    /// matter which container they were in.
+    static func runtimeInvocation(forContainerAtURL containerURL: URL) -> (executableURL: URL, environment: [String: String]) {
         let runtime = runtime(forContainerAtURL: containerURL)
-        process.executableURL = runtime.executableURL
-
-        var capturedEnvironment = process.environment ?? [:]
+        var environment: [String: String] = .init()
 
         // Where a runtime keeps the Unix libraries it links against, if it doesn't carry them
         // itself. Wineskin-derived engines are built to sit inside a wrapper application that
@@ -175,21 +182,31 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
         // Fallback rather than `DYLD_LIBRARY_PATH`, so a runtime that does ship its own
         // libraries, or finds them on the system, still prefers those.
         let root = runtime.executableURL.deletingLastPathComponent().deletingLastPathComponent()
-        capturedEnvironment.merge(supportLibraryEnvironment(forRuntimeAt: root), uniquingKeysWith: { $1 })
+        environment.merge(supportLibraryEnvironment(forRuntimeAt: root), uniquingKeysWith: { $1 })
 
-        // A CrossOver-derived Wine resolves its own tree from `CX_ROOT`, and Mythic sets that
-        // to Mythic.app at launch for the bundled engine. Handing it to any *other* runtime
-        // points that runtime at a tree with no Wine in it, and the failure is silent in the
-        // worst way: `wine --version` answers fine, because it needs nothing from the tree,
-        // while every attempt to start a Windows process ends as a loader Wine forked, could
-        // not exec, and reported only as
+        // A CrossOver-derived Wine resolves its own tree from `CX_ROOT`, and the app sets that
+        // to its own bundle at launch for the bundled engine. Handing it to any *other*
+        // runtime points that runtime at a tree with no Wine in it, and the failure is silent
+        // in the worst way: `wine --version` answers fine, because it needs nothing from the
+        // tree, while every attempt to start a Windows process ends as a loader Wine forked,
+        // could not exec, and reported only as
         //
         //     err:environ:run_wineboot failed to start wineboot 1
         //
-        // So each runtime gets its own root, and only the bundled engine keeps Mythic's.
+        // So each runtime gets its own root, and only the bundled engine keeps the app's.
         if case .bundledEngine = runtime.origin, let cxRoot = ProcessInfo.processInfo.environment["CX_ROOT"] {
-            capturedEnvironment["CX_ROOT"] = cxRoot
+            environment["CX_ROOT"] = cxRoot
         }
+
+        return (runtime.executableURL, environment)
+    }
+
+    static func transformProcess(_ process: Process, containerURL: URL) {
+        let invocation = runtimeInvocation(forContainerAtURL: containerURL)
+        process.executableURL = invocation.executableURL
+
+        var capturedEnvironment = process.environment ?? [:]
+        capturedEnvironment.merge(invocation.environment, uniquingKeysWith: { $1 })
 
         process.environment = constructEnvironment(with: containerURL, additionalVariables: capturedEnvironment)
     }

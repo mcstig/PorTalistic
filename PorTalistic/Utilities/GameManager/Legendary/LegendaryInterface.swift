@@ -585,23 +585,54 @@ final class Legendary {
         }
 
         let operation: GameOperation = .init(game: game, type: .launch) { _ in
-            guard let containerURL = game.containerURL else { throw Wine.Container.DoesNotExistError() }
-
             var arguments: [String] = ["launch", game.id]
             var environment: [String: String] = .init()
 
             guard game.isFileVerificationRequired != true else { throw EpicGamesGame.VerificationRequiredError() }
+
+            /// The container this launch borrowed, and the way to give it back. `nil` for a
+            /// macOS-native game, which has no prefix to borrow — the old code demanded one
+            /// of those too, before the platform was even looked at, so a native Epic game
+            /// refused to start until the user made it a Windows container it would never use.
+            var plan: Provisioner.LaunchPlan?
 
             // uses legendary's native launch process
             switch platform {
             case .macOS:
                 do {} // no environment variables need to be assembled.
             case .windows:
+                // Which runtime this game wants, the container belonging to that runtime, and
+                // this game's own settings written into it — the same path GOG launches take.
+                // It replaces reading `game.containerURL` and hoping: a game with no
+                // container simply refused to start, and a game in a container built by the
+                // wrong Wine had no way to say so.
+                let resolved = try await Provisioner.shared.planLaunch(for: game)
+                let containerURL = resolved.containerURL
+                plan = resolved
+
+                Self.log.notice("""
+                    Launching \(game.title, privacy: .public) on \(resolved.runtimeName, privacy: .public): \
+                    \(resolved.reasons.joined(separator: "; "), privacy: .public)
+                    """)
+
+                // `legendary` calls Wine itself, so what it needs is the *path* to a Wine and
+                // an environment to hand down — not this process pointed at one.
+                //
+                // It used to be handed `Engine.wineExecutableURL` unconditionally, which made
+                // the container assignment a lie for every Epic game: the provisioner could
+                // put a game in a Wine 11 prefix and legendary would still open it with the
+                // bundled 7.7. Same prefix, wrong server, and all the caller sees is
+                //
+                //     wine client error:0: version mismatch 762/930.
+                let invocation = Wine.runtimeInvocation(forContainerAtURL: containerURL)
+
                 environment = try Wine.assembleEnvironmentVariables(forContainerAtURL: containerURL)
+                environment.merge(invocation.environment, uniquingKeysWith: { $1 })
+
                 // legendary requires this, since it calls wine directly.
                 environment["WINEPREFIX"] = containerURL.path(percentEncoded: false)
 
-                arguments += ["--wine", Engine.wineExecutableURL.path]
+                arguments += ["--wine", invocation.executableURL.path]
             }
 
             arguments.append(contentsOf: game.launchArguments.map({ "'\($0)'" }))
@@ -624,6 +655,13 @@ final class Legendary {
                 // FIXME: terminate the wine subprocess.. this is a KNOWN ISSUE
                 process.terminate()
             }
+
+            // Put the container back. Containers are shared by every game on the same
+            // runtime, so this game's settings left behind would quietly become the next
+            // game's. `handleCLIErrorOutput` reads legendary's stderr to EOF, which is as
+            // close to "the game exited" as this path gets: legendary waits for the Wine it
+            // started, even though the game itself ends up detached from it.
+            if let plan { await Provisioner.shared.revert(plan) }
         }
 
         await Game.operationManager.queueOperation(operation)

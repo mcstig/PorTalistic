@@ -79,24 +79,57 @@ class LocalGameManager {
                     throw CocoaError(.serviceApplicationLaunchFailed)
                 }
             case .windows:
-                guard let containerURL = game.containerURL else { throw Wine.Container.DoesNotExistError() }
-                let container = try Wine.getContainerObject(at: containerURL)
+                // Which runtime this executable wants, the container belonging to that
+                // runtime, and this game's own settings written into it — the same path Epic
+                // and GOG launches take. It replaces reading `game.containerURL` and hoping:
+                // an imported `.exe` with no container simply refused to start, which for a
+                // local game is most of them, since nothing in the import flow makes one.
+                let plan = try await Provisioner.shared.planLaunch(for: game)
+                let containerURL = plan.containerURL
+
+                Self.log.notice("""
+                    Launching \(game.title, privacy: .public) on \(plan.runtimeName, privacy: .public): \
+                    \(plan.reasons.joined(separator: "; "), privacy: .public)
+                    """)
 
                 var environment: [String: String] = .init()
-                environment = try Wine.assembleEnvironmentVariables(forContainerAtURL: container.url)
+                environment = try Wine.assembleEnvironmentVariables(forContainerAtURL: containerURL)
 
                 if UserDefaults.standard.bool(forKey: "minimiseOnGameLaunch") {
                     NSApp.windows.first?.miniaturize(nil)
                 }
-                
+
                 let process: Process = .init()
                 process.arguments = [location.path] + game.launchArguments
                 process.environment = environment
+
+                // Games routinely load their data by relative path, so starting one from the
+                // wrong directory looks like missing assets rather than like a mistake here.
+                process.currentDirectoryURL = location.deletingLastPathComponent()
+
                 Wine.transformProcess(process, containerURL: containerURL)
-                
+
+                // Everything Wine and the game print, kept where it can be read afterwards —
+                // beside the container, one "Open…" from the person who has to send it to you.
+                // Until now a local game's entire output went to the app's own stderr, which
+                // means nowhere unless the app happened to be running from Xcode.
+                let logURL = Wine.logURL(forGameTitled: game.title, inContainerAtURL: containerURL)
+                let logHandle = Wine.beginLogging(to: logURL, describing: location)
+
+                if let logHandle {
+                    process.standardOutput = logHandle
+                    process.standardError = logHandle
+                }
+
+                defer { try? logHandle?.close() }
+
                 try process.run()
-                
+
                 process.waitUntilExit()
+
+                // Put the container back — shared per runtime, so this game's settings left
+                // behind would quietly become the next game's.
+                await Provisioner.shared.revert(plan)
             }
         }
 
