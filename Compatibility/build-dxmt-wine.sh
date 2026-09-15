@@ -165,8 +165,11 @@ DEPS="$WORK/deps"
 CELLAR="$DEPS/cellar"
 DEPPREFIX="$DEPS/prefix"
 
+WITHOUT_GNUTLS=""
+
 if [[ -f "$DEPS/.ready" ]]; then
     ok "already unpacked (delete $DEPS to redo)"
+    [[ -f "$DEPS/.no-gnutls" ]] && WITHOUT_GNUTLS="--without-gnutls"
 else
     rm -rf "$DEPS"
     mkdir -p "$CELLAR" "$DEPPREFIX/include" "$DEPPREFIX/lib"
@@ -174,78 +177,95 @@ else
     # Which macOS release's x86_64 bottles to use.
     #
     # Not this one. Homebrew builds x86_64 bottles only for the releases Apple still ships
-    # Intel Macs for, and macOS 26 is not one of them — asking for `tahoe` gets "Bottle for
-    # tag :tahoe is unavailable" eleven times out of twelve. The native tag is no help either
-    # for the same reason; it is `arm64_tahoe`, and stripping the prefix names a bottle that
-    # was never built.
+    # Intel Macs for, and macOS 26 is not one of them. The native tag is no help for the
+    # same reason: it is `arm64_tahoe`, and stripping the prefix names a bottle nobody built.
     #
-    # An x86_64 bottle built for an older macOS runs fine on a newer one, so take the newest
-    # tag that actually has one. Found by asking for it: availability is not something worth
-    # predicting when one fetch settles it, and the fetch warms the cache either way.
+    # An x86_64 bottle from an older macOS runs fine on a newer one, so take the newest tag
+    # that actually has one. The test is whether a bottle lands in Homebrew's cache — *not*
+    # whether `brew fetch` exits 0, which it does even while printing "Bottle for tag ... is
+    # unavailable" and quietly falling back to something else. That false positive is what
+    # made the last run pick a tag and then report every formula missing.
+
+    # Where a formula's bottle sits in the cache, under this tag or as an
+    # architecture-independent `all` bottle. Prints nothing and fails if neither is there.
+    cached_bottle() {
+        local formula="$1" cachetag candidate
+        for cachetag in "$2" all; do
+            candidate="$(brew --cache --bottle-tag="$cachetag" "$formula" 2>/dev/null)"
+            if [[ -f "$candidate" ]]; then
+                printf '%s\n' "$candidate"
+                return 0
+            fi
+        done
+        return 1
+    }
+
     ok "looking for the newest macOS with x86_64 bottles"
     TAG=""
-    for candidate in ${BOTTLE_TAG:-sequoia sonoma ventura monterey}; do
-        if brew fetch --bottle-tag="$candidate" freetype >/dev/null 2>&1; then
+    CANDIDATES="${BOTTLE_TAG:-sequoia sonoma ventura monterey}"
+    for candidate in $CANDIDATES; do
+        brew fetch --bottle-tag="$candidate" freetype >/dev/null 2>&1
+        if cached_bottle freetype "$candidate" >/dev/null; then
             TAG="$candidate"
             break
         fi
-        printf '  \033[33m!\033[0m no x86_64 bottle for %s\n' "$candidate"
+        printf '  \033[33m!\033[0m no x86_64 freetype bottle for %s\n' "$candidate"
     done
 
     if [[ -z "$TAG" ]]; then
-        printf "\n  no macOS release has an x86_64 freetype bottle, which shouldn't happen.\n\n" >&2
-        printf "  To see what Homebrew actually has:\n" >&2
-        printf "      brew info --json=v2 freetype | python3 -m json.tool | grep -A25 files\n\n" >&2
-        printf "  Then rerun with that tag:\n" >&2
+        printf "\n  No x86_64 freetype bottle under any of:%s\n\n" " $CANDIDATES" >&2
+        printf "  Homebrew offers freetype under these tags:\n" >&2
+        brew info --json=v2 freetype >"$WORK/freetype.json" 2>/dev/null || true
+        python3 - "$WORK/freetype.json" >&2 <<'TAGS'
+import json, sys
+try:
+    data = json.load(open(sys.argv[1]))
+    entry = data["formulae"][0] if isinstance(data, dict) else data[0]
+    for tag in sorted(entry["bottle"]["stable"]["files"]):
+        print("      " + tag)
+except Exception as exc:
+    print("      (couldn't read brew's answer: %s)" % exc)
+TAGS
+        printf "\n  Rerun with one of those:\n" >&2
         printf "      BOTTLE_TAG=<tag> bash Compatibility/build-dxmt-wine.sh\n" >&2
         die "no usable bottle tag"
     fi
     ok "bottle tag: $TAG"
 
-    # Everything freetype and gnutls link against, not just the two themselves.
-    # No `mapfile`: macOS ships bash 3.2 and that is a bash 4 builtin.
-    FORMULAE=()
-    while IFS= read -r formula; do
-        [[ -n "$formula" ]] && FORMULAE+=("$formula")
-    done < <(printf '%s\n' freetype gnutls $(brew deps --union freetype gnutls) | sort -u)
-
-    (( ${#FORMULAE[@]} )) || die "brew deps returned nothing for freetype and gnutls"
-    ok "${#FORMULAE[@]} formulae: ${FORMULAE[*]}"
-
-    # Per formula rather than all at once, so a failure can name the formula instead of
-    # leaving twelve possibilities. A bottle with no architecture — `ca-certificates` is one —
-    # is tagged `all`, and `brew --cache` files it under that tag rather than this one, so
-    # both are tried.
-    MISSING=""
-    for formula in "${FORMULAE[@]}"; do
-        brew fetch --bottle-tag="$TAG" "$formula" >/dev/null 2>&1
-
-        bottle=""
-        for cachetag in "$TAG" all; do
-            candidate="$(brew --cache --bottle-tag="$cachetag" "$formula" 2>/dev/null)"
-            if [[ -f "$candidate" ]]; then
-                bottle="$candidate"
-                break
+    # freetype is the one that matters — without it Wine renders no text and most games have
+    # no menus. gnutls only gives Windows apps TLS, which a game rarely needs, so it is
+    # allowed to be missing: better a build with fonts and no TLS than no build.
+    collect() {
+        local label="$1" formula
+        shift
+        MISSING=""
+        for formula in "$@"; do
+            brew fetch --bottle-tag="$TAG" "$formula" >/dev/null 2>&1
+            local bottle
+            if bottle="$(cached_bottle "$formula" "$TAG")"; then
+                tar -xzf "$bottle" -C "$CELLAR"
+            else
+                MISSING="$MISSING $formula"
             fi
         done
+        [[ -z "$MISSING" ]]
+    }
 
-        if [[ -z "$bottle" ]]; then
-            MISSING="$MISSING $formula"
-            continue
-        fi
+    FREETYPE_SET="freetype $(brew deps freetype)"
+    GNUTLS_SET="gnutls $(brew deps gnutls)"
 
-        tar -xzf "$bottle" -C "$CELLAR"
-    done
+    collect freetype $FREETYPE_SET \
+        || die "no x86_64 bottle for:$MISSING — try BOTTLE_TAG=sonoma"
+    ok "freetype and its dependencies unpacked"
 
-    # freetype and gnutls are the point; a missing dependency of theirs would only fail later
-    # and less clearly, so all of them are required.
-    if [[ -n "$MISSING" ]]; then
-        printf "\n  no x86_64 bottle for:%s\n\n" "$MISSING" >&2
-        printf "  Try an older release:\n" >&2
-        printf "      BOTTLE_TAG=sonoma bash Compatibility/build-dxmt-wine.sh\n" >&2
-        die "incomplete dependency set"
+    if collect gnutls $GNUTLS_SET; then
+        ok "gnutls and its dependencies unpacked"
+    else
+        warn "no x86_64 bottle for:$MISSING"
+        warn "building without TLS for Windows apps; fonts are unaffected"
+        WITHOUT_GNUTLS="--without-gnutls"
+        touch "$DEPS/.no-gnutls"
     fi
-    ok "unpacked into the build tree"
 
     # Flatten the Cellar layout into one prefix Wine's configure can be pointed at.
     for kegdir in "$CELLAR"/*/*/; do
@@ -329,6 +349,7 @@ else
             --host=x86_64-apple-darwin \
             --enable-archs=i386,x86_64 \
             --disable-tests \
+            $WITHOUT_GNUTLS \
             --without-oss \
             --without-v4l2
     ) || die "configure failed — the tail of $BUILD/config.log says why"
