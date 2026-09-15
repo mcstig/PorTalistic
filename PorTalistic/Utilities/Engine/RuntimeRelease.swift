@@ -153,8 +153,9 @@ extension RuntimeRelease {
                 Wine 11.16 from winehq source with CodeWeavers' winemac.drv patch, so a \
                 Direct3D 11 swap chain has a CAMetalLayer to present into. Built rather than \
                 downloaded because no published build has both that and a prefix that boots \
-                here. This one is compiled without freetype and gnutls: no font rendering \
-                inside Wine, no TLS for Windows apps.
+                here. Compiled without gnutls, so Windows code running inside the \
+                installation gets no TLS — which games do not use, because the store client \
+                and the launcher both live outside it.
                 """,
             exposesMetalEscapes: true
         )
