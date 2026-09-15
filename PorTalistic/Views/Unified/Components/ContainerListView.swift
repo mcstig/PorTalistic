@@ -533,6 +533,20 @@ struct WinetricksConfigurationView: View {
     }
 }
 
+extension ContainerConfigurationView {
+    /// Commits the edited name, if it is a name and it changed.
+    fileprivate func rename(_ container: Wine.Container) {
+        let trimmed = editedName.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !trimmed.isEmpty, trimmed != container.name else {
+            editedName = container.name
+            return
+        }
+
+        container.name = trimmed
+    }
+}
+
 struct ContainerConfigurationView: View {
     @Binding var containerURL: URL
     @Binding var isPresented: Bool
@@ -546,7 +560,13 @@ struct ContainerConfigurationView: View {
 
     @State private var isOpenAlertPresented = false
     @State private var openError: Error?
-    
+
+    /// Edited locally and committed on submit.
+    ///
+    /// `Wine.Container` is an `ObservableObject` whose `name` isn't `@Published`, so binding
+    /// a field straight to it writes the plist on every keystroke and redraws nothing.
+    @State private var editedName: String = .init()
+
     var body: some View {
         if let container = try? Wine.getContainerObject(at: self.containerURL) {
             VStack(spacing: 0) {
@@ -569,6 +589,20 @@ struct ContainerConfigurationView: View {
                 Divider()
 
                 Form {
+                    // A container's name is the only thing about it the user chose, and
+                    // until now there was no way to change it. That mattered once the
+                    // provisioner started assigning games by runtime rather than by name:
+                    // the prefix built for the Steam client became *the* Wine 11 container,
+                    // and Epic games in it reported that they run in "Steam".
+                    //
+                    // The name is a field in the container's plist, not its directory, so
+                    // this renames nothing on disk and no prefix moves.
+                    TextField("Name", text: $editedName)
+                        .onSubmit { rename(container) }
+                        .onAppear { editedName = container.name }
+                        .onChange(of: containerURL) { editedName = container.name }
+                        .onDisappear { rename(container) }
+
                     ContainerSettingsView(
                         selectedContainerURL: .init(
                             get: { containerURL },

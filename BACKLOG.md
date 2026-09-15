@@ -312,6 +312,37 @@ Not finished:
     flag and the launch-error alert the way it already owns the settings and
     uninstall flags. Hover is not a gesture every user has.
 
+## A second DXMT-capable Wine build
+
+DXMT still rests on `wine-sikarugir-11.0` alone, and that build can't create a
+container at all on some Macs. What the research says:
+
+  - **The requirement is specific.** DXMT needs a Wine whose `winemac.drv` *exports*
+    the API declared in `dxmt/include/winemacdrv.h` — the Metal escape functions.
+    They are hidden by default, so almost no Wine build qualifies, and that is the
+    whole reason there is only one.
+  - **Porting Kit has one**: `WS12Wine11.0_DXMT-v0.80`. `macgameport/cities-skylines-2-macos`
+    credits it as "the missing piece: a Wine with `winemac.drv` Metal symbols
+    exposed". It is hosted on paulthetall.com, which is not in
+    `CompatibilityManifest.allowedDownloadHosts` and whose redistribution terms are
+    unknown — so it needs asking, not assuming.
+  - **`athei/wine-build` is the wrong shape.** It builds CrossOver-sourced Wine for
+    macOS as a `.tar.xz` on GitHub releases, which fits the manifest exactly, but its
+    own notes put DXMT on 32-bit D3D10/11 and *Apple GPTK* on 64-bit. GPTK's
+    `D3DMetal.framework` is Apple's and non-commercial only, which rules it out for a
+    paid product.
+  - **Building one is the robust answer**, and there is a working recipe in
+    `macgameport/cities-skylines-2-macos/scripts/build-engine-1116.sh`: Wine 11.16
+    from `dl.winehq.org` (sha256 `c66e2090343dcd727f7f7fd2f87ee0bfb0b118790c1d745ab7b8a4c3a4197f2f`),
+    aquadran's `wineandaqua-dxmt.patch`, `configure --enable-archs=i386,x86_64`, with
+    `mingw-w64 bison make pkgconf freetype gnutls` from Homebrew. Published as a
+    release in this repository it would satisfy the allowed hosts, the digest pin and
+    the licensing position at once, and DXMT would stop depending on one upstream.
+  - **The open question in that recipe** is `winemetal.so`, which the script copies
+    out of a donor Porting Kit wrapper rather than building. Whether the patched Wine
+    can produce it, or whether it has to come from DXMT's own releases, decides
+    whether a from-source build is genuinely self-contained.
+
 ## The design system's remaining gaps
 
 Buttons, sheet surfaces and panels are routed through `Views/DesignSystem/` now, which
@@ -360,20 +391,13 @@ Also outstanding from this round:
     lay out identically. The visible difference is that floating controls get a drawn
     capsule instead of glass, which is what the fallback is for. **Light mode is
     still unchecked** — it needs the system appearance switched, not an app toggle.
-  - **The manifest signing key doesn't exist yet.** `ManifestSignature.trustedPublicKey`
-    is `nil`, which means *no* fetched manifest is trusted and the app uses the
-    catalogue it shipped with — the same behaviour as today, because the repository
-    is private and the fetch 404s. To turn it on:
-    `swift Compatibility/sign-manifest.swift --generate-key`, paste the public key it
-    prints into `ManifestSignature.swift`, then
-    `swift Compatibility/sign-manifest.swift` after every edit to `manifest.json` and
-    commit both files. The private half goes to `~/.portalistic` and needs backing up:
-    losing it doesn't break an installed app, but no new manifest can ever reach one.
-  - **`sign-manifest.swift` has never been run.** The verifying half is compiled and
-    type-checked by every build; the script isn't compiled by anything. The Ed25519
-    interop contract it depends on was checked independently — 32-byte raw keys,
-    64-byte signatures, base64 with a trailing newline, and a one-bit edit failing —
-    so what's untested is the script's own syntax, not the cryptography.
+  - **`manifest.json` isn't signed yet.** The key exists and its public half is
+    compiled in, so the app now *requires* a signature: a manifest with no
+    `manifest.json.sig` beside it is ignored. Harmless today (the repository is
+    private and the fetch 404s) and fail-safe afterwards, but it means
+    `swift Compatibility/sign-manifest.swift` has to run and `manifest.json.sig` has
+    to be committed before the repository goes public, or published corrections reach
+    nobody. Every later edit to `manifest.json` needs the same.
   - **Nobody has watched an Epic store sign-in finish.** The web views can open the
     windows a sign-in asks for now, and the store page renders where it used to show
     Epic's own error, but the sign-in itself has only been reasoned about — a

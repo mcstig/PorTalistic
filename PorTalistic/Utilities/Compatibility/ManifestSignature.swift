@@ -56,7 +56,7 @@ enum ManifestSignature {
     /// - Note: rotating it invalidates every manifest signed with the old key, which is the
     ///   point of rotating it. Older app versions keep trusting the old key, so a rotation
     ///   wants both signatures published or a version of the app nobody is running any more.
-    static let trustedPublicKey: String? = nil
+    static let trustedPublicKey: String? = "uTE1O6QjFnpdt9OdNO+z9WdqM85yp3MlVMWiRQUpavM="
 
     /// Where the detached signature sits, relative to the manifest.
     static let signatureExtension: String = "sig"
