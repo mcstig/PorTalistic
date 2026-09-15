@@ -266,6 +266,30 @@ final class Provisioner {
             return runtime
         }
 
+        // An installed build that *could* serve this, and hasn't been given the layer yet.
+        //
+        // `Runtime.select` asks what a runtime can do right now, and for Direct3D on Metal
+        // that means "DXMT is installed into it" — so a Wine that is ready for DXMT and
+        // hasn't received it is invisible there. `ensureDirect3DLayer` only ever ran on the
+        // install that fetched a runtime, so a build that arrived any other way — built
+        // locally, dropped into the runtimes directory by hand — was skipped forever, and
+        // the game went to whatever could serve it instead.
+        if requirements.direct3DOnMetal,
+           let candidate = await Task.detached(operation: {
+               Runtime.discoverAll().first {
+                   RuntimeRelease.matching($0)?.exposesMetalEscapes == true
+                       && !Wine.DXMT.isShippedByRuntime($0)
+                       && !Wine.DXMT.isInstalled(in: $0)
+               }
+           }).value {
+            Self.log.notice("\(candidate.name, privacy: .public) can host Direct3D 11 on Metal and hasn't got it; installing it now")
+            try await ensureDirect3DLayer(in: candidate)
+
+            if let runtime = await Task.detached(operation: { Runtime.select(satisfying: requirements) }).value {
+                return runtime
+            }
+        }
+
         guard let release = RuntimeRelease.release(satisfying: requirements) else {
             throw NoViableRuntimeError(title: game.title)
         }

@@ -128,16 +128,19 @@ extension RuntimeRelease {
     ///
     /// Also the offline answer: the whole catalogue being fetched would mean a first launch
     /// with no network had no runtimes at all to offer.
-    static let compiledIn: [RuntimeRelease] = [
+    ///
+    /// Built in DEBUG-only additions first, because catalogue order is preference order.
+    static let compiledIn: [RuntimeRelease] = unreleased + shipped
+
+    /// Runtimes built locally that have no published release yet.
+    ///
+    /// Empty in a release build, on purpose: their `downloadURL` points at a tag that does
+    /// not exist, and a runtime whose download 404s reads as the app being broken rather
+    /// than as a tarball being unpublished. Each one moves into
+    /// `Compatibility/manifest.json` — and out of here — once its release is cut.
+    private static var unreleased: [RuntimeRelease] {
 #if DEBUG
-        // Built by `Compatibility/build-dxmt-wine.sh`, and listed first because catalogue
-        // order is preference order: it is the only build known to have both a prefix that
-        // boots on this machine and the Metal hooks DXMT presents through.
-        //
-        // `#if DEBUG` because the URL is a release that doesn't exist yet. Shipping this
-        // entry now would give every user a runtime whose download 404s, which reads as the
-        // app being broken rather than as a tarball being unpublished. It goes into
-        // `Compatibility/manifest.json` — and out of here — once the release is cut.
+        [
         .init(
             id: "wine-dxmt-11.16",
             name: "Wine 11.16 (DXMT)",
@@ -154,8 +157,14 @@ extension RuntimeRelease {
                 inside Wine, no TLS for Windows apps.
                 """,
             exposesMetalEscapes: true
-        ),
+        )
+        ]
+#else
+        []
 #endif
+    }
+
+    private static let shipped: [RuntimeRelease] = [
         .init(
             id: "wine-stable-11.0",
             name: "Wine Stable 11.0",
