@@ -143,7 +143,7 @@ struct LibraryView: View {
                             }
                             
                             Section {
-                                Toggle("Favourited", isOn: searchTokenBinding(for: .favourited))
+                                Toggle("Favourites", isOn: searchTokenBinding(for: .favourited))
                             }
 
                             // A way out from inside the control that got you here, so undoing

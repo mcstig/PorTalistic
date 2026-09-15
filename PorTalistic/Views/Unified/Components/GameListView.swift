@@ -102,7 +102,7 @@ struct GameListView: View {
             case .notInstalled:
                 Text("Not Installed")
             case .favourited:
-                Text("Favourited")
+                Text("Favourites")
             }
         }
         .animation(Theme.Motion.layout, value: layout)

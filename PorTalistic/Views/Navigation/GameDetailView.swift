@@ -214,7 +214,7 @@ private struct GameDetailContent: View {
                         Button("Settings", systemImage: "gear") { isSettingsPresented = true }
                         GameCard.Buttons.UpdateButton(game: $game, withLabel: true)
                         GameCard.Buttons.VerificationButton(game: $game, withLabel: true)
-                        Button("Delete", systemImage: "xmark.bin") { isUninstallPresented = true }
+                        Button("Uninstall", systemImage: "xmark.bin") { isUninstallPresented = true }
                     }
                     .buttonStyle(.portalCompact)
                     .controlSize(.small)

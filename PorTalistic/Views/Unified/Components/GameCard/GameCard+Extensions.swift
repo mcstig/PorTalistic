@@ -160,7 +160,8 @@ extension GameCard {
             }
         }
 
-        struct DeleteButton: View {
+        /// Uninstalls a game — the word the sheet it opens has always used.
+        struct UninstallButton: View {
             @Binding var game: Game
             var withLabel: Bool = false
 
@@ -175,7 +176,7 @@ extension GameCard {
                     isUninstallSheetPresented = true
                 } label: {
                     if withLabel {
-                        Label("Delete", systemImage: "xmark.bin")
+                        Label("Uninstall", systemImage: "xmark.bin")
                     } else {
                         Image(systemName: "xmark.bin")
                             .padding(2)
@@ -183,7 +184,7 @@ extension GameCard {
                 }
                 .disabled(operationManager.queue.contains(where: { $0.game == game && $0.type == .uninstall }))
                 // FIXME: .disabled(game.checkIfGameIsRunning())
-                .help("Delete \"\(game.title)\"")
+                .help("Uninstall \"\(game.title)\"")
                 .onHover { hovering in
                     withAnimation(.easeInOut(duration: 0.1)) {
                         hoveringOverDestructiveButton = hovering
@@ -463,7 +464,7 @@ extension GameCard {
                                                     isGameSettingsSheetPresented: $isSettingsPresented)
                     GameCard.Buttons.UpdateButton(game: $game, withLabel: true)
                     GameCard.Buttons.FavouriteButton(game: $game, withLabel: true)
-                    GameCard.Buttons.DeleteButton(game: $game, withLabel: true,
+                    GameCard.Buttons.UninstallButton(game: $game, withLabel: true,
                                                   isUninstallSheetPresented: $isUninstallPresented)
                 }
             } label: {
@@ -503,7 +504,7 @@ extension GameCard {
             Divider()
 
             Button("Settings...", systemImage: "gear") { isSettingsPresented = true }
-            Button("Delete...", systemImage: "xmark.bin") { isUninstallPresented = true }
+            Button("Uninstall...", systemImage: "xmark.bin") { isUninstallPresented = true }
         }
     }
 
