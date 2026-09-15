@@ -227,11 +227,20 @@ else
     die "winemac.so is $ARCHS, not x86_64 — DXMT's winemetal.so could not load into it"
 fi
 
-# The patch's whole purpose: these have to be visible in the driver, not hidden.
-if nm -gU "$PREFIX/lib/wine/x86_64-unix/winemac.so" 2>/dev/null | grep -q dxmt_client_surface; then
-    ok "winemac.so exports the DXMT client-surface hooks"
+# Whether the patch's code is actually in the driver.
+#
+# Not `nm -gU`: winemac.drv is built with -fvisibility=hidden, so none of this is a global
+# symbol and the first version of this check cried wolf on a good build. DXMT reaches these
+# through Wine's own client-surface plumbing rather than by dlsym, so hidden is correct.
+missing_markers=()
+for marker in WineMetalLayer dxmt_client_surface CLIENT_SURFACE_PRESENTED; do
+    grep -qa "$marker" "$PREFIX/lib/wine/x86_64-unix/winemac.so" || missing_markers+=("$marker")
+done
+
+if (( ${#missing_markers[@]} == 0 )); then
+    ok "the DXMT hooks are compiled into winemac.so"
 else
-    warn "couldn't see the DXMT hooks exported from winemac.so — worth a look before trusting it"
+    die "winemac.so is missing ${missing_markers[*]} — the patch didn't take"
 fi
 
 # A marker, so PorTalistic can tell this build apart from a stock one.

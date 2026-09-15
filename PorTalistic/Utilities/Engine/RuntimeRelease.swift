@@ -129,6 +129,33 @@ extension RuntimeRelease {
     /// Also the offline answer: the whole catalogue being fetched would mean a first launch
     /// with no network had no runtimes at all to offer.
     static let compiledIn: [RuntimeRelease] = [
+#if DEBUG
+        // Built by `Compatibility/build-dxmt-wine.sh`, and listed first because catalogue
+        // order is preference order: it is the only build known to have both a prefix that
+        // boots on this machine and the Metal hooks DXMT presents through.
+        //
+        // `#if DEBUG` because the URL is a release that doesn't exist yet. Shipping this
+        // entry now would give every user a runtime whose download 404s, which reads as the
+        // app being broken rather than as a tarball being unpublished. It goes into
+        // `Compatibility/manifest.json` — and out of here — once the release is cut.
+        .init(
+            id: "wine-dxmt-11.16",
+            name: "Wine 11.16 (DXMT)",
+            version: .init(11, 16, 0),
+            downloadURL: .init(string: "https://github.com/mcstig/PorTalistic/releases/download/wine-dxmt-11.16/wine-dxmt-11.16.tar.xz")!,
+            sha256: "30bc6e69f61b899d3e41c72a82dc30f633ea11e66e9d9b6745a663ab7830ef25",
+            payloadSubpath: "wine-dxmt-11.16",
+            executableSubpath: "bin/wine",
+            summary: """
+                Wine 11.16 from winehq source with CodeWeavers' winemac.drv patch, so a \
+                Direct3D 11 swap chain has a CAMetalLayer to present into. Built rather than \
+                downloaded because no published build has both that and a prefix that boots \
+                here. This one is compiled without freetype and gnutls: no font rendering \
+                inside Wine, no TLS for Windows apps.
+                """,
+            exposesMetalEscapes: true
+        ),
+#endif
         .init(
             id: "wine-stable-11.0",
             name: "Wine Stable 11.0",
