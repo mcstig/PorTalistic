@@ -436,7 +436,21 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
         }
 
         transformProcess(process, containerURL: containerURL)
-        let result = try await process.runWrapped()
+
+        // Bounded. A `wineboot` waiting on a dialog nobody is going to click never returns,
+        // and every launch into that container waits behind it — which is how a game came to
+        // show two wine icons in the Dock and then nothing at all. Five minutes is far more
+        // than a prefix needs and far less than forever; a boot that overruns it is reported
+        // as a failure, which at least says something.
+        guard let result = await process.runWrapped(timeout: .seconds(300)) else {
+            log.error("""
+                wineboot in \(containerURL.lastPathComponent, privacy: .public) did not finish                 within five minutes and was stopped
+                """)
+
+            preserveBootFailureLog(from: containerURL,
+                                   named: runtime(forContainerAtURL: containerURL).name)
+            throw Container.UnableToBootError()
+        }
 
         // Kept next to the container, because a prefix that fails to boot is the one case
         // where there's no prefix to look inside afterwards, and the reason only ever appears
@@ -734,13 +748,33 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
     /// *before* the rules below run, because these settings are not independent: which
     /// variable turns the HUD on depends on whether DXVK is in play, and `DXVK_ASYNC` means
     /// nothing without it. Overlaying finished variables afterwards would get both wrong.
+    /// What is turned off in every container, before anything else is said about it.
+    ///
+    /// `mscoree` is Wine's .NET shim and `mshtml` its Internet Explorer one. Left enabled,
+    /// the first `wineboot` in a fresh prefix puts up a modal dialog —
+    ///
+    ///     Wine could not find a wine-mono package which is needed for .NET applications
+    ///
+    /// — and *waits*. Nothing in this app clicks it, `wineboot` doesn't return until someone
+    /// does, and `boot(at:)` has no timeout, so a launch would sit there forever behind a
+    /// window the person may not even see. Two wine icons in the Dock and a game that never
+    /// appears is what that looks like from the outside.
+    ///
+    /// Disabling them is what every other Wine front end does, and it costs almost nothing:
+    /// a game that genuinely needs .NET ships its own runtime, and nothing here wants IE.
+    /// Any container that does need them can be given the DLLs through winetricks, which
+    /// installs real ones rather than asking Wine to fetch them mid-boot.
+    static let baseDLLOverrides: String = "mscoree=d;mshtml=d"
+
     static func assembleEnvironmentVariables(forContainerAtURL containerURL: URL,
                                              container: Container? = nil,
                                              overriding overrides: RuntimeProfile.SettingsOverride = .init()) throws -> [String: String] {
         guard containerExists(at: containerURL) else { throw Wine.Container.DoesNotExistError() }
 
         let container = try container ?? getContainerObject(at: containerURL)
-        var environmentVariables: [String: String] = [:]
+        // Set first, so it applies to every container whether or not anything below has an
+        // opinion — including the `wineboot` that creates one. See ``baseDLLOverrides``.
+        var environmentVariables: [String: String] = ["WINEDLLOVERRIDES": Self.baseDLLOverrides]
 
         let msync = overrides.msync ?? container.settings.msync
         let avx2 = overrides.avx2 ?? container.settings.avx2
@@ -765,7 +799,7 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
             // GeForce 6800 that is not in any Mac — enough for ANGLE to cap GLES at 2.0 and for
             // the Steam client to give up on drawing. ``createContainer`` installing DXVK when
             // the setting asks for it is what makes the promise true.
-            environmentVariables["WINEDLLOVERRIDES"] = "dxgi,d3d10core,d3d11=n,b"
+            environmentVariables["WINEDLLOVERRIDES"] = "\(Self.baseDLLOverrides);dxgi,d3d10core,d3d11=n,b"
             environmentVariables["DXVK_ASYNC"] = dxvkAsync.numericalValue.description
         }
 
