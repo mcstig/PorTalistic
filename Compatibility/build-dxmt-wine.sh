@@ -50,7 +50,7 @@ SRC="$WORK/wine-$WINE_VERSION"
 PREFIX="$WORK/out/wine-dxmt-$WINE_VERSION"
 DIST="$WORK/dist"
 
-BREW_DEPS=(mingw-w64 bison pkgconf freetype gnutls make)
+BREW_DEPS=(mingw-w64 bison pkgconf make)
 
 say()  { printf '\n\033[1;35m▸ %s\033[0m\n' "$*"; }
 ok()   { printf '  \033[32m✓\033[0m %s\n' "$*"; }
@@ -138,166 +138,103 @@ else
     ok "unpacked and patched"
 fi
 
-# ── x86_64 dependencies ──────────────────────────────────────────────────────────────────
-say "Getting x86_64 freetype and gnutls"
+# ── x86_64 freetype ──────────────────────────────────────────────────────────────────────
+say "Building x86_64 freetype"
 
-# Without freetype Wine renders no text at all, which for most games means no menus. The
-# obstacle is that `$BREW_PREFIX` is arm64 and an x86_64 Wine cannot link against it.
+# Without freetype Wine rasterizes no glyphs at all, which for most games means menus with
+# no text in them. The obstacle is that `$BREW_PREFIX` is arm64 and an x86_64 Wine cannot
+# link against it.
 #
-# Rather than install a whole second Homebrew under /usr/local through Rosetta, this pulls
-# the x86_64 *bottles* — the same binaries that Homebrew would pour — and unpacks them into
-# the build tree. Nothing is installed system-wide and nothing outside $WORK is touched.
+# Homebrew's own x86_64 bottles were the first plan and are not a plan any more. Homebrew
+# has stopped building them for current formula versions — freetype's current version
+# exists only as `arm64_tahoe` — so there is nothing to unpack under any macOS tag, and no
+# reason to expect that to come back.
 #
-# The cost is three fixups, all of which exist because a bottle that was never poured is
-# still full of placeholders:
+# freetype builds from source in about a minute with nothing but clang, so it is built here
+# instead. Every optional dependency is off: PNG is only for colour-bitmap emoji glyphs,
+# harfbuzz only improves autohinting, brotli only unpacks WOFF2 web fonts. Wine wants none
+# of them. zlib comes from the SDK, which is universal.
 #
-#   1. Its `.pc` files say `@@HOMEBREW_PREFIX@@` instead of a path.
-#   2. Each dylib's own install name says the same, so anything linked against it would
-#      record a path that doesn't exist and fail at load time.
-#   3. Rewriting an install name invalidates the signature, so each one has to be re-signed.
-#
-# The install names become bare leaf names, which makes dyld resolve them through
+# The install name is rewritten to a bare leaf name, which makes dyld resolve it through
 # `DYLD_FALLBACK_LIBRARY_PATH` — and that is exactly what PorTalistic sets to a runtime's
-# `Frameworks` directory. It is also how the Sikarugir engines are arranged, which is the
-# one arrangement known to work with this app.
+# `Frameworks` directory, where the packaging stage below puts this dylib. It is also how
+# the Sikarugir engines are arranged, which is the one arrangement known to work with this
+# app. Rewriting an install name invalidates the signature, so it is re-signed.
+#
+# gnutls is not built. It would drag in nettle, gmp, libtasn1, libidn2, libunistring and
+# p11-kit, and all it buys is TLS for Windows code running *inside* the prefix — which a
+# game does not use, because the store client and the launcher both live outside it.
+
+FT_VERSION="2.14.3"
+# From Homebrew's own freetype formula.
+FT_SHA256="36bc4f1cc413335368ee656c42afca65c5a3987e8768cc28cf11ba775e785a5f"
 
 DEPS="$WORK/deps"
-CELLAR="$DEPS/cellar"
 DEPPREFIX="$DEPS/prefix"
+FT_SRC="$DEPS/freetype-$FT_VERSION"
 
-WITHOUT_GNUTLS=""
+# Not negotiable, and declared here rather than at `configure` so it sits next to why.
+WITHOUT_GNUTLS="--without-gnutls"
 
 if [[ -f "$DEPS/.ready" ]]; then
-    ok "already unpacked (delete $DEPS to redo)"
-    [[ -f "$DEPS/.no-gnutls" ]] && WITHOUT_GNUTLS="--without-gnutls"
+    ok "already built (delete $DEPS to redo)"
 else
-    rm -rf "$DEPS"
-    mkdir -p "$CELLAR" "$DEPPREFIX/include" "$DEPPREFIX/lib"
+    mkdir -p "$DEPS"
 
-    # Which macOS release's x86_64 bottles to use.
-    #
-    # Not this one. Homebrew builds x86_64 bottles only for the releases Apple still ships
-    # Intel Macs for, and macOS 26 is not one of them. The native tag is no help for the
-    # same reason: it is `arm64_tahoe`, and stripping the prefix names a bottle nobody built.
-    #
-    # An x86_64 bottle from an older macOS runs fine on a newer one, so take the newest tag
-    # that actually has one. The test is whether a bottle lands in Homebrew's cache — *not*
-    # whether `brew fetch` exits 0, which it does even while printing "Bottle for tag ... is
-    # unavailable" and quietly falling back to something else. That false positive is what
-    # made the last run pick a tag and then report every formula missing.
-
-    # Where a formula's bottle sits in the cache, under this tag or as an
-    # architecture-independent `all` bottle. Prints nothing and fails if neither is there.
-    cached_bottle() {
-        local formula="$1" cachetag candidate
-        for cachetag in "$2" all; do
-            candidate="$(brew --cache --bottle-tag="$cachetag" "$formula" 2>/dev/null)"
-            if [[ -f "$candidate" ]]; then
-                printf '%s\n' "$candidate"
-                return 0
-            fi
-        done
-        return 1
-    }
-
-    ok "looking for the newest macOS with x86_64 bottles"
-    TAG=""
-    CANDIDATES="${BOTTLE_TAG:-sequoia sonoma ventura monterey}"
-    for candidate in $CANDIDATES; do
-        brew fetch --bottle-tag="$candidate" freetype >/dev/null 2>&1
-        if cached_bottle freetype "$candidate" >/dev/null; then
-            TAG="$candidate"
-            break
-        fi
-        printf '  \033[33m!\033[0m no x86_64 freetype bottle for %s\n' "$candidate"
-    done
-
-    if [[ -z "$TAG" ]]; then
-        printf "\n  No x86_64 freetype bottle under any of:%s\n\n" " $CANDIDATES" >&2
-        printf "  Homebrew offers freetype under these tags:\n" >&2
-        brew info --json=v2 freetype >"$WORK/freetype.json" 2>/dev/null || true
-        python3 - "$WORK/freetype.json" >&2 <<'TAGS'
-import json, sys
-try:
-    data = json.load(open(sys.argv[1]))
-    entry = data["formulae"][0] if isinstance(data, dict) else data[0]
-    for tag in sorted(entry["bottle"]["stable"]["files"]):
-        print("      " + tag)
-except Exception as exc:
-    print("      (couldn't read brew's answer: %s)" % exc)
-TAGS
-        printf "\n  Rerun with one of those:\n" >&2
-        printf "      BOTTLE_TAG=<tag> bash Compatibility/build-dxmt-wine.sh\n" >&2
-        die "no usable bottle tag"
-    fi
-    ok "bottle tag: $TAG"
-
-    # freetype is the one that matters — without it Wine renders no text and most games have
-    # no menus. gnutls only gives Windows apps TLS, which a game rarely needs, so it is
-    # allowed to be missing: better a build with fonts and no TLS than no build.
-    collect() {
-        local label="$1" formula
-        shift
-        MISSING=""
-        for formula in "$@"; do
-            brew fetch --bottle-tag="$TAG" "$formula" >/dev/null 2>&1
-            local bottle
-            if bottle="$(cached_bottle "$formula" "$TAG")"; then
-                tar -xzf "$bottle" -C "$CELLAR"
-            else
-                MISSING="$MISSING $formula"
-            fi
-        done
-        [[ -z "$MISSING" ]]
-    }
-
-    FREETYPE_SET="freetype $(brew deps freetype)"
-    GNUTLS_SET="gnutls $(brew deps gnutls)"
-
-    collect freetype $FREETYPE_SET \
-        || die "no x86_64 bottle for:$MISSING — try BOTTLE_TAG=sonoma"
-    ok "freetype and its dependencies unpacked"
-
-    if collect gnutls $GNUTLS_SET; then
-        ok "gnutls and its dependencies unpacked"
+    FT_TARBALL="$DEPS/freetype-$FT_VERSION.tar.xz"
+    if [[ -f "$FT_TARBALL" ]] && verify "$FT_TARBALL" "$FT_SHA256"; then
+        ok "tarball already here and verified"
     else
-        warn "no x86_64 bottle for:$MISSING"
-        warn "building without TLS for Windows apps; fonts are unaffected"
-        WITHOUT_GNUTLS="--without-gnutls"
-        touch "$DEPS/.no-gnutls"
+        # SourceForge is the download Homebrew uses; Savannah is upstream's own.
+        curl -fL --retry 3 -o "$FT_TARBALL" \
+            "https://downloads.sourceforge.net/project/freetype/freetype2/$FT_VERSION/freetype-$FT_VERSION.tar.xz" \
+        || curl -fL --retry 3 -o "$FT_TARBALL" \
+            "https://download.savannah.gnu.org/releases/freetype/freetype-$FT_VERSION.tar.xz"
+        verify "$FT_TARBALL" "$FT_SHA256" \
+            || die "freetype digest mismatch — got $(shasum -a 256 "$FT_TARBALL" | awk '{print $1}'), expected $FT_SHA256"
+        ok "downloaded and verified"
     fi
 
-    # Flatten the Cellar layout into one prefix Wine's configure can be pointed at.
-    for kegdir in "$CELLAR"/*/*/; do
-        [[ -d "$kegdir/include" ]] && cp -R "$kegdir/include/." "$DEPPREFIX/include/" 2>/dev/null
-        [[ -d "$kegdir/lib" ]] && cp -R "$kegdir/lib/." "$DEPPREFIX/lib/" 2>/dev/null
-    done
+    rm -rf "$FT_SRC" "$DEPPREFIX"
+    mkdir -p "$DEPPREFIX"
+    tar -xJf "$FT_TARBALL" -C "$DEPS"
+    [[ -x "$FT_SRC/configure" ]] || die "freetype tarball did not unpack to $FT_SRC"
 
-    # 1. Placeholders in pkg-config files.
-    # `-exec … +` rather than `xargs -r`: BSD xargs has no -r, and would run sed with no
-    # arguments if nothing matched.
-    find "$DEPPREFIX" -name "*.pc" -exec sed -i '' \
-        -e "s|@@HOMEBREW_PREFIX@@|$DEPPREFIX|g" \
-        -e "s|@@HOMEBREW_CELLAR@@|$CELLAR|g" {} +
+    (
+        cd "$FT_SRC"
+        CC="clang -arch x86_64" \
+        CXX="clang++ -arch x86_64" \
+        CFLAGS="-O2" \
+        ./configure \
+            --prefix="$DEPPREFIX" \
+            --host=x86_64-apple-darwin \
+            --enable-shared \
+            --disable-static \
+            --with-zlib=yes \
+            --with-bzip2=no \
+            --with-png=no \
+            --with-harfbuzz=no \
+            --with-brotli=no \
+            >"$DEPS/freetype-configure.log" 2>&1
+        make -j"$(sysctl -n hw.ncpu)" >"$DEPS/freetype-build.log" 2>&1
+        make install >>"$DEPS/freetype-build.log" 2>&1
+    ) || die "freetype build failed — the tail of $DEPS/freetype-configure.log and $DEPS/freetype-build.log says why"
 
-    # 2 and 3. Install names, their dependents, and the signature.
-    for dylib in "$DEPPREFIX"/lib/*.dylib; do
-        [[ -f "$dylib" && ! -L "$dylib" ]] || continue
+    FT_DYLIB="$(find "$DEPPREFIX/lib" -maxdepth 1 -name 'libfreetype*.dylib' -not -type l | head -1)"
+    [[ -n "$FT_DYLIB" ]] || die "freetype built but installed no dylib into $DEPPREFIX/lib"
 
-        install_name_tool -id "$(basename "$dylib")" "$dylib" 2>/dev/null
+    FT_ARCHS="$(lipo -archs "$FT_DYLIB" 2>/dev/null || echo unknown)"
+    [[ "$FT_ARCHS" == *x86_64* ]] \
+        || die "the freetype that came out is $FT_ARCHS, not x86_64 — Wine would fail at the first link"
 
-        otool -L "$dylib" | awk 'NR>1 {print $1}' | while read -r dependency; do
-            case "$dependency" in
-                @@HOMEBREW*|"$DEPPREFIX"*|"$CELLAR"*|"$BREW_PREFIX"*)
-                    install_name_tool -change "$dependency" "$(basename "$dependency")" "$dylib" 2>/dev/null
-                    ;;
-            esac
-        done
+    install_name_tool -id "$(basename "$FT_DYLIB")" "$FT_DYLIB" 2>/dev/null
+    codesign --force --sign - "$FT_DYLIB" 2>/dev/null
 
-        codesign --force --sign - "$dylib" 2>/dev/null
-    done
+    [[ -f "$DEPPREFIX/lib/pkgconfig/freetype2.pc" ]] \
+        || die "no freetype2.pc in $DEPPREFIX/lib/pkgconfig — Wine's configure finds freetype through pkg-config"
 
-    ok "$(find "$DEPPREFIX/lib" -name '*.dylib' -not -type l | wc -l | tr -d ' ') libraries ready"
+    ok "freetype $FT_VERSION ($FT_ARCHS)"
+    warn "no gnutls: Windows code inside the prefix gets no TLS; games don't use it"
     touch "$DEPS/.ready"
 fi
 
@@ -322,17 +259,20 @@ export CFLAGS="-O2 -g -I$DEPPREFIX/include"
 export CXXFLAGS="$CFLAGS"
 export LDFLAGS="-L$DEPPREFIX/lib"
 
-# The unpacked x86_64 bottles, never `$BREW_PREFIX` — that one is arm64 and linking an
-# x86_64 Wine against it fails at the first link.
+# The freetype built above, never `$BREW_PREFIX` — that one is arm64, and linking an x86_64
+# Wine against it fails at the first link. Listed first so it wins over pkgconf's defaults,
+# which do include Homebrew's arm64 `.pc` files.
 export PKG_CONFIG_PATH="$DEPPREFIX/lib/pkgconfig"
 
 BUILD="$WORK/build"
 mkdir -p "$BUILD"
 
-# The first run's build directory is configured for arm64 and reusing it would repeat the
-# failure, so it goes when the architecture it was configured for isn't the one we want.
-if [[ -f "$BUILD/Makefile" && ! -f "$BUILD/.configured-x86_64-with-deps" ]]; then
-    warn "existing build directory was configured for another architecture; starting it over"
+# A build directory configured by an older version of this script is not reusable: the
+# first run's was arm64, and the ones after it had no freetype, so their Makefiles would
+# quietly produce a Wine with no glyph rasterizer. The marker changes whenever the answer
+# changes, and a directory without the current one is thrown away.
+if [[ -f "$BUILD/Makefile" && ! -f "$BUILD/.configured-x86_64-freetype" ]]; then
+    warn "build directory was configured by an older version of this script; starting it over"
     rm -rf "$BUILD"
     mkdir -p "$BUILD"
 fi
@@ -353,7 +293,7 @@ else
             --without-oss \
             --without-v4l2
     ) || die "configure failed — the tail of $BUILD/config.log says why"
-    touch "$BUILD/.configured-x86_64-with-deps"
+    touch "$BUILD/.configured-x86_64-freetype"
     ok "configured for x86_64"
 fi
 
