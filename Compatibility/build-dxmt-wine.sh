@@ -172,25 +172,50 @@ else
     mkdir -p "$CELLAR" "$DEPPREFIX/include" "$DEPPREFIX/lib"
 
     # Homebrew names x86_64 bottles after the macOS release with no prefix; arm64 ones get
-    # `arm64_`. Read the available tags rather than guess a codename.
-    TAG="$(brew info --json=v2 freetype 2>/dev/null | python3 -c '
-import json, sys
-try:
-    files = json.load(sys.stdin)["formulae"][0]["bottle"]["stable"]["files"]
-except Exception:
-    sys.exit(0)
-tags = [t for t in files if not t.startswith("arm64_") and t != "all"]
-print(tags[0] if tags else "")
-')"
-    [[ -n "$TAG" ]] || die "couldn't work out the x86_64 bottle tag from \`brew info freetype\`"
+    # `arm64_`. The first attempt at this parsed `brew info --json=v2` and came up empty, so
+    # ask Homebrew what tag it would use for this machine instead: `brew ruby` runs with
+    # Homebrew's own libraries loaded, and `Utils::Bottles.tag` is the same answer it uses
+    # when pouring. Version-proof, where a hard-coded codename isn't.
+    TAG="${BOTTLE_TAG:-}"
+
+    if [[ -z "$TAG" ]]; then
+        TAG="$(brew ruby -e 'puts Utils::Bottles.tag' 2>/dev/null | tr -d '[:space:]')"
+        TAG="${TAG#arm64_}"
+    fi
+
+    # And if that ever stops working, the codename for this macOS.
+    if [[ -z "$TAG" ]]; then
+        case "$(sw_vers -productVersion | cut -d. -f1)" in
+            26) TAG="tahoe" ;;
+            15) TAG="sequoia" ;;
+            14) TAG="sonoma" ;;
+            13) TAG="ventura" ;;
+        esac
+    fi
+
+    [[ -n "$TAG" ]] || die "couldn't work out this Mac's x86_64 bottle tag — rerun with BOTTLE_TAG=tahoe (or whatever your macOS is called)"
     ok "bottle tag: $TAG"
 
     # Everything freetype and gnutls link against, not just the two themselves.
-    mapfile -t FORMULAE < <(printf '%s\n' freetype gnutls $(brew deps --union freetype gnutls) | sort -u)
+    # No `mapfile`: macOS ships bash 3.2 and that is a bash 4 builtin.
+    FORMULAE=()
+    while IFS= read -r formula; do
+        [[ -n "$formula" ]] && FORMULAE+=("$formula")
+    done < <(printf '%s\n' freetype gnutls $(brew deps --union freetype gnutls) | sort -u)
+
+    (( ${#FORMULAE[@]} )) || die "\`brew deps\` returned nothing for freetype and gnutls"
     ok "${#FORMULAE[@]} formulae: ${FORMULAE[*]}"
 
-    brew fetch --bottle-tag="$TAG" "${FORMULAE[@]}" >/dev/null \
-        || die "couldn't fetch x86_64 bottles for $TAG"
+    brew fetch --bottle-tag="$TAG" "${FORMULAE[@]}" >/dev/null || die "$(cat <<ERR
+couldn't fetch x86_64 bottles for tag '$TAG'.
+
+If that tag is wrong for this macOS, rerun with the right one, e.g.:
+    BOTTLE_TAG=tahoe bash Compatibility/build-dxmt-wine.sh
+
+To see what Homebrew has for one of these:
+    brew info --json=v2 freetype | python3 -m json.tool | grep -A20 '"files"'
+ERR
+)"
 
     for formula in "${FORMULAE[@]}"; do
         bottle="$(brew --cache --bottle-tag="$TAG" "$formula" 2>/dev/null)"
@@ -206,9 +231,11 @@ print(tags[0] if tags else "")
     done
 
     # 1. Placeholders in pkg-config files.
-    find "$DEPPREFIX" -name "*.pc" -print0 | xargs -0 -r sed -i '' \
+    # `-exec … +` rather than `xargs -r`: BSD xargs has no -r, and would run sed with no
+    # arguments if nothing matched.
+    find "$DEPPREFIX" -name "*.pc" -exec sed -i '' \
         -e "s|@@HOMEBREW_PREFIX@@|$DEPPREFIX|g" \
-        -e "s|@@HOMEBREW_CELLAR@@|$CELLAR|g"
+        -e "s|@@HOMEBREW_CELLAR@@|$CELLAR|g" {} +
 
     # 2 and 3. Install names, their dependents, and the signature.
     for dylib in "$DEPPREFIX"/lib/*.dylib; do
