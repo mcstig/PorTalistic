@@ -93,3 +93,13 @@ fastlane/test_output
 # https://github.com/johnno1962/injectionforxcode
 
 iOSInjectionProject/
+
+# Manifest signing
+#
+# The private half of the key the compatibility manifest is signed with. It belongs in
+# ~/.portalistic, not here — see Compatibility/sign-manifest.swift. These patterns exist so
+# that a copy left in the tree by accident can't be committed. The .pub / .sig files are
+# public and are meant to be committed.
+manifest-signing-key
+*.signing-key
+*.private-key

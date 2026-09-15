@@ -160,6 +160,7 @@
 		C1A0CMP0000000000000106 /* Provisioner.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A0CMP0000000000000006 /* Provisioner.swift */; };
 		C1A0CMP0000000000000105 /* RuntimeSelection.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A0CMP0000000000000005 /* RuntimeSelection.swift */; };
 		C1A0CMP0000000000000104 /* CompatibilityManifest.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A0CMP0000000000000004 /* CompatibilityManifest.swift */; };
+		C1A0MSG0000000000000101 /* ManifestSignature.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A0MSG0000000000000001 /* ManifestSignature.swift */; };
 		C1A0CMP0000000000000103 /* CompatibilityDatabase.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A0CMP0000000000000003 /* CompatibilityDatabase.swift */; };
 		C1A0CMP0000000000000102 /* RuntimeProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A0CMP0000000000000002 /* RuntimeProfile.swift */; };
 		0E9936567B6D431A94AA29A1 /* GOGGameInstallationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97DCFF338C72470380B53780 /* GOGGameInstallationView.swift */; };
@@ -326,6 +327,7 @@
 		C1A0CMP0000000000000006 /* Provisioner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Provisioner.swift; sourceTree = "<group>"; };
 		C1A0CMP0000000000000005 /* RuntimeSelection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeSelection.swift; sourceTree = "<group>"; };
 		C1A0CMP0000000000000004 /* CompatibilityManifest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompatibilityManifest.swift; sourceTree = "<group>"; };
+		C1A0MSG0000000000000001 /* ManifestSignature.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ManifestSignature.swift; sourceTree = "<group>"; };
 		C1A0CMP0000000000000003 /* CompatibilityDatabase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompatibilityDatabase.swift; sourceTree = "<group>"; };
 		C1A0CMP0000000000000002 /* RuntimeProfile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeProfile.swift; sourceTree = "<group>"; };
 		97DCFF338C72470380B53780 /* GOGGameInstallationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GOGGameInstallationView.swift; sourceTree = "<group>"; };
@@ -496,6 +498,7 @@
 				C1A0CMP0000000000000006 /* Provisioner.swift */,
 				C1A0CMP0000000000000005 /* RuntimeSelection.swift */,
 				C1A0CMP0000000000000004 /* CompatibilityManifest.swift */,
+				C1A0MSG0000000000000001 /* ManifestSignature.swift */,
 				C1A0CMP0000000000000003 /* CompatibilityDatabase.swift */,
 				C1A0CMP0000000000000002 /* RuntimeProfile.swift */,
 			);
@@ -939,6 +942,7 @@
 				C1A0CMP0000000000000106 /* Provisioner.swift in Sources */,
 				C1A0CMP0000000000000105 /* RuntimeSelection.swift in Sources */,
 				C1A0CMP0000000000000104 /* CompatibilityManifest.swift in Sources */,
+				C1A0MSG0000000000000101 /* ManifestSignature.swift in Sources */,
 				C1A0CMP0000000000000103 /* CompatibilityDatabase.swift in Sources */,
 				C1A0CMP0000000000000102 /* RuntimeProfile.swift in Sources */,
 				0E9936567B6D431A94AA29A1 /* GOGGameInstallationView.swift in Sources */,
@@ -1207,7 +1211,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 4646;
+				CURRENT_PROJECT_VERSION = 4647;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_ASSET_PATHS = "\"PorTalistic/Preview Content\"";
@@ -1255,7 +1259,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 4646;
+				CURRENT_PROJECT_VERSION = 4647;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_ASSET_PATHS = "\"PorTalistic/Preview Content\"";

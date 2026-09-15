@@ -354,6 +354,20 @@ Also outstanding from this round:
     `OnboardingView`. `OperationCard`'s four are gone.
   - **`HeroGameCard` is still an `EmptyView()` stub.**
 
+  - **The manifest signing key doesn't exist yet.** `ManifestSignature.trustedPublicKey`
+    is `nil`, which means *no* fetched manifest is trusted and the app uses the
+    catalogue it shipped with — the same behaviour as today, because the repository
+    is private and the fetch 404s. To turn it on:
+    `swift Compatibility/sign-manifest.swift --generate-key`, paste the public key it
+    prints into `ManifestSignature.swift`, then
+    `swift Compatibility/sign-manifest.swift` after every edit to `manifest.json` and
+    commit both files. The private half goes to `~/.portalistic` and needs backing up:
+    losing it doesn't break an installed app, but no new manifest can ever reach one.
+  - **`sign-manifest.swift` has never been run.** The verifying half is compiled and
+    type-checked by every build; the script isn't compiled by anything. The Ed25519
+    interop contract it depends on was checked independently — 32-byte raw keys,
+    64-byte signatures, base64 with a trailing newline, and a one-bit edit failing —
+    so what's untested is the script's own syntax, not the cryptography.
   - **Nobody has watched an Epic store sign-in finish.** The web views can open the
     windows a sign-in asks for now, and the store page renders where it used to show
     Epic's own error, but the sign-in itself has only been reasoned about — a

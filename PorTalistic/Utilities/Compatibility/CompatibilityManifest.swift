@@ -41,10 +41,12 @@ import SemanticVersion
  3. **New entries are constrained.** HTTPS only, from a small set of hosts, with a
     well-formed digest and an id that can safely be a directory name.
 
- What that does not cover: a *new* runtime id, which is trusted on the strength of the
- repository and TLS alone. Signing the manifest with a key shipped in the app would close
- that, and is the obvious next step — worth doing before this is pointed at a public
- repository that accepts contributions.
+ 4. **The whole file is signed.** A detached Ed25519 signature sits beside it and the public
+    half is compiled in; a manifest that doesn't verify is discarded before it is parsed. See
+    ``ManifestSignature``, which is also where "no key compiled in" is documented as meaning
+    "trust no fetched manifest at all". That rule is what covers the case the other three
+    don't: a *new* runtime id, which was otherwise trusted on the strength of TLS and nobody
+    having write access to the repository who shouldn't.
  */
 struct CompatibilityManifest: Decodable {
     static let log: Logger = .custom(category: "CompatibilityManifest")
@@ -119,6 +121,11 @@ struct CompatibilityManifest: Decodable {
         string: "https://raw.githubusercontent.com/mcstig/PorTalistic/main/Compatibility/manifest.json"
     )!
 
+    /// The detached signature, beside the manifest.
+    static var remoteSignatureURL: URL {
+        remoteURL.appendingPathExtension(ManifestSignature.signatureExtension)
+    }
+
     /// Hosts a runtime may be downloaded from.
     ///
     /// Not a security boundary on its own — anyone can publish a release on GitHub — but it
@@ -133,6 +140,15 @@ struct CompatibilityManifest: Decodable {
     /// falling all the way back to what the app shipped with.
     static var cacheURL: URL? {
         Bundle.appHome?.appending(path: "Compatibility/manifest.json")
+    }
+
+    /// The cached manifest's signature.
+    ///
+    /// Cached so that the cache can be *re-verified* on load rather than trusted for being
+    /// on disk. The manifest lives in the app's own support directory, which is not a
+    /// security boundary — anything that can write there can edit the cache.
+    static var signatureCacheURL: URL? {
+        cacheURL?.appendingPathExtension(ManifestSignature.signatureExtension)
     }
 
     // MARK: - Lifecycle
@@ -151,47 +167,91 @@ struct CompatibilityManifest: Decodable {
         }
     }
 
-    /// Fetch, validate, apply, and cache. Silent on failure by design.
+    /// Fetch, verify, validate, apply, and cache. Silent on failure by design.
     static func refresh() async {
-        var request: URLRequest = .init(url: remoteURL)
-        request.timeoutInterval = 20
-        // The raw-content CDN caches aggressively; without this a corrected entry can take
-        // minutes to reach anyone, which defeats the point of fetching it at all.
-        request.cachePolicy = .reloadIgnoringLocalCacheData
+        // Asked before anything is fetched: with no key compiled in nothing that comes back
+        // can be trusted, and two requests to discard the answer is worse than none.
+        guard ManifestSignature.isConfigured else {
+            ManifestSignature.logMissingKey()
+            return
+        }
 
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-
-            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-                log.notice("No compatibility manifest available (HTTP \((response as? HTTPURLResponse)?.statusCode ?? -1, privacy: .public)); using what shipped with the app")
+            guard let data = try await fetch(remoteURL) else { return }
+            guard let signatureFile = try await fetch(remoteSignatureURL) else {
+                log.notice("The compatibility manifest has no signature beside it; ignoring it")
                 return
             }
 
-            let manifest = try JSONDecoder().decode(CompatibilityManifest.self, from: data)
+            guard let signature = ManifestSignature.decodeSignature(signatureFile),
+                  ManifestSignature.verify(data, signature: signature) else { return }
 
-            guard manifest.formatVersion <= supportedFormatVersion else {
-                log.notice("Compatibility manifest is format \(manifest.formatVersion, privacy: .public), newer than this app understands; ignoring it")
-                return
-            }
+            guard let manifest = decode(data) else { return }
 
             apply(manifest)
-
-            if let cacheURL {
-                try? FileManager.default.createDirectory(at: cacheURL.deletingLastPathComponent(),
-                                                        withIntermediateDirectories: true)
-                try? data.write(to: cacheURL, options: .atomic)
-            }
+            cache(data, signature: signatureFile)
         } catch {
             log.warning("Couldn't refresh the compatibility manifest: \(error.localizedDescription)")
         }
     }
 
-    private static func loadCached() -> CompatibilityManifest? {
-        guard let cacheURL, let data = try? Data(contentsOf: cacheURL) else { return nil }
-        guard let manifest = try? JSONDecoder().decode(CompatibilityManifest.self, from: data),
-              manifest.formatVersion <= supportedFormatVersion else { return nil }
+    /// One file from the manifest's repository, or `nil` if it isn't there.
+    ///
+    /// A missing manifest is a non-event, not an error: the repository may be private, the
+    /// branch may not have one yet, and the compiled-in catalogue is the fallback either way.
+    private static func fetch(_ url: URL) async throws -> Data? {
+        var request: URLRequest = .init(url: url)
+        request.timeoutInterval = 20
+        // The raw-content CDN caches aggressively; without this a corrected entry can take
+        // minutes to reach anyone, which defeats the point of fetching it at all.
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            log.notice("\(url.lastPathComponent, privacy: .public) isn't available (HTTP \((response as? HTTPURLResponse)?.statusCode ?? -1, privacy: .public)); using what shipped with the app")
+            return nil
+        }
+
+        return data
+    }
+
+    private static func decode(_ data: Data) -> CompatibilityManifest? {
+        guard let manifest = try? JSONDecoder().decode(CompatibilityManifest.self, from: data) else {
+            log.error("A compatibility manifest verified but wouldn't decode")
+            return nil
+        }
+
+        guard manifest.formatVersion <= supportedFormatVersion else {
+            log.notice("Compatibility manifest is format \(manifest.formatVersion, privacy: .public), newer than this app understands; ignoring it")
+            return nil
+        }
 
         return manifest
+    }
+
+    private static func cache(_ data: Data, signature: Data) {
+        guard let cacheURL, let signatureCacheURL else { return }
+
+        try? FileManager.default.createDirectory(at: cacheURL.deletingLastPathComponent(),
+                                                 withIntermediateDirectories: true)
+        try? data.write(to: cacheURL, options: .atomic)
+        try? signature.write(to: signatureCacheURL, options: .atomic)
+    }
+
+    /// The last manifest that verified — verified again.
+    ///
+    /// Re-checked rather than trusted for being on disk: the cache lives in the app's support
+    /// directory, which anything running as this user can write to. It is also what makes a
+    /// key rotation take effect on the next launch rather than the next successful fetch.
+    private static func loadCached() -> CompatibilityManifest? {
+        guard let cacheURL, let signatureCacheURL,
+              let data = try? Data(contentsOf: cacheURL),
+              let signatureFile = try? Data(contentsOf: signatureCacheURL),
+              let signature = ManifestSignature.decodeSignature(signatureFile),
+              ManifestSignature.verify(data, signature: signature) else { return nil }
+
+        return decode(data)
     }
 
     // MARK: - Application
