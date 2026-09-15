@@ -119,6 +119,23 @@ import OSLog
                     log.notice("Removing \(staleAddOns.count, privacy: .public) Epic add-on(s) previously filed as games")
                     library.subtract(staleAddOns)
                 }
+
+                // Whether each installed game has an update, worked out once here.
+                //
+                // The answer costs a directory listing and two JSON decodes, and
+                // `Game.isUpdateAvailable` is read synchronously three times per card while
+                // the library is being drawn — so it is collected now and read from the memo
+                // afterwards, the same arrangement GOG already uses below.
+                let installedEpicIDs = library.compactMap { game -> String? in
+                    guard game.storefront == .epicGames, case .installed = game.installationState else { return nil }
+                    return game.id
+                }
+
+                await withTaskGroup(of: Void.self) { group in
+                    for id in installedEpicIDs {
+                        group.addTask { await Legendary.refreshUpdateAvailability(forGameID: id) }
+                    }
+                }
             } catch {
                 log.error("Unable to refresh game data from Epic Games: \(error.localizedDescription)")
                 throw error

@@ -40,7 +40,13 @@ class EpicGamesGame: Game, @unchecked Sendable {
         try super.init(from: decoder)
     }
 
-    override var isUpdateAvailable: Bool? { try? Legendary.fetchUpdateAvailability(gameID: self.id) }
+    /// Whatever was last worked out, never worked out here.
+    ///
+    /// Deliberately a cache read and nothing else: this is read while a card is being drawn,
+    /// and the honest answer costs a directory listing and two JSON decodes.
+    /// ``Legendary/refreshUpdateAvailability(forGameID:)`` is what fills it in; `nil` means
+    /// "not known yet", which the interface shows as no badge rather than as "up to date".
+    override var isUpdateAvailable: Bool? { Legendary.cachedUpdateAvailability(forGameID: self.id) }
     var isFileVerificationRequired: Bool? { try? Legendary.isFileVerificationRequired(gameID: self.id) }
 
     override func _checkIfGameIsRunning(location: URL, platform: Platform) -> Bool {

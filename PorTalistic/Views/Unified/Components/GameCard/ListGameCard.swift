@@ -29,13 +29,7 @@ struct ListGameCard: View {
     @State private var isSettingsPresented: Bool = false
     @State private var isUninstallPresented: Bool = false
 
-    @Bindable private var operationManager: GameOperationManager = .shared
-
     static let defaultHeight: CGFloat = 76
-
-    private var operation: GameOperation? {
-        operationManager.queue.first { $0.game == game && ($0.isExecuting || $0.type.modifiesFiles) }
-    }
 
     var body: some View {
         HStack(spacing: Theme.Spacing.large) {
@@ -69,13 +63,11 @@ struct ListGameCard: View {
             }
             .buttonStyle(.plain)
 
-            if let operation {
-                OperationCard.StatusView(operation: .constant(operation))
-                    .frame(maxWidth: 220, alignment: .trailing)
-            } else {
-                GameCard.PrimaryActionButton(game: $game)
-                    .opacity(isHovering ? 1 : 0.75)
-            }
+            // In its own view, so a progress tick invalidates the trailing control and not
+            // the whole row with its artwork. This row used to hold the operation manager
+            // itself, which meant one download redrew every row in the list several times a
+            // second.
+            TrailingControl(game: $game, isHovering: isHovering)
 
             GameCard.MenuView(game: $game)
                 .buttonStyle(.portalQuietCompact)
@@ -100,6 +92,26 @@ struct ListGameCard: View {
         }
         .gameSettingsSheet(game: $game, isPresented: $isSettingsPresented)
         .gameUninstallSheet(game: $game, isPresented: $isUninstallPresented)
+    }
+}
+
+extension ListGameCard {
+    /// The running operation's progress, or the Play/Install button when nothing is running.
+    struct TrailingControl: View {
+        @Binding var game: Game
+        var isHovering: Bool
+
+        @Bindable private var operationManager: GameOperationManager = .shared
+
+        var body: some View {
+            if let operation = operationManager.operation(for: game) {
+                OperationCard.StatusView(operation: .constant(operation))
+                    .frame(maxWidth: 220, alignment: .trailing)
+            } else {
+                GameCard.PrimaryActionButton(game: $game)
+                    .opacity(isHovering ? 1 : 0.75)
+            }
+        }
     }
 }
 

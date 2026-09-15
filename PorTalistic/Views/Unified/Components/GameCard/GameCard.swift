@@ -47,7 +47,6 @@ struct GameCard: View {
 
     @State private var isSettingsPresented: Bool = false
     @State private var isUninstallPresented: Bool = false
-    @Bindable private var operationManager: GameOperationManager = .shared
 
     /// Settings ▸ View calls this "Gamecard Glow". It used to draw a blurred copy of the
     /// artwork *behind the image itself*, to fill the margins of a letterboxed cover — so
@@ -58,10 +57,6 @@ struct GameCard: View {
 
     /// Read here only to decide how much of a badge fits.
     @AppStorage(GameCardSize.storageKey) private var cardSize: GameCardSize = .regular
-
-    private var operation: GameOperation? {
-        operationManager.queue.first { $0.game == game && ($0.isExecuting || $0.type.modifiesFiles) }
-    }
 
     private var isHovering: Bool { hoveredGameID == game.id }
 
@@ -149,16 +144,8 @@ struct GameCard: View {
             // its state was destroyed and the sheet closed by itself a moment after opening.
             // The Play button's launch-error alert and its "install the engine first" sheet
             // were one failed launch away from disappearing the same way.
-            Group {
-                if let operation {
-                    OperationCard.StatusView(operation: .constant(operation), withLabel: false)
-                        .padding(Theme.Spacing.small)
-                        .floatingCapsule()
-                } else {
-                    GameCard.PrimaryActionButton(game: $game)
-                }
-            }
-            .revealedOnHover(isHovering)
+            GameCard.OperationOrAction(game: $game)
+                .revealedOnHover(isHovering)
 
             Spacer(minLength: 0)
         }
@@ -181,23 +168,7 @@ struct GameCard: View {
                     .help(game.title)
 
                 HStack(spacing: Theme.Spacing.xsmall) {
-                    if let operation {
-                        Text(operation.type.description)
-                            .font(Theme.Text.badge)
-                            .foregroundStyle(Theme.Palette.brandSecondary)
-                            .lineLimit(1)
-                    } else {
-                        if let storefront = game.storefront, !isCompact {
-                            PortalBadge(cardSize == .small ? "" : storefront.description,
-                                        systemImage: storefront.symbolName,
-                                        tint: storefront.tint)
-                                .help(storefront.description)
-                        }
-
-                        if case .uninstalled = game.installationState {
-                            PortalBadge(String(localized: "Not installed"))
-                        }
-                    }
+                    GameCard.CaptionBadges(game: $game, isCompact: isCompact, cardSize: cardSize)
                 }
             }
 
@@ -211,6 +182,61 @@ struct GameCard: View {
                 .opacity(isHovering ? 1 : 0.4)
         }
         .padding(.horizontal, Theme.Spacing.tiny)
+    }
+}
+
+// MARK: - Queue-dependent pieces
+
+extension GameCard {
+    /// The running operation's progress, or the Play/Install button when nothing is running.
+    ///
+    /// A view of its own so that reading the operation queue invalidates *this* and not the
+    /// whole card. `GameCard` used to hold a `@Bindable GameOperationManager` and ask it for
+    /// the game's operation twice per body, so every progress tick of any download in the
+    /// queue redrew every card in the grid — artwork, placeholder gradients and all.
+    struct OperationOrAction: View {
+        @Binding var game: Game
+
+        @Bindable private var operationManager: GameOperationManager = .shared
+
+        var body: some View {
+            if let operation = operationManager.operation(for: game) {
+                OperationCard.StatusView(operation: .constant(operation), withLabel: false)
+                    .padding(Theme.Spacing.small)
+                    .floatingCapsule()
+            } else {
+                GameCard.PrimaryActionButton(game: $game)
+            }
+        }
+    }
+
+    /// What sits under the title: what the game is doing, or where it came from.
+    struct CaptionBadges: View {
+        @Binding var game: Game
+        var isCompact: Bool = false
+        var cardSize: GameCardSize = .regular
+
+        @Bindable private var operationManager: GameOperationManager = .shared
+
+        var body: some View {
+            if let operation = operationManager.operation(for: game) {
+                Text(operation.type.description)
+                    .font(Theme.Text.badge)
+                    .foregroundStyle(Theme.Palette.brandSecondary)
+                    .lineLimit(1)
+            } else {
+                if let storefront = game.storefront, !isCompact {
+                    PortalBadge(cardSize == .small ? "" : storefront.description,
+                                systemImage: storefront.symbolName,
+                                tint: storefront.tint)
+                        .help(storefront.description)
+                }
+
+                if case .uninstalled = game.installationState {
+                    PortalBadge(String(localized: "Not installed"))
+                }
+            }
+        }
     }
 }
 

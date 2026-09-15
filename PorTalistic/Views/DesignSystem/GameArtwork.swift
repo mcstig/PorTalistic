@@ -49,6 +49,14 @@ struct GameArtwork: View {
     @State private var attempt: Int = 0
     @State private var isRetrying: Bool = false
 
+    /// Set when the retries are spent, so the loading shimmer stops.
+    ///
+    /// `.shimmering(animation: .repeatForever)` is a layer animating at the display's
+    /// refresh rate for as long as it is on screen. Most of a real library has no cover art,
+    /// so a grid of those was dozens of animations running forever behind a scroll that had
+    /// to fight them for frames.
+    @State private var hasGivenUp: Bool = false
+
     init(game: Game? = nil,
          url: URL?,
          orientation: Orientation = .vertical,
@@ -77,20 +85,27 @@ struct GameArtwork: View {
         Color.clear
             .overlay {
                 ZStack {
-                    ArtworkPlaceholder(game: game, orientation: orientation)
-
+                    // The placeholder is drawn *instead of* the artwork, not underneath it.
+                    // Underneath, every card with a cover was still rendering a gradient, a
+                    // ring watermark in a soft-light blend and two lines of text behind an
+                    // opaque image — paid for on every frame, visible on none.
+                    //
+                    // No cross-fade either. Art fading in over the placeholder means both
+                    // are half-transparent for the length of the animation, so the game's
+                    // initials ghost through its own cover art.
                     if let image {
-                        // No cross-fade. Art fading in *over* the placeholder means both are
-                        // half-transparent for the length of the animation, so the game's
-                        // initials ghost through its own cover art — worse than either state.
                         Image(nsImage: image)
                             .resizable()
                             .aspectRatio(contentMode: .fill)
-                    } else if url != nil {
-                        Rectangle()
-                            .fill(.white.opacity(0.06))
-                            .shimmering(animation: .easeInOut(duration: 1.1).repeatForever(autoreverses: false),
-                                        bandSize: 0.8)
+                    } else {
+                        ArtworkPlaceholder(game: game, orientation: orientation)
+
+                        if url != nil, !hasGivenUp {
+                            Rectangle()
+                                .fill(.white.opacity(0.06))
+                                .shimmering(animation: .easeInOut(duration: 1.1).repeatForever(autoreverses: false),
+                                            bandSize: 0.8)
+                        }
                     }
                 }
             }
@@ -124,7 +139,11 @@ struct GameArtwork: View {
     /// Bounded rather than indefinite: a grid of cards quietly retrying dead URLs in a loop
     /// costs the user battery to achieve nothing.
     private func scheduleRetry() {
-        guard attempt < 2, !isRetrying else { return }
+        guard attempt < 2, !isRetrying else {
+            hasGivenUp = true
+            return
+        }
+
         isRetrying = true
 
         Task {
@@ -162,7 +181,7 @@ struct ArtworkPlaceholder: View {
             )
 
             PortalRings()
-                .opacity(0.16)
+                .opacity(0.10)
 
             if let applicationIcon {
                 // A native macOS game has an icon of its own, which beats its initials.
@@ -192,7 +211,21 @@ struct ArtworkPlaceholder: View {
     private var applicationIcon: NSImage? {
         guard let game, game.isFallbackImageAvailable,
               case .installed(let location, _) = game.installationState else { return nil }
-        return NSWorkspace.shared.icon(forFile: location.path(percentEncoded: false))
+
+        return Self.icon(forFileAt: location.path(percentEncoded: false))
+    }
+
+    /// Icons, kept. `NSWorkspace.icon(forFile:)` reaches the filesystem, and this is read
+    /// while a card is drawn — so a shelf of native games was hitting the disk on every
+    /// frame of a scroll for a picture that had not changed.
+    private nonisolated(unsafe) static var memoizedIcons: [String: NSImage] = .init()
+
+    private static func icon(forFileAt path: String) -> NSImage {
+        if let cached = memoizedIcons[path] { return cached }
+
+        let icon = NSWorkspace.shared.icon(forFile: path)
+        memoizedIcons[path] = icon
+        return icon
     }
 
     /// Up to two initials from the words that carry the name.
@@ -234,7 +267,6 @@ private struct PortalRings: View {
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
             .offset(x: geometry.size.width * 0.22, y: geometry.size.height * 0.28)
-            .blendMode(.softLight)
         }
     }
 }

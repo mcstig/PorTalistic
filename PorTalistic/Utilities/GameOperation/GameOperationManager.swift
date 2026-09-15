@@ -23,6 +23,14 @@ import DockProgress
     // avoid naming 'underlyingQueue', this is already a variable
     // swiftlint:disable:next identifier_name
     var _operationQueue: OperationQueue
+    /// The operation the interface should show for a game, if any.
+    ///
+    /// Defined once here because three places were asking the same question of the queue
+    /// with the same predicate written out by hand.
+    func operation(for game: Game) -> GameOperation? {
+        queue.first { $0.game == game && ($0.isExecuting || $0.type.modifiesFiles) }
+    }
+
     // necessitated by deprecation of `OperationQueue.operations`
     internal private(set) var queue: [GameOperation] = .init() {
         didSet {

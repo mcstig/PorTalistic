@@ -39,6 +39,12 @@ import AppKit
 
     var isUpdateAvailable: Bool? { nil } // override in subclass
 
+    /// Whether the library believes the files are on disk. No filesystem access.
+    final var isInstalled: Bool {
+        if case .installed = installationState { return true }
+        return false
+    }
+
     // swiftlint:disable:next identifier_name
     internal var _verticalImageURL: URL? // underlying storage for custom images
     var verticalImageURL: URL? { _verticalImageURL ?? computedVerticalImageURL }

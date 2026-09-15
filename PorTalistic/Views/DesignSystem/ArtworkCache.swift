@@ -9,6 +9,7 @@
 
 import Foundation
 import AppKit
+import ImageIO
 import OSLog
 
 /**
@@ -102,7 +103,8 @@ final class ArtworkCache: @unchecked Sendable {
         // A custom thumbnail the user browsed for is a file on disk, and round-tripping one
         // through `URLSession` to read it is both slower and easier to get wrong.
         if url.isFileURL {
-            return NSImage(contentsOf: url)
+            return CGImageSourceCreateWithURL(url as CFURL, nil).flatMap(downsampled(from:))
+                ?? NSImage(contentsOf: url)
         }
 
         do {
@@ -113,11 +115,40 @@ final class ArtworkCache: @unchecked Sendable {
                 return nil
             }
 
-            return NSImage(data: data)
+            return CGImageSourceCreateWithData(data as CFData, nil).flatMap(downsampled(from:))
+                ?? NSImage(data: data)
         } catch {
             log.debug("Unable to load artwork: \(error.localizedDescription, privacy: .public)")
             return nil
         }
+    }
+
+    /// The longest edge kept, in pixels.
+    ///
+    /// Covers arrive around 600×800 and are drawn into a tile 200 points wide — 400 pixels
+    /// on this display, and 260 at the small card size. Keeping the full-size decode means
+    /// Core Animation rescales every visible cover on every frame of a scroll, and holds four
+    /// times the memory to do it. 512 is above what any card asks for.
+    private static let maximumPixelSize: Int = 512
+
+    /// Decoded once, at the size it will be drawn.
+    ///
+    /// `kCGImageSourceShouldCacheImmediately` is the point as much as the size is: without
+    /// it the decode is deferred to the first draw, which happens on the main thread during
+    /// the scroll that wanted the image. Here it happens in the fetch task instead.
+    private static func downsampled(from source: CGImageSource) -> NSImage? {
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: maximumPixelSize
+        ]
+
+        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+            return nil
+        }
+
+        return NSImage(cgImage: image, size: .init(width: image.width, height: image.height))
     }
 
     /// Roughly the decoded size, so `totalCostLimit` means something.

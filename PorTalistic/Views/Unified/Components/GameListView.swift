@@ -27,7 +27,17 @@ struct GameListView: View {
 
     private var games: [Game] { viewModel.library(inStorefront: storefront) }
 
+    /// Worked out once per body pass and handed down.
+    ///
+    /// `games` filters and sorts the library, and the body used to ask for it three times —
+    /// for `isEmpty`, for the `ForEach`, and again as an `.animation` value — so every
+    /// redraw of the list did the whole thing three times over.
     var body: some View {
+        content(for: games)
+    }
+
+    @ViewBuilder
+    private func content(for games: [Game]) -> some View {
         Group {
             if games.isEmpty {
                 empty
@@ -81,7 +91,10 @@ struct GameListView: View {
         }
         .animation(Theme.Motion.layout, value: layout)
         .animation(Theme.Motion.layout, value: cardSize)
-        .animation(.default, value: games)
+        // The count, not the array. `value: games` compared every game to every game on
+        // every body pass, and animated a relayout of the entire grid whenever any one of
+        // them changed in any way — including a title fetch or a favourite being toggled.
+        .animation(.default, value: games.count)
     }
 
     private var empty: some View {

@@ -704,6 +704,36 @@ final class Legendary {
         return operation
     }
 
+    /// The last answer worked out for this game, or `nil` if there isn't one yet.
+    ///
+    /// `Game.isUpdateAvailable` is synchronous and read while drawing a card — three times
+    /// per card, in fact: once for the badge on the artwork and twice in the menu. It used to
+    /// call ``fetchUpdateAvailability(gameID:)`` directly, which lists the whole metadata
+    /// directory and JSON-decodes two files. Twenty visible cards at sixty frames a second
+    /// made that a few thousand file reads a second, all of it on the main thread, and that
+    /// is what made a full-screen library scroll badly.
+    ///
+    /// Read from anywhere, written only on the main actor.
+    private nonisolated(unsafe) static var memoizedUpdateAvailability: [String: Bool] = .init()
+
+    static func cachedUpdateAvailability(forGameID id: String) -> Bool? {
+        memoizedUpdateAvailability[id]
+    }
+
+    /// Works the answer out and remembers it. Off the main actor: it is all file reading.
+    @discardableResult
+    @MainActor static func refreshUpdateAvailability(forGameID id: String) async -> Bool? {
+        let answer = await Task.detached { try? fetchUpdateAvailability(gameID: id) }.value
+        guard let answer else { return nil }
+
+        memoizedUpdateAvailability[id] = answer
+        return answer
+    }
+
+    @MainActor static func forgetUpdateAvailability(forGameID id: String) {
+        memoizedUpdateAvailability[id] = nil
+    }
+
     static func fetchUpdateAvailability(gameID: String) throws -> Bool {
         let metadata = try getGameMetadata(gameID: gameID)
         let installationData = try getGameInstallationData(gameID: gameID)

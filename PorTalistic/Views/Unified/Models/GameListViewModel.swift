@@ -34,42 +34,65 @@ import OSLog
         }
     }
     
-    var sortedLibrary: [Game] {
-        GameDataStore.shared.library
-            .sorted(by: { $0.title < $1.title })                            // primary sort — title
-            .sorted(by: { $0.installationState > $1.installationState })    // secondary sort — installation state
-            .sorted(by: { $0.isOperating && !$1.isOperating })              // tertiary sort — operating games
-            .filter { game in
-                let matchesText: Bool = searchString.isEmpty || game.title.localizedStandardContains(searchString)
-                let matchesTokens: Bool = searchTokens.isEmpty || searchTokens.allSatisfy { token in
-                    switch token {
-                    case .platform(let platform):
-                        guard case .installed(_, let gamePlatform) = game.installationState else { return false }
-                        return gamePlatform == platform
-                    case .storefront(let storefront):
-                        return game.storefront == storefront
-                    case .installed:
-                        if case .installed = game.installationState { return true }
-                        return false
-                    case .notInstalled:
-                        if case .uninstalled = game.installationState { return true }
-                        return false
-                    case .favourited:
-                        return game.isFavourited
-                    }
-                }
-                return matchesText && matchesTokens
-            }
-    }
-    
-    /// ``sortedLibrary`` narrowed to a single storefront, or all of it when `storefront` is nil.
+    var sortedLibrary: [Game] { library(inStorefront: nil) }
+
+    /// The library, filtered and ordered — one pass of each.
     ///
     /// Deliberately *not* implemented by pushing a `.storefront` search token: the tokens are
     /// the user's own filter, shared across the whole app, and having navigation quietly
     /// rewrite them means the sidebar and the filter menu fight each other.
+    ///
+    /// This was three chained `sorted(by:)` calls, then a `filter`, then a second `filter`
+    /// for the storefront: five arrays, and the library sorted three times to produce one
+    /// order. The last of those comparators read `Game.isOperating`, which scans the
+    /// operation queue — so a sort did a linear search per comparison, and the whole thing
+    /// depended on a queue that changes several times a second while anything is downloading.
+    /// `GameListView` then asked for this three times per body pass.
+    ///
+    /// Filter first, because it is linear and the sort is not, and collect the operating
+    /// games once before the sort rather than per comparison.
     func library(inStorefront storefront: Game.Storefront?) -> [Game] {
-        guard let storefront else { return sortedLibrary }
-        return sortedLibrary.filter { $0.storefront == storefront }
+        let operating: Set<Game.ID> = .init(
+            GameOperationManager.shared.queue.lazy.filter(\.isExecuting).map(\.game.id)
+        )
+
+        return GameDataStore.shared.library
+            .filter { game in
+                guard storefront == nil || game.storefront == storefront else { return false }
+
+                let matchesText: Bool = searchString.isEmpty || game.title.localizedStandardContains(searchString)
+                guard matchesText else { return false }
+
+                return searchTokens.isEmpty || searchTokens.allSatisfy { token in
+                    switch token {
+                    case .platform(let platform):
+                        guard case .installed(_, let gamePlatform) = game.installationState else { return false }
+                        return gamePlatform == platform
+                    case .storefront(let tokenStorefront):
+                        return game.storefront == tokenStorefront
+                    case .installed:
+                        return game.isInstalled
+                    case .notInstalled:
+                        return !game.isInstalled
+                    case .favourited:
+                        return game.isFavourited
+                    }
+                }
+            }
+            .sorted { lhs, rhs in
+                // Busy first, then installed, then by name. Written as one comparator so the
+                // collection is walked once; as separate sorts, each pass had to undo some
+                // of the previous one's work to get here.
+                let lhsOperating = operating.contains(lhs.id)
+                let rhsOperating = operating.contains(rhs.id)
+                if lhsOperating != rhsOperating { return lhsOperating }
+
+                let lhsInstalled = lhs.isInstalled
+                let rhsInstalled = rhs.isInstalled
+                if lhsInstalled != rhsInstalled { return lhsInstalled }
+
+                return lhs.title < rhs.title
+            }
     }
 
     var suggestedTokens: [SearchToken] {
