@@ -10,6 +10,7 @@
 import Foundation
 import AppKit
 import ImageIO
+import CryptoKit
 import OSLog
 
 /**
@@ -47,14 +48,105 @@ final class ArtworkCache: @unchecked Sendable {
     private let lock: NSLock = .init()
     private var inFlight: [URL: Task<NSImage?, Never>] = .init()
 
+    /// No `URLCache`. The downsampled copies below are the persistent cache now, and
+    /// `URLCache.shared` would keep a second, larger copy of the same covers on disk — an
+    /// OS-shared cache with a modest cap, so unrelated traffic evicts them and they get
+    /// refetched, which is the behaviour this replaces.
     private let session: URLSession = {
         let configuration: URLSessionConfiguration = .default
-        configuration.requestCachePolicy = .returnCacheDataElseLoad
-        configuration.urlCache = .shared
+        configuration.urlCache = nil
         return .init(configuration: configuration)
     }()
 
-    private init() {}
+    // MARK: - On disk
+
+    /// Where downsampled covers live between launches.
+    ///
+    /// A library's covers change about never, and the bytes were already being kept by
+    /// `URLCache.shared` — but the *decode* wasn't, so every launch re-decoded a hundred and
+    /// thirty full-size JPEGs, and an OS-shared cache with a small cap meant a good number of
+    /// them were refetched as well. What is stored here is the picture at the size a card
+    /// actually draws it, which is a fraction of the pixels and nothing else's to evict.
+    private let directory: URL? = {
+        guard let home = Bundle.appHome else { return nil }
+
+        let directory = home.appending(path: "Artwork")
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }()
+
+    /// Named by a digest of the URL, so a game whose cover URL changes gets a new file rather
+    /// than the old picture, and nothing has to sanitise a remote path into a filename.
+    private func fileURL(for url: URL) -> URL? {
+        guard let directory else { return nil }
+
+        let digest = SHA256.hash(data: Data(url.absoluteString.utf8))
+        return directory.appending(path: "\(digest.map { String(format: "%02x", $0) }.joined()).jpg")
+    }
+
+    private func storedImage(for url: URL) -> NSImage? {
+        guard !url.isFileURL, let file = fileURL(for: url),
+              let source = CGImageSourceCreateWithURL(file as CFURL, nil) else { return nil }
+
+        return Self.downsampled(from: source)
+    }
+
+    /// Writes the downsampled cover beside the others. Best-effort: a cover that can't be
+    /// written is still on screen, it just costs a fetch next launch.
+    private func store(_ image: NSImage, for url: URL) {
+        guard !url.isFileURL, let file = fileURL(for: url) else { return }
+
+        var rect = CGRect(origin: .zero, size: image.size)
+        guard let cgImage = image.cgImage(forProposedRect: &rect, context: nil, hints: nil),
+              let destination = CGImageDestinationCreateWithURL(file as CFURL, "public.jpeg" as CFString, 1, nil)
+        else { return }
+
+        CGImageDestinationAddImage(destination, cgImage, [kCGImageDestinationLossyCompressionQuality: 0.85] as CFDictionary)
+
+        if !CGImageDestinationFinalize(destination) {
+            Self.log.debug("Couldn't write \(file.lastPathComponent, privacy: .public) to the artwork folder.")
+        }
+    }
+
+    /// Keeps the folder from growing without limit, oldest first.
+    ///
+    /// Bounded by size rather than by age: a cover for a game still in the library should not
+    /// expire, and one for a game that left should not be kept forever. Size is the measure
+    /// that doesn't need to know which is which.
+    private static let diskLimit: Int = 256 * 1024 * 1024
+
+    private func prune() {
+        guard let directory,
+              let files = try? FileManager.default.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey],
+                options: [.skipsHiddenFiles]
+              ) else { return }
+
+        let described = files.compactMap { file -> (url: URL, size: Int, modified: Date)? in
+            guard let values = try? file.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey]),
+                  let size = values.fileSize else { return nil }
+
+            return (file, size, values.contentModificationDate ?? .distantPast)
+        }
+
+        var total = described.reduce(0) { $0 + $1.size }
+        guard total > Self.diskLimit else { return }
+
+        for file in described.sorted(by: { $0.modified < $1.modified }) {
+            guard total > Self.diskLimit else { break }
+
+            try? FileManager.default.removeItem(at: file.url)
+            total -= file.size
+        }
+
+        Self.log.notice("Trimmed the artwork folder to \(total / (1024 * 1024), privacy: .public)MB")
+    }
+
+    private init() {
+        // Off the launch path: nothing waits on this, and it touches the filesystem.
+        Task.detached(priority: .utility) { [self] in prune() }
+    }
 
     /// What's already in memory, for the first frame of a card that has been seen before.
     func cachedImage(for url: URL) -> NSImage? {
@@ -79,7 +171,16 @@ final class ArtworkCache: @unchecked Sendable {
         if let existing = inFlight[url] { return existing }
 
         let task = Task<NSImage?, Never> { [self] in
-            let image = await Self.fetch(url, using: session)
+            // The folder, then the network. A hit here costs one small decode and no
+            // request at all, which is what makes a second launch of the library instant
+            // rather than a wall of covers dissolving in.
+            var image = storedImage(for: url)
+
+            if image == nil {
+                image = await Self.fetch(url, using: session)
+                if let image { store(image, for: url) }
+            }
+
             finish(url, with: image)
             return image
         }
