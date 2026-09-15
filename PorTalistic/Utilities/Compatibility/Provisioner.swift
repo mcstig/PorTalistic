@@ -184,10 +184,24 @@ final class Provisioner {
     ///
     /// Only installed games. Someone with two hundred owned Epic games shouldn't wake up to
     /// two hundred games' worth of runtime downloads for the one they play.
+    ///
+    /// And only games on the startup disk. Working out what a game needs means reading its
+    /// executable — for a GOG game, `goggame-<id>.info` inside its own folder — and reading a
+    /// file on an external drive is what makes macOS put up "PorTalistic would like to access
+    /// files on a removable volume". This runs at every launch, so a library with one game on
+    /// an external SSD asked for that drive every single time the app opened, before anyone
+    /// had asked for anything.
+    ///
+    /// Nothing is lost by skipping them: this is a head start, not a requirement.
+    /// ``planLaunch(for:)`` resolves the same profile and installs the same runtime when the
+    /// game is actually started — which is the moment the drive has to be read anyway, and
+    /// the moment a prompt about it makes sense.
     private func ensureRuntimesForInstalledGames() async {
         // Snapshot what the library says on the main actor, then leave it: everything after
         // this reads files.
-        let installed: [GameFacts] = GameDataStore.shared.library.compactMap { GameFacts(game: $0) }
+        let installed: [GameFacts] = GameDataStore.shared.library
+            .compactMap { GameFacts(game: $0) }
+            .filter { !$0.location.isOnAnExternalVolume }
 
         let wanted: [String: RuntimeProfile.Requirements] = await Task.detached {
             var wanted: [String: RuntimeProfile.Requirements] = .init()

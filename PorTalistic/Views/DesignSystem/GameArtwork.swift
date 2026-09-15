@@ -215,6 +215,12 @@ struct ArtworkPlaceholder: View {
         guard let game, game.isFallbackImageAvailable,
               case .installed(let location, _) = game.installationState else { return nil }
 
+        // Not for a game on an external drive. Asking for a bundle's icon opens files inside
+        // it, and doing that to a removable volume is what makes macOS ask for the drive —
+        // here it would happen while a card was being drawn, which is the worst possible
+        // moment for a modal prompt. Those games get their initials instead.
+        guard !location.isOnAnExternalVolume else { return nil }
+
         return Self.icon(forFileAt: location.path(percentEncoded: false))
     }
 
