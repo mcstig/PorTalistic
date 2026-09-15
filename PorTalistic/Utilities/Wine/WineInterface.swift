@@ -251,9 +251,10 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
             return executableURL
         }
 
-        let script = directory.appending(
-            path: "\(runtime.id.replacingOccurrences(of: ":", with: "-")
-                .replacingOccurrences(of: "/", with: "-")).sh")
+        let fileName = runtime.id
+            .replacingOccurrences(of: ":", with: "-")
+            .replacingOccurrences(of: "/", with: "-")
+        let script = directory.appending(path: "\(fileName).sh")
 
         let contents = """
             #!/bin/sh
