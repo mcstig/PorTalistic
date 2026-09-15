@@ -206,16 +206,18 @@ else
     (( ${#FORMULAE[@]} )) || die "\`brew deps\` returned nothing for freetype and gnutls"
     ok "${#FORMULAE[@]} formulae: ${FORMULAE[*]}"
 
-    brew fetch --bottle-tag="$TAG" "${FORMULAE[@]}" >/dev/null || die "$(cat <<ERR
-couldn't fetch x86_64 bottles for tag '$TAG'.
-
-If that tag is wrong for this macOS, rerun with the right one, e.g.:
-    BOTTLE_TAG=tahoe bash Compatibility/build-dxmt-wine.sh
-
-To see what Homebrew has for one of these:
-    brew info --json=v2 freetype | python3 -m json.tool | grep -A20 '"files"'
-ERR
-)"
+    # No heredoc inside `$( )` here, however tidy it would look: bash 3.2 — which is what
+    # /bin/bash is on macOS — cannot parse one, and it doesn't fail on the line that has it.
+    # It loses its place and reports a syntax error at the next `(` in the file, which was
+    # ninety lines further down and had nothing wrong with it.
+    if ! brew fetch --bottle-tag="$TAG" "${FORMULAE[@]}" >/dev/null; then
+        printf "\n  couldn't fetch x86_64 bottles for tag '%s'.\n\n" "$TAG" >&2
+        printf "  If that tag is wrong for this macOS, rerun with the right one:\n" >&2
+        printf "      BOTTLE_TAG=tahoe bash Compatibility/build-dxmt-wine.sh\n\n" >&2
+        printf "  To see what Homebrew has:\n" >&2
+        printf "      brew info --json=v2 freetype | python3 -m json.tool | grep -A20 files\n" >&2
+        die "bottle fetch failed"
+    fi
 
     for formula in "${FORMULAE[@]}"; do
         bottle="$(brew --cache --bottle-tag="$TAG" "$formula" 2>/dev/null)"
