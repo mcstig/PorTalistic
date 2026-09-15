@@ -352,20 +352,10 @@ extension GameCard {
         }
     }
 
-    /// Play, or install, depending on which one the game can do — one prominent control
-    /// rather than a row of same-sized icons with no hierarchy between them.
-    struct PrimaryActionButton: View {
-        @Binding var game: Game
-        var isCompact: Bool = true
-
-        var body: some View {
-            if case .installed = game.installationState {
-                GameCard.Buttons.Prominent.PlayButton(game: $game, withLabel: true, isCompact: isCompact)
-            } else {
-                GameCard.Buttons.Prominent.InstallButton(game: $game, withLabel: true, isCompact: isCompact)
-            }
-        }
-    }
+    // `PrimaryActionButton` used to live here: a labelled Play-or-Install pill. Every place
+    // that showed the primary action now shows `ActionIconButton`, so keeping a second
+    // spelling of the same control around is how the Home hero ended up still wearing the
+    // old one after the cards, the rows and the game page had moved on.
 }
 
 /// ViewModifier that enables views to have a fade in effect.

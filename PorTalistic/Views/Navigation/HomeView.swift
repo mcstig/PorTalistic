@@ -186,7 +186,7 @@ private struct HomeHero: View {
                     }
 
                     HStack(spacing: Theme.Spacing.medium) {
-                        GameCard.PrimaryActionButton(game: $game, isCompact: false)
+                        GameCard.ActionIconButton(game: $game, isOnHero: true)
 
                         NavigationLink(value: GameRoute(gameID: game.id)) {
                             Label("Details", systemImage: "info.circle")
