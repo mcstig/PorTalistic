@@ -643,13 +643,44 @@ final class Legendary {
             process.environment = environment
             await transformProcess(process)
             
+            // Wine's account of the launch, kept on disk. The pipe below survives only as a
+            // fallback for the case where the file can't be opened: read to EOF and matched
+            // against `ERROR:`, it throws away everything Wine actually said, which is all
+            // there is to go on when a game starts no window and reports no error.
+            let transcript = Wine.launchTranscript(named: game.title)
             let processStandardErrorPipe: Pipe = .init()
-            process.standardError = processStandardErrorPipe
-            
+
+            if let transcript {
+                let header = """
+                    game: \(game.title) [\(game.id)]
+                    runtime: \(plan?.runtimeName ?? "legendary's own")
+                    container: \(plan?.containerURL.path(percentEncoded: false) ?? "none")
+                    legendary: \(arguments.joined(separator: " "))
+
+                    """
+                try? transcript.handle.write(contentsOf: Data(header.utf8))
+                process.standardError = transcript.handle
+            } else {
+                process.standardError = processStandardErrorPipe
+            }
+
             try await withTaskCancellationHandler {
                 try process.run()
-                
-                try handleCLIErrorOutput(fromStandardErrorPipe: processStandardErrorPipe)
+
+                guard let transcript else {
+                    try handleCLIErrorOutput(fromStandardErrorPipe: processStandardErrorPipe)
+                    return
+                }
+
+                // Waiting is what the pipe did implicitly by reading to EOF, and the comment
+                // below about giving the container back depends on it.
+                process.waitUntilExit()
+                try? transcript.handle.close()
+                Self.log.notice("Launch transcript: \(transcript.url.prettyPath, privacy: .public)")
+
+                if let output = try? String(contentsOf: transcript.url, encoding: .utf8) {
+                    try handleCLIErrorOutput(fromStandardErrorOutput: output)
+                }
             } onCancel: {
                 // FIXME: legendary will spawn wine completely detached from the cli itself
                 // FIXME: because of this, terminating the process used to launch it will NOT
@@ -659,9 +690,9 @@ final class Legendary {
 
             // Put the container back. Containers are shared by every game on the same
             // runtime, so this game's settings left behind would quietly become the next
-            // game's. `handleCLIErrorOutput` reads legendary's stderr to EOF, which is as
-            // close to "the game exited" as this path gets: legendary waits for the Wine it
-            // started, even though the game itself ends up detached from it.
+            // game's. Waiting for legendary to exit is as close to "the game exited" as this
+            // path gets: legendary waits for the Wine it started, even though the game itself
+            // ends up detached from it.
             if let plan { await Provisioner.shared.revert(plan) }
         }
 

@@ -612,6 +612,32 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
         log.notice("Kept the failed wineboot transcript at \(destination.prettyPath, privacy: .public)")
     }
 
+    /// Opens a file beside the containers to take a launch's Wine transcript.
+    ///
+    /// Wine explains why a game didn't start on stderr and nowhere else, and every launch
+    /// path here handed that stderr to a pipe that was read only for lines matching
+    /// `ERROR:` and then dropped. A game that opens no window and writes no `ERROR:` line —
+    /// the most common shape of this failure — therefore left no evidence at all.
+    ///
+    /// Truncated per launch rather than appended to: the interesting transcript is always
+    /// the last one, and a game started twice a day should not leave a file whose top
+    /// nobody will ever read.
+    static func launchTranscript(named name: String) -> (url: URL, handle: FileHandle)? {
+        let safe = name.replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: ":", with: "-")
+        guard let url = containersDirectory?.appending(path: "\(safe) — launch.log") else {
+            return nil
+        }
+
+        guard FileManager.default.createFile(atPath: url.path, contents: nil, attributes: nil),
+              let handle = try? FileHandle(forWritingTo: url) else {
+            log.warning("Couldn't open a launch transcript at \(url.prettyPath, privacy: .public)")
+            return nil
+        }
+
+        return (url, handle)
+    }
+
     /// - Returns: Relevant environment variables as configured in a container for game launch.
     /// The environment a container's settings ask for, with a game allowed the last word.
     ///
