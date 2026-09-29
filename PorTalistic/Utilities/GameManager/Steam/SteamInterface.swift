@@ -150,10 +150,9 @@ final class Steam {
         // container was created. A setting changed afterwards otherwise says one thing while
         // the prefix's registry keeps doing another — which for DPI is the difference between
         // a login window on screen and one at 805240832, 805240832.
-        // Derived from Retina Mode, not the stored number — a container advertising 192 with
-        // Retina off is a 1x desktop claiming to be 2x. See `Wine.Container.Settings`.
-        try? await Wine.setDisplayScaling(containerURL: container.url,
-                                          dpi: container.settings.displayScaling)
+        // One call, because `toggleRetinaMode` writes the DPI that goes with the mode — a
+        // container advertising 192 with Retina off is a 1x desktop claiming to be 2x. See
+        // `Wine.Container.Settings.displayScaling(forRetinaMode:)`.
         try? await Wine.toggleRetinaMode(containerURL: container.url, toggle: container.settings.retinaMode)
 
         // The client needs Direct3D 11, and on a managed runtime that means DXMT. Say so
@@ -779,7 +778,7 @@ final class Steam {
             try? await Task.sleep(for: .seconds(2))
         }
 
-        if process.isRunning { process.terminate() }
+        process.stopIfRunning()
 
         try setBootstrapperUpdateInhibited(true, containerURL: container.url)
 
@@ -1106,7 +1105,7 @@ final class Steam {
         // proper diagnostics/support flow.
         let timestamp = ISO8601DateFormatter().string(from: .now).replacingOccurrences(of: ":", with: "-")
         let destination = fileManager.homeDirectoryForCurrentUser
-            .appending(path: "Games/Mythic-Diagnostics/steam-\(timestamp)")
+            .appending(path: "Games/\(Branding.name)-Diagnostics/steam-\(timestamp)")
         try fileManager.createDirectory(at: destination, withIntermediateDirectories: true)
 
         var summary: [String] = []

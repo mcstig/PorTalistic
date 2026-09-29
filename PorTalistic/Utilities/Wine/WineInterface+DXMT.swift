@@ -194,7 +194,7 @@ extension Wine {
             }
 
             let staging = FileManager.default.temporaryDirectory
-                .appending(path: "mythic-dxmt-\(version)-\(UUID().uuidString)")
+                .appending(path: "\(Branding.name.lowercased())-dxmt-\(version)-\(UUID().uuidString)")
             try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
             defer { try? FileManager.default.removeItem(at: staging) }
 

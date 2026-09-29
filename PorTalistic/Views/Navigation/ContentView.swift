@@ -42,7 +42,8 @@ struct ContentView: View {
 
     enum SidebarItem: Hashable {
         case home
-        case store
+        /// One per storefront that has a store page — see `Game.Storefront.withStores`.
+        case store(Game.Storefront)
         /// `nil` is the combined library.
         case library(Game.Storefront?)
         case containers
@@ -102,9 +103,13 @@ struct ContentView: View {
                 row(.home, title: String(localized: "Home"), systemImage: "house",
                     tint: Theme.Palette.brand,
                     help: String(localized: "Everything in one place"))
-                row(.store, title: String(localized: "Store"), systemImage: "bag",
-                    tint: Theme.Palette.brand,
-                    help: String(localized: "Purchase new games from Epic"))
+                ForEach(Game.Storefront.withStores, id: \.self) { storefront in
+                    row(.store(storefront),
+                        title: storefront.storeName ?? storefront.description,
+                        systemImage: "bag",
+                        tint: storefront.tint,
+                        help: String(localized: "Buy games from \(storefront.description)"))
+                }
 
                 sectionHeader(String(localized: "Library"))
 
@@ -183,15 +188,15 @@ struct ContentView: View {
     /// and the mark carries a violet glow, which is both what separates it from the list and
     /// the one place in the window the portal gets to look like a portal.
     private var wordmark: some View {
-        HStack(spacing: Theme.Spacing.medium) {
-            BundleIconView()
-                .frame(width: 38, height: 38)
-                .shadow(color: Theme.Palette.brand.opacity(0.55), radius: 11, y: 1)
-
-            Text(Branding.name)
-                .font(.system(.title3, weight: .bold))
-                .tracking(-0.2)
-                .foregroundStyle(.primary)
+        HStack(spacing: 0) {
+            // The full logo artwork (mark + "Portalistic" wordmark) replaces the old
+            // bundle-icon-plus-text pairing; it carries its own glow, so no extra shadow.
+            Image("PortalisticLogo")
+                .resizable()
+                .interpolation(.high)
+                .scaledToFit()
+                .frame(height: 52)
+                .accessibilityLabel(Text(Branding.name))
 
             Spacer(minLength: 0)
         }
@@ -358,7 +363,7 @@ struct ContentView: View {
     private var destination: some View {
         switch selection {
         case .home:                     HomeView()
-        case .store:                    StoreView()
+        case .store(let storefront):    StoreView(storefront: storefront)
         case .library(let storefront):  LibraryView(storefront: storefront)
         case .containers:               ContainersView()
         case .accounts:                 AccountsView()

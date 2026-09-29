@@ -41,6 +41,18 @@ final class ArtworkCache: @unchecked Sendable {
         return cache
     }()
 
+    /// Grey copies, for games that aren't installed — see ``mutedImage(for:)``.
+    ///
+    /// Apart from the colour ones, and a quarter of their size: one byte a pixel, since grey
+    /// needs no more. A library that is mostly not installed would otherwise hold every cover
+    /// twice.
+    private let mutedImages: NSCache<NSURL, NSImage> = {
+        let cache: NSCache<NSURL, NSImage> = .init()
+        cache.countLimit = 400
+        cache.totalCostLimit = 64 * 1024 * 1024
+        return cache
+    }()
+
     /// One fetch per URL, however many cards are asking.
     ///
     /// Without this, scrolling a grid where several games share a placeholder URL — or
@@ -153,6 +165,52 @@ final class ArtworkCache: @unchecked Sendable {
         images.object(forKey: url as NSURL)
     }
 
+    /// A grey copy already made, for the first frame of a card that has been seen before.
+    func cachedMutedImage(for url: URL) -> NSImage? {
+        mutedImages.object(forKey: url as NSURL)
+    }
+
+    /// The cover in greys and a little darker, for a game that isn't installed.
+    ///
+    /// Made once per cover, off the main thread, and drawn as an ordinary picture. The obvious
+    /// alternative — `.saturation(0)` on the card — is a filter applied again to every
+    /// uninstalled cover on every frame of a scroll, and that is most of a library.
+    func mutedImage(for url: URL) async -> NSImage? {
+        if let cached = cachedMutedImage(for: url) { return cached }
+        return await mutedTask(for: url).value
+    }
+
+    /// One conversion per URL: a list row asks twice for the same cover — its thumbnail and
+    /// the wash behind it — and a card with a glow does too.
+    private var mutedInFlight: [URL: Task<NSImage?, Never>] = .init()
+
+    /// Synchronous for the same reason as ``task(for:)``.
+    private func mutedTask(for url: URL) -> Task<NSImage?, Never> {
+        lock.lock()
+        defer { lock.unlock() }
+
+        if let existing = mutedInFlight[url] { return existing }
+
+        let task = Task<NSImage?, Never> { [self] in
+            let muted = await image(for: url).flatMap(Self.muted)
+            finishMuted(url, with: muted)
+            return muted
+        }
+
+        mutedInFlight[url] = task
+        return task
+    }
+
+    private func finishMuted(_ url: URL, with image: NSImage?) {
+        if let image {
+            mutedImages.setObject(image, forKey: url as NSURL, cost: Self.cost(of: image) / 4)
+        }
+
+        lock.lock()
+        mutedInFlight[url] = nil
+        lock.unlock()
+    }
+
     /// The image, from memory, from the URL cache, or from the network — in that order.
     func image(for url: URL) async -> NSImage? {
         if let cached = cachedImage(for: url) { return cached }
@@ -250,6 +308,35 @@ final class ArtworkCache: @unchecked Sendable {
         }
 
         return NSImage(cgImage: image, size: .init(width: image.width, height: image.height))
+    }
+
+    /// Greys at one byte a pixel, darkened a little so an uninstalled game steps back rather
+    /// than only losing its colour.
+    private static func muted(_ image: NSImage) -> NSImage? {
+        var rect = CGRect(origin: .zero, size: image.size)
+        guard let source = image.cgImage(forProposedRect: &rect, context: nil, hints: nil) else { return nil }
+
+        let bounds = CGRect(x: 0, y: 0, width: source.width, height: source.height)
+        guard let context = CGContext(data: nil,
+                                      width: source.width,
+                                      height: source.height,
+                                      bitsPerComponent: 8,
+                                      bytesPerRow: 0,
+                                      space: CGColorSpaceCreateDeviceGray(),
+                                      bitmapInfo: CGImageAlphaInfo.none.rawValue) else { return nil }
+
+        // A dark ground first, for the rare cover with transparency — a custom PNG — which a
+        // context without alpha would otherwise turn black wherever it had nothing.
+        context.setFillColor(gray: 0.12, alpha: 1)
+        context.fill(bounds)
+        context.interpolationQuality = .high
+        context.draw(source, in: bounds)
+
+        context.setFillColor(gray: 0, alpha: 0.25)
+        context.fill(bounds)
+
+        guard let muted = context.makeImage() else { return nil }
+        return NSImage(cgImage: muted, size: image.size)
     }
 
     /// Roughly the decoded size, so `totalCostLimit` means something.

@@ -126,8 +126,6 @@ final class GOGWebAuthViewModel: NSObject, ObservableObject, NSWindowDelegate, @
 }
 
 private struct GOGInterceptorWebView: NSViewRepresentable {
-    @CodableAppStorage("gogWebDataStore") var gogWebDataStore: UUID = .init()
-
     let completion: (String) -> Void
     let failure: () -> Void
 
@@ -224,7 +222,7 @@ private struct GOGInterceptorWebView: NSViewRepresentable {
 
         // Its own cookie jar, so signing out of GOG here doesn't sign the user out of GOG in
         // Safari, and so a stale session can be dropped without touching anything else.
-        configuration.websiteDataStore = WKWebsiteDataStore(forIdentifier: gogWebDataStore)
+        configuration.websiteDataStore = WebDataStore.persistent(for: GOG.webDataStoreIdentifier)
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator

@@ -38,7 +38,14 @@ struct ListGameCard: View {
     /// writes to the same object.
     private var boundGame: Binding<Game> { .constant(game) }
 
-    @State private var isHovering: Bool = false
+    /// Which row the pointer is over, shared with the rest of the list — see ``CardHoverState``.
+    ///
+    /// Rows used to keep a flag each. `.onHover` fires as rows slide under a pointer that is
+    /// standing still, so every scroll started and stopped a hover animation on each row it
+    /// passed — redrawing its wash mid-scroll — and a row that scrolled out from under the
+    /// pointer could keep its hover for good. The grid already had the answer to both.
+    let hover: CardHoverState
+
     @State private var isSettingsPresented: Bool = false
     @State private var isUninstallPresented: Bool = false
 
@@ -53,6 +60,11 @@ struct ListGameCard: View {
 
     private var shape: RoundedRectangle { .init(cornerRadius: Theme.Radius.tile, style: .continuous) }
 
+    private var isHovering: Bool { hover.gameID == game.id }
+
+    /// Greyed out: not installed, and not the row the pointer is on.
+    private var isMuted: Bool { !game.isInstalled && !isHovering }
+
     var body: some View {
 #if DEBUG
         RenderCounter.record("ListGameCard")
@@ -63,7 +75,8 @@ struct ListGameCard: View {
                     GameArtwork(game: game,
                                 url: artworkURL,
                                 orientation: .horizontal,
-                                cornerRadius: Theme.Radius.control)
+                                cornerRadius: Theme.Radius.control,
+                                isMuted: isMuted)
                         .frame(width: 100, height: 56)
 
                     VStack(alignment: .leading, spacing: Theme.Spacing.xsmall) {
@@ -71,7 +84,7 @@ struct ListGameCard: View {
                             .font(Theme.Text.rowTitle)
                             .lineLimit(1)
                             .truncationMode(.tail)
-                            .foregroundStyle(.primary)
+                            .foregroundStyle(isMuted ? Color.secondary : Color.primary)
 
                         HStack(spacing: Theme.Spacing.xsmall) {
                             GameCard.SubscriptedInfoView(game: boundGame)
@@ -105,6 +118,10 @@ struct ListGameCard: View {
         .padding(.horizontal, Theme.Spacing.large)
         .frame(height: Self.defaultHeight)
         .background {
+            // Flattened into one picture, clip and all — the surface, the wash and its mask. The
+            // mask and the rounded clip around two layers were each a pass of their own, for
+            // every visible row, on every frame of a scroll, for a background that had not
+            // changed; now a scroll only moves it, and only a hover redraws it.
             ZStack {
                 shape.fill(isHovering ? AnyShapeStyle(Theme.Palette.surface) : AnyShapeStyle(Color.clear))
 
@@ -113,7 +130,7 @@ struct ListGameCard: View {
                 // it is one compositing pass instead of a 30-point Gaussian per visible row,
                 // and it keeps the text on a flat background, which is what lets the title be
                 // one colour rather than changing when the image arrives.
-                GameArtwork(game: game, url: artworkURL, orientation: .horizontal, cornerRadius: 0)
+                GameArtwork(game: game, url: artworkURL, orientation: .horizontal, cornerRadius: 0, isMuted: isMuted)
                     .mask(
                         LinearGradient(
                             stops: [
@@ -128,10 +145,15 @@ struct ListGameCard: View {
                     .allowsHitTesting(false)
             }
             .clipShape(shape)
+            .drawingGroup()
         }
         .contentShape(.rect(cornerRadius: Theme.Radius.tile))
         .onHover { hovering in
-            withAnimation(Theme.Motion.hover) { isHovering = hovering }
+            // Not mid-scroll — see `CardHoverState.isScrolling`. Read here rather than in the
+            // body, so it registers no dependency.
+            guard !hover.isScrolling else { return }
+
+            withAnimation(Theme.Motion.hover) { hover.pointer(isOver: hovering, gameID: game.id) }
         }
         .contextMenu {
             GameCard.ContextMenuItems(game: boundGame,
@@ -168,7 +190,7 @@ extension ListGameCard {
     NavigationStack {
         LazyVStack(spacing: Theme.Spacing.small) {
             ForEach(0..<4, id: \.self) { _ in
-                ListGameCard(game: placeholderGame(type: Game.self))
+                ListGameCard(game: placeholderGame(type: Game.self), hover: .init())
             }
         }
         .padding()

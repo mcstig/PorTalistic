@@ -106,3 +106,14 @@ extension Game.InstallationState: Comparable {
         }
     }
 }
+
+extension Game {
+    /// How two games compare by name, the way a person reads names: Finder's order, where case
+    /// doesn't matter and numbers count.
+    ///
+    /// Not `<`. That compares code points, so every name starting with a lowercase letter came
+    /// after every capitalised one — "inFAMOUS" after "Zelda" — and numbers ran 1, 10, 11, 2.
+    static func nameOrder(_ lhs: Game, _ rhs: Game) -> ComparisonResult {
+        lhs.title.localizedStandardCompare(rhs.title)
+    }
+}

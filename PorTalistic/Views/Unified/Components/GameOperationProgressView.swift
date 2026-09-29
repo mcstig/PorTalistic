@@ -46,21 +46,36 @@ struct InteractiveGameOperationProgressView: View {
                     }
             }
             .clipShape(.capsule)
-            .help("Cancel operation")
+            .help(isLaunch
+                  ? String(localized: "Force \"\(operation.game.title)\" to quit")
+                  : String(localized: "Cancel operation"))
             .onHover { hovering in
                 withAnimation {
                     isHoveringOverDestructiveButton = hovering
                 }
             }
-            .alert("Do you wish to stop \(operation.type.description.localizedLowercase) \(operation.game.description)?",
-                   isPresented: $isStopGameOperationAlertPresented) {
-                Button("Stop", role: .destructive) {
-                    operation.cancel()
+            .alert(stopPrompt, isPresented: $isStopGameOperationAlertPresented) {
+                // Through the manager, never the operation itself: stopping an install the
+                // person asked to stop is not the same as one stopped by quitting, and only
+                // one of the two is picked up again next time. See
+                // `GameOperationManager.cancel(_:)`.
+                Button(isLaunch ? "Force Quit" : "Stop", role: .destructive) {
+                    GameOperationManager.shared.cancel(operation)
                 }
 
                 Button("Cancel", role: .cancel, action: {})
             }
         }
+    }
+
+    private var isLaunch: Bool { operation.type == .launch }
+
+    /// A running game is force-quit, not cancelled: `wineserver -k` takes the prefix down and
+    /// the game loses whatever it hasn't saved, which is worth saying out loud.
+    private var stopPrompt: String {
+        isLaunch
+            ? String(localized: "Force \"\(operation.game.title)\" to quit? Anything unsaved will be lost.")
+            : String(localized: "Do you wish to stop \(operation.type.description.localizedLowercase) \(operation.game.description)?")
     }
 }
 
@@ -70,12 +85,28 @@ struct OperationProgressView: View {
     var withLabel: Bool = false
 
     var body: some View {
-        if operation.progressKVOBridge.fractionCompleted == 0 {
+        if operation.type == .launch {
+            // A launch has nothing to be a fraction of. It is either still starting — which is
+            // what the spinner means, and it ends when the game is actually on screen — or the
+            // game is up and this is the row that can force it closed.
+            if operation.launchPhase != .running {
+                ProgressView()
+                    .controlSize(.small)
+            } else {
+                Image(systemName: "play.fill")
+                    .imageScale(.small)
+            }
+
+            if withLabel {
+                Text(operation.statusDescription)
+                    .lineLimit(1)
+            }
+        } else if operation.progressKVOBridge.fractionCompleted == 0 {
             ProgressView()
                 .controlSize(.small)
             
             if withLabel {
-                Text(operation.type.description)
+                Text(operation.statusDescription)
                     .lineLimit(1)
             }
         } else {

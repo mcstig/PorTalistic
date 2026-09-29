@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+        For the bundled command-line helpers only — `legendary` and `gogdl` — never for
+        PorTalistic itself.
+
+        Both are PyInstaller "onedir" builds: the executable unpacks nothing, but it does
+        `dlopen` a hundred `.so` files out of its own `_internal/lib-dynload` at runtime.
+        Under the hardened runtime, library validation refuses any nested code that is not a
+        platform binary or signed by the same team — and while `Scripts/release.sh` does sign
+        every one of them with this team, a single missed file would turn into "legendary
+        crashes on launch, but only in a release build", which is an expensive thing to
+        discover from a user report.
+
+        Nothing else is granted. No JIT, no unsigned executable memory, no dyld environment
+        variables, and no App Sandbox — see `Scripts/release.sh` for why the last one would
+        break every game launch.
+    -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+</dict>
+</plist>

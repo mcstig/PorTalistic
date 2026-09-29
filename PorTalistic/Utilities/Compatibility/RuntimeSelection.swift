@@ -41,11 +41,13 @@ extension Runtime {
     struct Capabilities: Hashable {
         var direct3DOnMetal: Direct3DOnMetal?
         var modernNetworking: Bool
+        var nativeThirtyTwoBit: Bool
     }
 
     var capabilities: Capabilities {
         .init(direct3DOnMetal: direct3DOnMetalProvider,
-              modernNetworking: providesModernNetworking)
+              modernNetworking: providesModernNetworking,
+              nativeThirtyTwoBit: providesNativeThirtyTwoBit)
     }
 
     /// Which implementation of Direct3D-on-Metal this build has, if either.
@@ -86,9 +88,55 @@ extension Runtime {
         return version >= .init(9, 0, 0)
     }
 
+    /// Whether this build has a real i386 architecture rather than 32-on-64.
+    ///
+    /// Taken from the catalogue, and `false` for anything not in it — including the bundled
+    /// engine, which is CrossOver-derived and is 32-on-64 by construction. Conservative in the
+    /// same direction as ``providesModernNetworking``: wrongly believing an unknown build has
+    /// real 32-bit support puts a game back on the thing this requirement exists to avoid,
+    /// while wrongly believing it doesn't only means preferring a build we know about.
+    private var providesNativeThirtyTwoBit: Bool {
+        RuntimeRelease.matching(self)?.hasNativeThirtyTwoBit == true
+    }
+
+    /// Which Direct3D implementations this Mac can actually give a game right now.
+    ///
+    /// Asked before anything offers to move a game to one. Reads every installed build, so it
+    /// belongs off the main actor and nowhere near a view.
+    static func installedBackends() -> Set<RuntimeProfile.GraphicsBackend> {
+        let installed = discoverAll().filter(\.isInstalled)
+
+        return Set(RuntimeProfile.GraphicsBackend.allCases.filter { backend in
+            installed.contains { $0.provides(backend) }
+        })
+    }
+
+    /// Whether this build renders Direct3D through `backend`.
+    ///
+    /// Answered from what the build *has*. What a profile asked for and what a runtime can do
+    /// are different facts, and this path has been wrong about that before: a game was moved
+    /// to "DXMT" while already on it, and another was told it would render through Vulkan on a
+    /// Wine with no Vulkan in it.
+    func provides(_ backend: RuntimeProfile.GraphicsBackend) -> Bool {
+        switch backend {
+        case .dxmt:             capabilities.direct3DOnMetal == .dxmt
+        case .direct3DMetal:    capabilities.direct3DOnMetal == .appleD3DMetal
+        // Wine's own Direct3D is what a build without either of those falls back to, so
+        // "provides wined3d" is "has neither" — which is also why it is never a demand: it is
+        // the floor, not a feature.
+        case .wined3d:          capabilities.direct3DOnMetal == nil
+        // Nothing here records whether a build has Vulkan, and the one that ships DXMT says it
+        // hasn't in every transcript it writes: `err:vulkan:vulkan_init_once Wine was built
+        // without Vulkan support`. Until that is a capability, claiming to provide DXVK would
+        // send a game to a build that cannot render at all, so nothing claims it.
+        case .dxvk:             false
+        }
+    }
+
     func satisfies(_ requirements: RuntimeProfile.Requirements) -> Bool {
         if requirements.direct3DOnMetal, capabilities.direct3DOnMetal == nil { return false }
         if requirements.modernNetworking, !capabilities.modernNetworking { return false }
+        if requirements.nativeThirtyTwoBit, !capabilities.nativeThirtyTwoBit { return false }
         return true
     }
 
@@ -99,12 +147,15 @@ extension Runtime {
     ///
     /// - Needs modern networking: the newest viable build, in catalogue order. Nothing else
     ///   will do — this is the requirement the bundled engine cannot meet at all.
-    /// - Needs Direct3D on Metal: a DXMT build first, then Apple's D3DMetal. DXMT is the less
-    ///   mature of the two, which is uncomfortable, but it is the one that can be shipped, so
-    ///   preferring D3DMetal would mean building on something that has to be removed later.
-    ///   The engine stays reachable behind it because DXMT depends on a single Wine build
-    ///   that on some Macs cannot create a container at all, and a fallback that works beats
-    ///   a principle that doesn't.
+    /// - Needs Direct3D on Metal: a DXMT build, then wined3d, and Apple's D3DMetal **last**.
+    ///   D3DMetal is the more mature of the two and is still ranked below a path that draws
+    ///   badly, which needs saying plainly: `D3DMetal.framework` is Apple's, it arrives in
+    ///   the Game Porting Toolkit evaluation environment, and it is in the bundled engine —
+    ///   so every automatic choice that lands on it is this project shipping a default built
+    ///   on something it may not be allowed to distribute. Last rather than removed, because
+    ///   a Mac that already has the Game Porting Toolkit can still use it, and because it is
+    ///   the honest fallback when nothing else will start. What changes is that nothing
+    ///   *chooses* it.
     /// - Neither: the bundled engine, as the most exercised path for everything that goes
     ///   through wined3d.
     ///
@@ -130,6 +181,36 @@ extension Runtime {
      */
     static func ranked(satisfying requirements: RuntimeProfile.Requirements,
                        from candidates: [Runtime]? = nil) -> [Runtime] {
+        preferring(requirements.preferredDirect3D,
+                   in: rankedIgnoringPreference(satisfying: requirements, from: candidates))
+    }
+
+    /// The ranking with the builds that provide `backend` moved to the front.
+    ///
+    /// A partition, so everything keeps its relative order and nothing is dropped: a game
+    /// asking for an implementation no installed build has still gets exactly the ranking it
+    /// would have had.
+    ///
+    /// This is the one place a preference outranks the project's own order — including the
+    /// rule that nothing *chooses* Apple's D3DMetal. That rule is about what the app reaches
+    /// for by default, and this is a game that has been sent there deliberately: by a curated
+    /// entry, or by the recovery ladder after it failed everywhere else, which is the case the
+    /// ranking's own note calls "the honest fallback when nothing else will start".
+    ///
+    /// `provides` is a parameter with a default because everything else in this file reads the
+    /// filesystem, and the ordering — the part carrying the policy — is then the part no test
+    /// can hold. The same reason ``direct3DOnMetalOrder(dxmt:wined3d:appleD3DMetal:)`` is its
+    /// own function.
+    static func preferring(_ backend: RuntimeProfile.GraphicsBackend?,
+                           in ranking: [Runtime],
+                           provides: (Runtime, RuntimeProfile.GraphicsBackend) -> Bool = { $0.provides($1) }) -> [Runtime] {
+        guard let backend else { return ranking }
+
+        return ranking.filter { provides($0, backend) } + ranking.filter { !provides($0, backend) }
+    }
+
+    private static func rankedIgnoringPreference(satisfying requirements: RuntimeProfile.Requirements,
+                                                 from candidates: [Runtime]? = nil) -> [Runtime] {
         let viable = (candidates ?? discoverAll())
             .filter { $0.isInstalled && $0.satisfies(requirements) }
 
@@ -142,10 +223,11 @@ extension Runtime {
         if requirements.direct3DOnMetal {
             let byDXMT = byCatalogueOrder(viable.filter { $0.capabilities.direct3DOnMetal == .dxmt })
 
-            // Among Apple's implementations, prefer one this app didn't put there. A Game
-            // Porting Toolkit or Whisky install is the user's own copy under their own
-            // licence; the bundled engine is a copy the app fetched, which is the one with a
-            // question mark over it.
+            // Among Apple's implementations, a copy the user installed themselves comes ahead
+            // of the one the app fetched. Their Game Porting Toolkit or Whisky install is
+            // theirs under their own acceptance of Apple's terms; the bundled engine is a copy
+            // this app caused to be downloaded, and it is the one with the question mark over
+            // it.
             let d3dMetal = viable.filter { $0.capabilities.direct3DOnMetal == .appleD3DMetal }
             let byD3DMetal = d3dMetal.filter { $0.origin != .bundledEngine }
                 + d3dMetal.filter { $0.origin == .bundledEngine }
@@ -153,7 +235,7 @@ extension Runtime {
             let placed = Set((byDXMT + byD3DMetal).map(\.id))
             let rest = byCatalogueOrder(viable.filter { !placed.contains($0.id) })
 
-            return byDXMT + byD3DMetal + rest
+            return direct3DOnMetalOrder(dxmt: byDXMT, wined3d: rest, appleD3DMetal: byD3DMetal)
         }
 
         // The bundled engine first: the most exercised path for everything that goes through
@@ -185,10 +267,18 @@ extension Runtime {
         let all = candidates ?? discoverAll()
         let strict = ranked(satisfying: requirements, from: all)
 
-        guard !requirements.modernNetworking else { return strict }
+        // No compromises for either of these. The compromise list is led by the bundled
+        // engine, and for both requirements the bundled engine is the specific thing being
+        // ruled out — falling back to it means failing later, further in, and less legibly
+        // than a refusal here.
+        guard !requirements.modernNetworking, !requirements.nativeThirtyTwoBit else { return strict }
 
         let placed = Set(strict.map(\.id))
-        let compromises = ranked(satisfying: .init(),
+
+        // The preference travels into the compromises as well. A game sent to an
+        // implementation is sent there whether or not the build carrying it also satisfies
+        // everything else the game asked for.
+        let compromises = ranked(satisfying: .init(preferredDirect3D: requirements.preferredDirect3D),
                                  from: all.filter { !placed.contains($0.id) })
 
         return strict + compromises
@@ -196,6 +286,28 @@ extension Runtime {
 
     /// Catalogue order is preference order. Anything the catalogue doesn't mention keeps its
     /// own order, after everything it does.
+    /// Which Direct3D-on-Metal path a game is sent to, in order.
+    ///
+    /// D3DMetal last, behind wined3d. It draws better than wined3d and still loses, and that
+    /// needs saying plainly rather than being buried in a filter: `D3DMetal.framework` is
+    /// Apple's, it arrives in the Game Porting Toolkit evaluation environment, and it is
+    /// present inside the bundled engine — so every automatic choice landing on it is this
+    /// project making a default out of something it may not be allowed to distribute. A
+    /// default nobody is sure of is not a default.
+    ///
+    /// Last rather than removed: a Mac that already has the Game Porting Toolkit can still
+    /// reach it, and it is the honest final fallback when nothing else will start. What
+    /// changed is that nothing *chooses* it.
+    ///
+    /// Its own function because the ranking around it reads the filesystem — `isInstalled` and
+    /// `capabilities` both do — so the ordering is the only part of that decision a test can
+    /// hold, and it is the part that carries the policy.
+    static func direct3DOnMetalOrder(dxmt: [Runtime],
+                                     wined3d: [Runtime],
+                                     appleD3DMetal: [Runtime]) -> [Runtime] {
+        dxmt + wined3d + appleD3DMetal
+    }
+
     private static func byCatalogueOrder(_ runtimes: [Runtime]) -> [Runtime] {
         var remaining = runtimes
         var ordered: [Runtime] = []
@@ -229,7 +341,8 @@ extension RuntimeRelease {
     /// ``exposesMetalEscapes``.
     var capabilities: Runtime.Capabilities {
         .init(direct3DOnMetal: exposesMetalEscapes ? .dxmt : nil,
-              modernNetworking: version >= .init(9, 0, 0))
+              modernNetworking: version >= .init(9, 0, 0),
+              nativeThirtyTwoBit: hasNativeThirtyTwoBit)
     }
 
     /// The first catalogue release that could serve these requirements once installed.
@@ -241,6 +354,7 @@ extension RuntimeRelease {
 
             if requirements.direct3DOnMetal, capabilities.direct3DOnMetal == nil { return false }
             if requirements.modernNetworking, !capabilities.modernNetworking { return false }
+            if requirements.nativeThirtyTwoBit, !capabilities.nativeThirtyTwoBit { return false }
 
             return true
         }

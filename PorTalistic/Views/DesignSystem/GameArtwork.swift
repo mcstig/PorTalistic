@@ -35,6 +35,10 @@ struct GameArtwork: View {
 
     var cornerRadius: CGFloat = Theme.Radius.tile
 
+    /// Greys, a little darker, for a game that isn't installed — so the eye goes to what can be
+    /// played. Callers turn it off under the pointer, which is when the colour comes back.
+    var isMuted: Bool = false
+
     /// Reports whether real artwork is on screen, for callers that need to know.
     var isArtworkPresent: Binding<Bool>?
 
@@ -43,6 +47,18 @@ struct GameArtwork: View {
     /// Seeded from the cache so a card that has been seen before draws its art on its first
     /// frame, rather than showing the placeholder for one frame on every scroll.
     @State private var image: NSImage?
+
+    /// The grey copy — see ``ArtworkCache/mutedImage(for:)`` — and the URL it was made from.
+    ///
+    /// Kept for as long as the view is, so the pointer arriving and leaving swaps between two
+    /// pictures that already exist. The URL is kept with it because a cover can change while
+    /// its card is on screen — a custom thumbnail picked in the game's settings — and without
+    /// it the old cover came back, in grey, the moment the pointer left.
+    @State private var mutedImage: NSImage?
+    @State private var mutedImageURL: URL?
+
+    /// The grey copy, if it is of the picture this view is showing now.
+    private var currentMutedImage: NSImage? { mutedImageURL == url ? mutedImage : nil }
 
     /// Bumped to retry. A failure is kept — a URL that 404s will 404 again — so retrying has
     /// to be asked for, by this changing.
@@ -61,13 +77,18 @@ struct GameArtwork: View {
          url: URL?,
          orientation: Orientation = .vertical,
          cornerRadius: CGFloat = Theme.Radius.tile,
+         isMuted: Bool = false,
          isArtworkPresent: Binding<Bool>? = nil) {
         self.game = game
         self.url = url
         self.orientation = orientation
         self.cornerRadius = cornerRadius
+        self.isMuted = isMuted
         self.isArtworkPresent = isArtworkPresent
         self._image = .init(initialValue: url.flatMap { ArtworkCache.shared.cachedImage(for: $0) })
+        let cachedMuted = isMuted ? url.flatMap { ArtworkCache.shared.cachedMutedImage(for: $0) } : nil
+        self._mutedImage = .init(initialValue: cachedMuted)
+        self._mutedImageURL = .init(initialValue: cachedMuted == nil ? nil : url)
     }
 
     private var shape: RoundedRectangle { .init(cornerRadius: cornerRadius, style: .continuous) }
@@ -97,11 +118,31 @@ struct GameArtwork: View {
                     // are half-transparent for the length of the animation, so the game's
                     // initials ghost through its own cover art.
                     if let image {
-                        Image(nsImage: image)
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
+                        // One picture at a time — grey while muted, colour otherwise. The two only
+                        // overlap for the moment the pointer arrives or leaves.
+                        if isMuted {
+                            if let muted = currentMutedImage {
+                                Image(nsImage: muted)
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fill)
+                            } else {
+                                // The grey copy is still being made, which takes a frame or two.
+                                // The same look from filters until then, rather than a flash of
+                                // colour — and only until then, because a filter is drawn again
+                                // on every frame of a scroll.
+                                Image(nsImage: image)
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fill)
+                                    .saturation(0)
+                                    .colorMultiply(Color(white: 0.75))
+                            }
+                        } else {
+                            Image(nsImage: image)
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                        }
                     } else {
-                        ArtworkPlaceholder(game: game, orientation: orientation)
+                        ArtworkPlaceholder(game: game, orientation: orientation, isMuted: isMuted)
 
                         if url != nil, !hasGivenUp {
                             Rectangle()
@@ -117,9 +158,16 @@ struct GameArtwork: View {
             // separator-coloured line down both sides of a full-bleed image.
             .conditionalTransform(if: cornerRadius > 0) { $0.hairlineBorder(shape) }
             .task(id: taskIdentity) { await load() }
+            .task(id: mutedTaskIdentity) { await loadMutedIfNeeded() }
     }
 
     private var taskIdentity: String { "\(url?.absoluteString ?? "")#\(attempt)" }
+
+    /// Changes whenever a grey copy might newly be needed: muting turned on, the picture
+    /// arriving, or a different picture. The arrival matters: without it, a card whose pointer
+    /// left while its cover was still downloading waited for a change that had already happened,
+    /// and stayed on the filtered stand-in for good.
+    private var mutedTaskIdentity: String { "\(isMuted)#\(image != nil)#\(url?.absoluteString ?? "")" }
 
     private func load() async {
         guard let url else {
@@ -129,12 +177,32 @@ struct GameArtwork: View {
         }
 
         if let loaded = await ArtworkCache.shared.image(for: url) {
+            // The grey copy before the picture, when it is wanted, so a game that isn't
+            // installed never shows its cover in colour for a moment on the way to grey.
+            if isMuted, mutedImageURL != url, let muted = await ArtworkCache.shared.mutedImage(for: url) {
+                mutedImage = muted
+                mutedImageURL = url
+            }
+
             image = loaded
             isArtworkPresent?.wrappedValue = true
         } else {
             isArtworkPresent?.wrappedValue = false
             scheduleRetry()
         }
+    }
+
+    /// The grey copy, when muting is asked for after the picture has already arrived — a game
+    /// uninstalled while its card is on screen. `load()` fetches it up front otherwise.
+    ///
+    /// Its own task rather than part of `load()`'s identity: this runs every time the pointer
+    /// arrives or leaves, and `load()` goes to the network for a cover it hasn't got.
+    private func loadMutedIfNeeded() async {
+        guard isMuted, currentMutedImage == nil, image != nil, let url,
+              let muted = await ArtworkCache.shared.mutedImage(for: url) else { return }
+
+        mutedImage = muted
+        mutedImageURL = url
     }
 
     /// Retries a failure a couple of times, spaced out, and then stops.
@@ -163,6 +231,10 @@ struct ArtworkPlaceholder: View {
     let game: Game?
     var orientation: GameArtwork.Orientation = .vertical
 
+    /// Greys, the same as ``GameArtwork/isMuted``: a game without cover art isn't installed any
+    /// less for it.
+    var isMuted: Bool = false
+
     private var seed: UInt64 { Self.stableHash(game?.title ?? "PorTalistic") }
 
     /// Hue from the title, so a game keeps its colour forever.
@@ -176,8 +248,10 @@ struct ArtworkPlaceholder: View {
         ZStack {
             LinearGradient(
                 colors: [
-                    Color(hue: hue, saturation: 0.44, brightness: 0.44),
-                    Color(hue: (hue + 0.08).truncatingRemainder(dividingBy: 1), saturation: 0.62, brightness: 0.20)
+                    Color(hue: hue, saturation: isMuted ? 0 : 0.44, brightness: isMuted ? 0.32 : 0.44),
+                    Color(hue: (hue + 0.08).truncatingRemainder(dividingBy: 1),
+                          saturation: isMuted ? 0 : 0.62,
+                          brightness: isMuted ? 0.15 : 0.20)
                 ],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
@@ -208,6 +282,10 @@ struct ArtworkPlaceholder: View {
                 .padding(Theme.Spacing.small)
             }
         }
+        // One picture rather than a gradient, three rings and a line of text, each moved and
+        // clipped to the card's corners separately on every frame of a scroll. Most of a real
+        // library has no cover art, so most cards are this. It never changes once drawn.
+        .drawingGroup()
     }
 
     /// The bundle's own icon, for a macOS game installed as an application.
@@ -303,6 +381,51 @@ extension Game.Storefront {
         case .steam:        .init(red: 0.28, green: 0.52, blue: 0.78)
         case .local:        .init(red: 0.40, green: 0.62, blue: 0.52)
         }
+    }
+
+    /// The storefront's own web store, for the ones that have one worth browsing in-app.
+    ///
+    /// `nil` means no store page: a local game has no store at all, and Steam's is behind
+    /// `Steam.isEnabled` along with the rest of it.
+    var storeURL: URL? {
+        switch self {
+        case .epicGames:    .init(string: "https://store.epicgames.com/")
+        case .gog:          .init(string: "https://www.gog.com/")
+        case .steam:        .init(string: "https://store.steampowered.com/")
+        case .local:        nil
+        }
+    }
+
+    /// What the store page is called in the sidebar and the window title.
+    ///
+    /// Its own name rather than `"\(description) Store"`, because "Epic Games Store" is the
+    /// product's real name and "GOG Store" is not "GOG.com" — and because one sidebar row per
+    /// store needs each to be recognisable at a glance.
+    var storeName: String? {
+        switch self {
+        case .epicGames:    String(localized: "Epic Store")
+        case .gog:          String(localized: "GOG Store")
+        case .steam:        String(localized: "Steam Store")
+        case .local:        nil
+        }
+    }
+
+    /// The WebKit cookie jar this storefront's pages share.
+    ///
+    /// Shared with the sign-in window on purpose: signing in on either page is then visible
+    /// to the other. Both are persisted on first read — see the note on
+    /// ``GOG/webDataStoreIdentifier`` for what happens when they are not.
+    var webDataStoreIdentifier: UUID? {
+        switch self {
+        case .epicGames:    Legendary.webDataStoreIdentifier
+        case .gog:          GOG.webDataStoreIdentifier
+        case .steam, .local: nil
+        }
+    }
+
+    /// Storefronts with a store page the app will show.
+    static var withStores: [Self] {
+        available.filter { $0.storeURL != nil && $0.storeName != nil }
     }
 }
 

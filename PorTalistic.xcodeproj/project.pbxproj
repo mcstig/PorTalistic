@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		0989CE4FE30D4F678498D9E0 /* GOGGame.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08E6E58A02ED4AB990E96F42 /* GOGGame.swift */; };
+		0E9936567B6D431A94AA29A1 /* GOGGameInstallationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97DCFF338C72470380B53780 /* GOGGameInstallationView.swift */; };
 		1217C8A92EADC525003EC8C9 /* SparkleUpdaterDownloadingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1217C8A22EADC525003EC8C9 /* SparkleUpdaterDownloadingView.swift */; };
 		1217C8AA2EADC525003EC8C9 /* SparkleUpdaterSheetViewModifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1217C8A72EADC525003EC8C9 /* SparkleUpdaterSheetViewModifier.swift */; };
 		1217C8AB2EADC525003EC8C9 /* SparkleUpdaterFinishView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1217C8A42EADC525003EC8C9 /* SparkleUpdaterFinishView.swift */; };
@@ -17,7 +19,10 @@
 		1217C8BA2EADC544003EC8C9 /* RichAlertView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1217C8B22EADC544003EC8C9 /* RichAlertView.swift */; };
 		1217C8C22EADC680003EC8C9 /* MarkdownUI in Frameworks */ = {isa = PBXBuildFile; productRef = 1217C8C12EADC680003EC8C9 /* MarkdownUI */; };
 		1D4BF3BF2EEC595D00AD581F /* FileHandle+Extensions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D4BF3BE2EEC595900AD581F /* FileHandle+Extensions.swift */; };
+		42A7930D2BC94C829E5B0A8A /* GOGGameUninstallationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71E1C7F9EF8F49EBBB0BCF78 /* GOGGameUninstallationView.swift */; };
 		5A62AE982C27DB1200BA31D2 /* GameListViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A62AE972C27DB1200BA31D2 /* GameListViewModel.swift */; };
+		623C9019C1E73FCE5E33CA66 /* Runtime.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2A4A3B97BB3FC883BFE7F13 /* Runtime.swift */; };
+		63C7CCACDB4A4B02BF08158F /* GOGGameManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4DF0347C63A340A487965742 /* GOGGameManager.swift */; };
 		6A0210162D390022009C85F8 /* HarmonyRatingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A0210152D390016009C85F8 /* HarmonyRatingView.swift */; };
 		6A02101B2D390377009C85F8 /* StarRatingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A02101A2D390370009C85F8 /* StarRatingView.swift */; };
 		6A0688442C2BCE8B004DF10F /* OperationCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A0688432C2BCE87004DF10F /* OperationCard.swift */; };
@@ -28,7 +33,6 @@
 		6A11927A2EC8C1DA005A3E05 /* Game.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A1192792EC8C1DA005A3E05 /* Game.swift */; };
 		6A11927C2EC8C1F0005A3E05 /* EpicGamesGame.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A11927B2EC8C1E8005A3E05 /* EpicGamesGame.swift */; };
 		6A11927E2EC8C1FA005A3E05 /* LocalGame.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A11927D2EC8C1F5005A3E05 /* LocalGame.swift */; };
-		0989CE4FE30D4F678498D9E0 /* GOGGame.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08E6E58A02ED4AB990E96F42 /* GOGGame.swift */; };
 		6A1192802EC8C208005A3E05 /* SteamGame.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A11927F2EC8C205005A3E05 /* SteamGame.swift */; };
 		6A1192822EC8C2D7005A3E05 /* Game+Extensions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A1192812EC8C2D4005A3E05 /* Game+Extensions.swift */; };
 		6A1192852EC8D4FD005A3E05 /* GameManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A1192842EC8D4FB005A3E05 /* GameManager.swift */; };
@@ -53,14 +57,7 @@
 		6A2935422BFCFAFD0035CE4B /* WineInterface+Container.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A2934C32BFCFAFD0035CE4B /* WineInterface+Container.swift */; };
 		6A2935432BFCFAFD0035CE4B /* FileLocations.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A2934C52BFCFAFD0035CE4B /* FileLocations.swift */; };
 		6A2935442BFCFAFD0035CE4B /* Global.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A2934C62BFCFAFD0035CE4B /* Global.swift */; };
-		C1A0DSG000000000001005 /* ArtworkCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A0DSG0000000000000005 /* ArtworkCache.swift */; };
-		C1A0DSG000000000001001 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A0DSG0000000000000001 /* Theme.swift */; };
-		C1A0DSG000000000001002 /* Surfaces.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A0DSG0000000000000002 /* Surfaces.swift */; };
-		C1A0DSG000000000001003 /* GameArtwork.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A0DSG0000000000000003 /* GameArtwork.swift */; };
-		C1A0DSG000000000001004 /* GameDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A0DSG0000000000000004 /* GameDetailView.swift */; };
-		C1A0BRD0000000000000101 /* Branding.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A0BRD0000000000000001 /* Branding.swift */; };
 		6A2935452BFCFAFD0035CE4B /* NetworkMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A2934C72BFCFAFD0035CE4B /* NetworkMonitor.swift */; };
-		C1A0RES0000000000000002 /* ResourceLimits.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A0RES0000000000000001 /* ResourceLimits.swift */; };
 		6A2935462BFCFAFD0035CE4B /* Rosetta.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A2934C82BFCFAFD0035CE4B /* Rosetta.swift */; };
 		6A2935472BFCFAFD0035CE4B /* VariableManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A2934C92BFCFAFD0035CE4B /* VariableManager.swift */; };
 		6A29354C2BFCFAFD0035CE4B /* LibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A2934D02BFCFAFD0035CE4B /* LibraryView.swift */; };
@@ -87,7 +84,6 @@
 		6A2935682BFCFAFD0035CE4B /* Credits.rtf in Resources */ = {isa = PBXBuildFile; fileRef = 6A2934F22BFCFAFD0035CE4B /* Credits.rtf */; };
 		6A29356A2BFCFAFD0035CE4B /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = 6A2934F42BFCFAFD0035CE4B /* Localizable.xcstrings */; };
 		6A29356B2BFCFAFD0035CE4B /* PorTalisticApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A2934F62BFCFAFD0035CE4B /* PorTalisticApp.swift */; };
-		CA56524DF7124234A5B15075 /* GOGWebAuthView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A2078B55D9A45FB83B9301A /* GOGWebAuthView.swift */; };
 		6A2960FC2CE0ED0D00917E90 /* EpicWebAuthView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A2960FB2CE0ED0700917E90 /* EpicWebAuthView.swift */; };
 		6A2960FE2CE1017900917E90 /* NSApplication+Extensions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A2960FD2CE1017700917E90 /* NSApplication+Extensions.swift */; };
 		6A2961002CE1033200917E90 /* NSWindow+Extensions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A2960FF2CE1033000917E90 /* NSWindow+Extensions.swift */; };
@@ -101,7 +97,6 @@
 		6A448E102CC4BC55001E9F47 /* GameCard+Extensions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A448E0F2CC4BC50001E9F47 /* GameCard+Extensions.swift */; };
 		6A49F9E12EC2F1DF0015B084 /* OperationStatusViewModifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A49F9E02EC2F1DF0015B084 /* OperationStatusViewModifier.swift */; };
 		6A6EE1872DBA651700870AC4 /* Migrator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A6EE1862DBA650F00870AC4 /* Migrator.swift */; };
-		945995F26FC746AB9984F2FD /* gogdl in Resources */ = {isa = PBXBuildFile; fileRef = C4BDB2294755413DAC2C448C /* gogdl */; };
 		6A71D3D92BFD01AB00A2C74D /* legendary in Resources */ = {isa = PBXBuildFile; fileRef = 6A71D3D82BFD01AB00A2C74D /* legendary */; };
 		6A762F7A2ED889D500D6F1A8 /* EpicGamesGameInstallationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A762F792ED889D000D6F1A8 /* EpicGamesGameInstallationView.swift */; };
 		6A762F7D2ED93DF600D6F1A8 /* BaseGameInstallationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A762F7C2ED93DE400D6F1A8 /* BaseGameInstallationView.swift */; };
@@ -118,15 +113,9 @@
 		6A9ADCEA2EC3010D00D159A3 /* View+OperationStatusViewModifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A9ADCE92EC300ED00D159A3 /* View+OperationStatusViewModifier.swift */; };
 		6A9FE1162CDEED7A00C36058 /* WhatsNewCollection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A9FE1152CDEED7200C36058 /* WhatsNewCollection.swift */; };
 		6AA134C52EC30C8200632FDE /* WineInterface+DXVK.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6AA134C42EC30C7D00632FDE /* WineInterface+DXVK.swift */; };
-		6AC0FE042ECE110100D3CE02 /* WineInterface+DXMT.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6AC0FE032ECE110100D3CE02 /* WineInterface+DXMT.swift */; };
-		C1A0CMP0000000000000107 /* WineInterface+D3DMetal.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A0CMP0000000000000007 /* WineInterface+D3DMetal.swift */; };
-		6AC0FE022ECE110100D3CE01 /* WineInterface+Certificates.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6AC0FE012ECE110100D3CE01 /* WineInterface+Certificates.swift */; };
 		6AA1744F2CD5CC290035B081 /* WhatsNewKit in Frameworks */ = {isa = PBXBuildFile; productRef = 6AA1744E2CD5CC290035B081 /* WhatsNewKit */; };
 		6AA445762EABA0E80064A14F /* Engine+UpdateCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6AA445752EABA0DF0064A14F /* Engine+UpdateCatalog.swift */; };
 		6AA445792EABB1300064A14F /* Engine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6AA445782EABB12D0064A14F /* Engine.swift */; };
-		623C9019C1E73FCE5E33CA66 /* Runtime.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2A4A3B97BB3FC883BFE7F13 /* Runtime.swift */; };
-		E27C3889C4EDC64CD19BD047 /* RuntimeInstaller.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39FF7664115D924ABD55F38F /* RuntimeInstaller.swift */; };
-		92018BDB916E112563769581 /* RuntimeRelease.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0FF43FC8DCF8A275E219B07 /* RuntimeRelease.swift */; };
 		6AA4457B2EABBB3A0064A14F /* SemanticVersion+Codable(PropertyList).swift in Sources */ = {isa = PBXBuildFile; fileRef = 6AA4457A2EABBB350064A14F /* SemanticVersion+Codable(PropertyList).swift */; };
 		6AACEF752C18846700258A7E /* exeIcon.icns in Resources */ = {isa = PBXBuildFile; fileRef = 6AACEF742C18846700258A7E /* exeIcon.icns */; };
 		6AAD31152B08693D0035FA69 /* SemanticVersion in Frameworks */ = {isa = PBXBuildFile; productRef = 6AAD31142B08693D0035FA69 /* SemanticVersion */; };
@@ -134,6 +123,8 @@
 		6ABEA9102ECB5895006F5182 /* GameOperationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6ABEA90F2ECB5895006F5182 /* GameOperationManager.swift */; };
 		6ABEA9122ECB5CF3006F5182 /* GameOperation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6ABEA9112ECB5CF3006F5182 /* GameOperation.swift */; };
 		6ABEA9142ECC2107006F5182 /* TimeInterval+Extensions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6ABEA9132ECC2102006F5182 /* TimeInterval+Extensions.swift */; };
+		6AC0FE022ECE110100D3CE01 /* WineInterface+Certificates.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6AC0FE012ECE110100D3CE01 /* WineInterface+Certificates.swift */; };
+		6AC0FE042ECE110100D3CE02 /* WineInterface+DXMT.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6AC0FE032ECE110100D3CE02 /* WineInterface+DXMT.swift */; };
 		6AC2847A2EA45ED30008091F /* RosettaInstallationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6AC284792EA45ED00008091F /* RosettaInstallationView.swift */; };
 		6AC2847C2EA5234B0008091F /* EngineInstallationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6AC2847B2EA523440008091F /* EngineInstallationView.swift */; };
 		6AC742DD2B9314AB000EA1B2 /* SwordRPC in Frameworks */ = {isa = PBXBuildFile; productRef = 6AC742DC2B9314AB000EA1B2 /* SwordRPC */; };
@@ -149,26 +140,67 @@
 		6AFBCE1B2EBECFA700EF179D /* GameCard+ImageCard+.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6AFBCE1A2EBECFA100EF179D /* GameCard+ImageCard+.swift */; };
 		6AFC027E2ABDB5D40004AB77 /* SwiftyJSON in Frameworks */ = {isa = PBXBuildFile; productRef = 6AFC027D2ABDB5D40004AB77 /* SwiftyJSON */; };
 		6AFC02812ABE02970004AB77 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 6AFC02802ABE02970004AB77 /* Sparkle */; };
-		BDC3930E304AD61F009AA2DB /* Preflight.swift in Sources */ = {isa = PBXBuildFile; fileRef = BDC3930D304AD61F009AA2DB /* Preflight.swift */; };
-		A731963E02534858ADCF9EAC /* GOGInterface.swift in Sources */ = {isa = PBXBuildFile; fileRef = 762823C4A15F4FC29E72B71F /* GOGInterface.swift */; };
-		BDC39312304AD74D009AA2DB /* SteamInterface.swift in Sources */ = {isa = PBXBuildFile; fileRef = BDC3930F304AD74D009AA2DB /* SteamInterface.swift */; };
-		C1A0PIN0000000000000002 /* SteamClientPin.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A0PIN0000000000000001 /* SteamClientPin.swift */; };
-		BDC39313304AD74D009AA2DB /* VDF.swift in Sources */ = {isa = PBXBuildFile; fileRef = BDC39310304AD74D009AA2DB /* VDF.swift */; };
-		63C7CCACDB4A4B02BF08158F /* GOGGameManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4DF0347C63A340A487965742 /* GOGGameManager.swift */; };
 		7B0FBFF94537481DB2EBCA02 /* GOGDLInterface.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78C0EEEEE62A4F15A8266669 /* GOGDLInterface.swift */; };
-		C1A0CMP0000000000000101 /* WindowsExecutable.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A0CMP0000000000000001 /* WindowsExecutable.swift */; };
-		C1A0CMP0000000000000106 /* Provisioner.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A0CMP0000000000000006 /* Provisioner.swift */; };
-		C1A0CMP0000000000000105 /* RuntimeSelection.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A0CMP0000000000000005 /* RuntimeSelection.swift */; };
-		C1A0CMP0000000000000104 /* CompatibilityManifest.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A0CMP0000000000000004 /* CompatibilityManifest.swift */; };
-		C1A0MSG0000000000000101 /* ManifestSignature.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A0MSG0000000000000001 /* ManifestSignature.swift */; };
-		C1A0CMP0000000000000103 /* CompatibilityDatabase.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A0CMP0000000000000003 /* CompatibilityDatabase.swift */; };
-		C1A0CMP0000000000000102 /* RuntimeProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A0CMP0000000000000002 /* RuntimeProfile.swift */; };
-		0E9936567B6D431A94AA29A1 /* GOGGameInstallationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97DCFF338C72470380B53780 /* GOGGameInstallationView.swift */; };
-		42A7930D2BC94C829E5B0A8A /* GOGGameUninstallationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71E1C7F9EF8F49EBBB0BCF78 /* GOGGameUninstallationView.swift */; };
+		92018BDB916E112563769581 /* RuntimeRelease.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0FF43FC8DCF8A275E219B07 /* RuntimeRelease.swift */; };
+		945995F26FC746AB9984F2FD /* gogdl in Resources */ = {isa = PBXBuildFile; fileRef = C4BDB2294755413DAC2C448C /* gogdl */; };
+		A731963E02534858ADCF9EAC /* GOGInterface.swift in Sources */ = {isa = PBXBuildFile; fileRef = 762823C4A15F4FC29E72B71F /* GOGInterface.swift */; };
+		BDC3930E304AD61F009AA2DB /* Preflight.swift in Sources */ = {isa = PBXBuildFile; fileRef = BDC3930D304AD61F009AA2DB /* Preflight.swift */; };
+		BDC39312304AD74D009AA2DB /* SteamInterface.swift in Sources */ = {isa = PBXBuildFile; fileRef = BDC3930F304AD74D009AA2DB /* SteamInterface.swift */; };
+		BDC39313304AD74D009AA2DB /* VDF.swift in Sources */ = {isa = PBXBuildFile; fileRef = BDC39310304AD74D009AA2DB /* VDF.swift */; };
 		BDC39315304AD76B009AA2DB /* SteamGameManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = BDC39314304AD76B009AA2DB /* SteamGameManager.swift */; };
-		C6291EA8CB774D53B9F85A79 /* GOGGameImportView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 713159445AE144399F070CEC /* GOGGameImportView.swift */; };
 		BDC39317304AD7CD009AA2DB /* SteamGameImportView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BDC39316304AD7CD009AA2DB /* SteamGameImportView.swift */; };
+		C1A0AB0000000000000000A2 /* WineInterface+ApplicationName.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A0AB0000000000000000A1 /* WineInterface+ApplicationName.swift */; };
+		C1A0BRD0000000000000101 /* Branding.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A0BRD0000000000000001 /* Branding.swift */; };
+		C1A0CMP0000000000000101 /* WindowsExecutable.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A0CMP0000000000000001 /* WindowsExecutable.swift */; };
+		C1A0CMP0000000000000102 /* RuntimeProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A0CMP0000000000000002 /* RuntimeProfile.swift */; };
+		C1A0CMP0000000000000103 /* CompatibilityDatabase.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A0CMP0000000000000003 /* CompatibilityDatabase.swift */; };
+		C1A0CMP0000000000000104 /* CompatibilityManifest.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A0CMP0000000000000004 /* CompatibilityManifest.swift */; };
+		C1A0CMP0000000000000105 /* RuntimeSelection.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A0CMP0000000000000005 /* RuntimeSelection.swift */; };
+		C1A0CMP0000000000000106 /* Provisioner.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A0CMP0000000000000006 /* Provisioner.swift */; };
+		C1A0CMP0000000000000107 /* WineInterface+D3DMetal.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A0CMP0000000000000007 /* WineInterface+D3DMetal.swift */; };
+		C1A0CP00000000000000000B /* ChildProcesses.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A0CP00000000000000000A /* ChildProcesses.swift */; };
+		C1A0DSG000000000001001 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A0DSG0000000000000001 /* Theme.swift */; };
+		C1A0DSG000000000001002 /* Surfaces.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A0DSG0000000000000002 /* Surfaces.swift */; };
+		C1A0DSG000000000001003 /* GameArtwork.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A0DSG0000000000000003 /* GameArtwork.swift */; };
+		C1A0DSG000000000001004 /* GameDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A0DSG0000000000000004 /* GameDetailView.swift */; };
+		C1A0DSG000000000001005 /* ArtworkCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A0DSG0000000000000005 /* ArtworkCache.swift */; };
+		C1A0MSG0000000000000101 /* ManifestSignature.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A0MSG0000000000000001 /* ManifestSignature.swift */; };
+		C1A0PI00000000000000000B /* PendingInstalls.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A0PI00000000000000000A /* PendingInstalls.swift */; };
+		C1A0PIN0000000000000002 /* SteamClientPin.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A0PIN0000000000000001 /* SteamClientPin.swift */; };
+		C1A0RES0000000000000002 /* ResourceLimits.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A0RES0000000000000001 /* ResourceLimits.swift */; };
+		C6291EA8CB774D53B9F85A79 /* GOGGameImportView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 713159445AE144399F070CEC /* GOGGameImportView.swift */; };
+		CA11DE000000000000000007 /* ContainerSettingsRegressionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA11DE000000000000000001 /* ContainerSettingsRegressionTests.swift */; };
+		CA11DE000000000000000008 /* ExternalVolumeRegressionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA11DE000000000000000002 /* ExternalVolumeRegressionTests.swift */; };
+		CA11DE000000000000000009 /* GamePersistenceRegressionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA11DE000000000000000003 /* GamePersistenceRegressionTests.swift */; };
+		CA11DE00000000000000000A /* LibraryFilterRegressionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA11DE000000000000000004 /* LibraryFilterRegressionTests.swift */; };
+		CA11DE00000000000000000B /* RuntimeProfileRegressionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA11DE000000000000000005 /* RuntimeProfileRegressionTests.swift */; };
+		CA11DE00000000000000000C /* WineEnvironmentRegressionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA11DE000000000000000006 /* WineEnvironmentRegressionTests.swift */; };
+		CA11DE000000000000000022 /* RenderPathRegressionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA11DE000000000000000021 /* RenderPathRegressionTests.swift */; };
+		CA11DE000000000000000042 /* RebrandRegressionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA11DE000000000000000041 /* RebrandRegressionTests.swift */; };
+		CA11DE000000000000000051 /* RuntimeRetention.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA11DE000000000000000052 /* RuntimeRetention.swift */; };
+		CA11DE000000000000000053 /* RuntimeRetentionRegressionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA11DE000000000000000054 /* RuntimeRetentionRegressionTests.swift */; };
+		CA11DE000000000000000061 /* CrashDiagnosis.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA11DE000000000000000062 /* CrashDiagnosis.swift */; };
+		CA11DE000000000000000063 /* LaunchOutcome.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA11DE000000000000000064 /* LaunchOutcome.swift */; };
+		CA11DE000000000000000065 /* RecoveryJournal.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA11DE000000000000000066 /* RecoveryJournal.swift */; };
+		CA11DE000000000000000067 /* RecoveryPlanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA11DE000000000000000068 /* RecoveryPlanner.swift */; };
+		CA11DE000000000000000069 /* RecoveryCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA11DE00000000000000006A /* RecoveryCoordinator.swift */; };
+		CA11DE00000000000000006B /* CrashReport.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA11DE00000000000000006C /* CrashReport.swift */; };
+		CA11DE00000000000000006D /* CrashRecoveryRegressionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA11DE00000000000000006E /* CrashRecoveryRegressionTests.swift */; };
+		CA11DE000000000000000071 /* WebDataStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA11DE000000000000000072 /* WebDataStore.swift */; };
+		CA11DE0000000000000000A2 /* LaunchLifecycleRegressionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA11DE0000000000000000A1 /* LaunchLifecycleRegressionTests.swift */; };
+		CA56524DF7124234A5B15075 /* GOGWebAuthView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A2078B55D9A45FB83B9301A /* GOGWebAuthView.swift */; };
+		E27C3889C4EDC64CD19BD047 /* RuntimeInstaller.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39FF7664115D924ABD55F38F /* RuntimeInstaller.swift */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		CA11DE000000000000000012 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 6AB4748D2AACBBE900AB9C63 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 6AB474942AACBBE900AB9C63;
+			remoteInfo = PorTalistic;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
 		6A71D3D32BFD00B600A2C74D /* Embed Libraries */ = {
@@ -184,6 +216,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		08E6E58A02ED4AB990E96F42 /* GOGGame.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GOGGame.swift; sourceTree = "<group>"; };
 		1217C8A12EADC525003EC8C9 /* SparkleUpdaterCheckingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SparkleUpdaterCheckingView.swift; sourceTree = "<group>"; };
 		1217C8A22EADC525003EC8C9 /* SparkleUpdaterDownloadingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SparkleUpdaterDownloadingView.swift; sourceTree = "<group>"; };
 		1217C8A32EADC525003EC8C9 /* SparkleUpdaterExtractingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SparkleUpdaterExtractingView.swift; sourceTree = "<group>"; };
@@ -193,6 +226,9 @@
 		1217C8B02EADC544003EC8C9 /* BundleIconView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BundleIconView.swift; sourceTree = "<group>"; };
 		1217C8B22EADC544003EC8C9 /* RichAlertView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RichAlertView.swift; sourceTree = "<group>"; };
 		1D4BF3BE2EEC595900AD581F /* FileHandle+Extensions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "FileHandle+Extensions.swift"; sourceTree = "<group>"; };
+		39FF7664115D924ABD55F38F /* RuntimeInstaller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeInstaller.swift; sourceTree = "<group>"; };
+		4DF0347C63A340A487965742 /* GOGGameManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GOGGameManager.swift; sourceTree = "<group>"; };
+		5A2078B55D9A45FB83B9301A /* GOGWebAuthView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GOGWebAuthView.swift; sourceTree = "<group>"; };
 		5A62AE972C27DB1200BA31D2 /* GameListViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameListViewModel.swift; sourceTree = "<group>"; };
 		6A0210152D390016009C85F8 /* HarmonyRatingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HarmonyRatingView.swift; sourceTree = "<group>"; };
 		6A02101A2D390370009C85F8 /* StarRatingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StarRatingView.swift; sourceTree = "<group>"; };
@@ -204,7 +240,6 @@
 		6A1192792EC8C1DA005A3E05 /* Game.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Game.swift; sourceTree = "<group>"; };
 		6A11927B2EC8C1E8005A3E05 /* EpicGamesGame.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EpicGamesGame.swift; sourceTree = "<group>"; };
 		6A11927D2EC8C1F5005A3E05 /* LocalGame.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalGame.swift; sourceTree = "<group>"; };
-		08E6E58A02ED4AB990E96F42 /* GOGGame.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GOGGame.swift; sourceTree = "<group>"; };
 		6A11927F2EC8C205005A3E05 /* SteamGame.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SteamGame.swift; sourceTree = "<group>"; };
 		6A1192812EC8C2D4005A3E05 /* Game+Extensions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Game+Extensions.swift"; sourceTree = "<group>"; };
 		6A1192842EC8D4FB005A3E05 /* GameManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameManager.swift; sourceTree = "<group>"; };
@@ -228,14 +263,7 @@
 		6A2934C32BFCFAFD0035CE4B /* WineInterface+Container.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = "WineInterface+Container.swift"; sourceTree = "<group>"; };
 		6A2934C52BFCFAFD0035CE4B /* FileLocations.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = FileLocations.swift; sourceTree = "<group>"; };
 		6A2934C62BFCFAFD0035CE4B /* Global.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = Global.swift; sourceTree = "<group>"; };
-		C1A0DSG0000000000000005 /* ArtworkCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArtworkCache.swift; sourceTree = "<group>"; };
-		C1A0DSG0000000000000001 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
-		C1A0DSG0000000000000002 /* Surfaces.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Surfaces.swift; sourceTree = "<group>"; };
-		C1A0DSG0000000000000003 /* GameArtwork.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameArtwork.swift; sourceTree = "<group>"; };
-		C1A0DSG0000000000000004 /* GameDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameDetailView.swift; sourceTree = "<group>"; };
-		C1A0BRD0000000000000001 /* Branding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Branding.swift; sourceTree = "<group>"; };
 		6A2934C72BFCFAFD0035CE4B /* NetworkMonitor.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = NetworkMonitor.swift; sourceTree = "<group>"; };
-		C1A0RES0000000000000001 /* ResourceLimits.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = ResourceLimits.swift; sourceTree = "<group>"; };
 		6A2934C82BFCFAFD0035CE4B /* Rosetta.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = Rosetta.swift; sourceTree = "<group>"; };
 		6A2934C92BFCFAFD0035CE4B /* VariableManager.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = VariableManager.swift; sourceTree = "<group>"; };
 		6A2934D02BFCFAFD0035CE4B /* LibraryView.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = LibraryView.swift; sourceTree = "<group>"; };
@@ -264,7 +292,6 @@
 		6A2934F42BFCFAFD0035CE4B /* Localizable.xcstrings */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.json.xcstrings; path = Localizable.xcstrings; sourceTree = "<group>"; };
 		6A2934F52BFCFAFD0035CE4B /* PorTalistic.entitlements */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.entitlements; path = PorTalistic.entitlements; sourceTree = "<group>"; };
 		6A2934F62BFCFAFD0035CE4B /* PorTalisticApp.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = PorTalisticApp.swift; sourceTree = "<group>"; };
-		5A2078B55D9A45FB83B9301A /* GOGWebAuthView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GOGWebAuthView.swift; sourceTree = "<group>"; };
 		6A2960FB2CE0ED0700917E90 /* EpicWebAuthView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EpicWebAuthView.swift; sourceTree = "<group>"; };
 		6A2960FD2CE1017700917E90 /* NSApplication+Extensions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "NSApplication+Extensions.swift"; sourceTree = "<group>"; };
 		6A2960FF2CE1033000917E90 /* NSWindow+Extensions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "NSWindow+Extensions.swift"; sourceTree = "<group>"; };
@@ -274,7 +301,6 @@
 		6A448E0F2CC4BC50001E9F47 /* GameCard+Extensions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "GameCard+Extensions.swift"; sourceTree = "<group>"; };
 		6A49F9E02EC2F1DF0015B084 /* OperationStatusViewModifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OperationStatusViewModifier.swift; sourceTree = "<group>"; };
 		6A6EE1862DBA650F00870AC4 /* Migrator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Migrator.swift; sourceTree = "<group>"; };
-		C4BDB2294755413DAC2C448C /* gogdl */ = {isa = PBXFileReference; lastKnownFileType = folder; path = gogdl; sourceTree = "<group>"; };
 		6A71D3D82BFD01AB00A2C74D /* legendary */ = {isa = PBXFileReference; lastKnownFileType = folder; path = legendary; sourceTree = "<group>"; };
 		6A762F792ED889D000D6F1A8 /* EpicGamesGameInstallationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EpicGamesGameInstallationView.swift; sourceTree = "<group>"; };
 		6A762F7C2ED93DE400D6F1A8 /* BaseGameInstallationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BaseGameInstallationView.swift; sourceTree = "<group>"; };
@@ -289,14 +315,8 @@
 		6A9ADCE92EC300ED00D159A3 /* View+OperationStatusViewModifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "View+OperationStatusViewModifier.swift"; sourceTree = "<group>"; };
 		6A9FE1152CDEED7200C36058 /* WhatsNewCollection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhatsNewCollection.swift; sourceTree = "<group>"; };
 		6AA134C42EC30C7D00632FDE /* WineInterface+DXVK.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WineInterface+DXVK.swift"; sourceTree = "<group>"; };
-		6AC0FE032ECE110100D3CE02 /* WineInterface+DXMT.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WineInterface+DXMT.swift"; sourceTree = "<group>"; };
-		C1A0CMP0000000000000007 /* WineInterface+D3DMetal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WineInterface+D3DMetal.swift"; sourceTree = "<group>"; };
-		6AC0FE012ECE110100D3CE01 /* WineInterface+Certificates.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WineInterface+Certificates.swift"; sourceTree = "<group>"; };
 		6AA445752EABA0DF0064A14F /* Engine+UpdateCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Engine+UpdateCatalog.swift"; sourceTree = "<group>"; };
 		6AA445782EABB12D0064A14F /* Engine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Engine.swift; sourceTree = "<group>"; };
-		D2A4A3B97BB3FC883BFE7F13 /* Runtime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Runtime.swift; sourceTree = "<group>"; };
-		39FF7664115D924ABD55F38F /* RuntimeInstaller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeInstaller.swift; sourceTree = "<group>"; };
-		D0FF43FC8DCF8A275E219B07 /* RuntimeRelease.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeRelease.swift; sourceTree = "<group>"; };
 		6AA4457A2EABBB350064A14F /* SemanticVersion+Codable(PropertyList).swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SemanticVersion+Codable(PropertyList).swift"; sourceTree = "<group>"; };
 		6AACEF742C18846700258A7E /* exeIcon.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; path = exeIcon.icns; sourceTree = "<group>"; };
 		6AB474952AACBBE900AB9C63 /* PorTalistic.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PorTalistic.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -304,6 +324,8 @@
 		6ABEA90F2ECB5895006F5182 /* GameOperationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameOperationManager.swift; sourceTree = "<group>"; };
 		6ABEA9112ECB5CF3006F5182 /* GameOperation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameOperation.swift; sourceTree = "<group>"; };
 		6ABEA9132ECC2102006F5182 /* TimeInterval+Extensions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "TimeInterval+Extensions.swift"; sourceTree = "<group>"; };
+		6AC0FE012ECE110100D3CE01 /* WineInterface+Certificates.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WineInterface+Certificates.swift"; sourceTree = "<group>"; };
+		6AC0FE032ECE110100D3CE02 /* WineInterface+DXMT.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WineInterface+DXMT.swift"; sourceTree = "<group>"; };
 		6AC284792EA45ED00008091F /* RosettaInstallationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RosettaInstallationView.swift; sourceTree = "<group>"; };
 		6AC2847B2EA523440008091F /* EngineInstallationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EngineInstallationView.swift; sourceTree = "<group>"; };
 		6ACCEC1A2CD08DEE00611BEF /* GoogleService-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "GoogleService-Info.plist"; sourceTree = "<group>"; };
@@ -316,25 +338,58 @@
 		6AF630D82C077A17001F4E10 /* UserDefaults+Extensions.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = "UserDefaults+Extensions.swift"; sourceTree = "<group>"; };
 		6AFB7CD12EDF154E00C53213 /* GameDataStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameDataStore.swift; sourceTree = "<group>"; };
 		6AFBCE1A2EBECFA100EF179D /* GameCard+ImageCard+.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "GameCard+ImageCard+.swift"; sourceTree = "<group>"; };
-		BDC3930D304AD61F009AA2DB /* Preflight.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Preflight.swift; sourceTree = "<group>"; };
-		762823C4A15F4FC29E72B71F /* GOGInterface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GOGInterface.swift; sourceTree = "<group>"; };
-		BDC3930F304AD74D009AA2DB /* SteamInterface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SteamInterface.swift; sourceTree = "<group>"; };
-		C1A0PIN0000000000000001 /* SteamClientPin.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = SteamClientPin.swift; sourceTree = "<group>"; };
-		BDC39310304AD74D009AA2DB /* VDF.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VDF.swift; sourceTree = "<group>"; };
-		4DF0347C63A340A487965742 /* GOGGameManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GOGGameManager.swift; sourceTree = "<group>"; };
-		78C0EEEEE62A4F15A8266669 /* GOGDLInterface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GOGDLInterface.swift; sourceTree = "<group>"; };
-		C1A0CMP0000000000000001 /* WindowsExecutable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowsExecutable.swift; sourceTree = "<group>"; };
-		C1A0CMP0000000000000006 /* Provisioner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Provisioner.swift; sourceTree = "<group>"; };
-		C1A0CMP0000000000000005 /* RuntimeSelection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeSelection.swift; sourceTree = "<group>"; };
-		C1A0CMP0000000000000004 /* CompatibilityManifest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompatibilityManifest.swift; sourceTree = "<group>"; };
-		C1A0MSG0000000000000001 /* ManifestSignature.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ManifestSignature.swift; sourceTree = "<group>"; };
-		C1A0CMP0000000000000003 /* CompatibilityDatabase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompatibilityDatabase.swift; sourceTree = "<group>"; };
-		C1A0CMP0000000000000002 /* RuntimeProfile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeProfile.swift; sourceTree = "<group>"; };
-		97DCFF338C72470380B53780 /* GOGGameInstallationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GOGGameInstallationView.swift; sourceTree = "<group>"; };
-		71E1C7F9EF8F49EBBB0BCF78 /* GOGGameUninstallationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GOGGameUninstallationView.swift; sourceTree = "<group>"; };
-		BDC39314304AD76B009AA2DB /* SteamGameManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SteamGameManager.swift; sourceTree = "<group>"; };
 		713159445AE144399F070CEC /* GOGGameImportView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GOGGameImportView.swift; sourceTree = "<group>"; };
+		71E1C7F9EF8F49EBBB0BCF78 /* GOGGameUninstallationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GOGGameUninstallationView.swift; sourceTree = "<group>"; };
+		762823C4A15F4FC29E72B71F /* GOGInterface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GOGInterface.swift; sourceTree = "<group>"; };
+		78C0EEEEE62A4F15A8266669 /* GOGDLInterface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GOGDLInterface.swift; sourceTree = "<group>"; };
+		97DCFF338C72470380B53780 /* GOGGameInstallationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GOGGameInstallationView.swift; sourceTree = "<group>"; };
+		BDC3930D304AD61F009AA2DB /* Preflight.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Preflight.swift; sourceTree = "<group>"; };
+		BDC3930F304AD74D009AA2DB /* SteamInterface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SteamInterface.swift; sourceTree = "<group>"; };
+		BDC39310304AD74D009AA2DB /* VDF.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VDF.swift; sourceTree = "<group>"; };
+		BDC39314304AD76B009AA2DB /* SteamGameManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SteamGameManager.swift; sourceTree = "<group>"; };
 		BDC39316304AD7CD009AA2DB /* SteamGameImportView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SteamGameImportView.swift; sourceTree = "<group>"; };
+		C1A0AB0000000000000000A1 /* WineInterface+ApplicationName.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WineInterface+ApplicationName.swift"; sourceTree = "<group>"; };
+		C1A0BRD0000000000000001 /* Branding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Branding.swift; sourceTree = "<group>"; };
+		C1A0CMP0000000000000001 /* WindowsExecutable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowsExecutable.swift; sourceTree = "<group>"; };
+		C1A0CMP0000000000000002 /* RuntimeProfile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeProfile.swift; sourceTree = "<group>"; };
+		C1A0CMP0000000000000003 /* CompatibilityDatabase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompatibilityDatabase.swift; sourceTree = "<group>"; };
+		C1A0CMP0000000000000004 /* CompatibilityManifest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompatibilityManifest.swift; sourceTree = "<group>"; };
+		C1A0CMP0000000000000005 /* RuntimeSelection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeSelection.swift; sourceTree = "<group>"; };
+		C1A0CMP0000000000000006 /* Provisioner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Provisioner.swift; sourceTree = "<group>"; };
+		C1A0CMP0000000000000007 /* WineInterface+D3DMetal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WineInterface+D3DMetal.swift"; sourceTree = "<group>"; };
+		C1A0CP00000000000000000A /* ChildProcesses.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChildProcesses.swift; sourceTree = "<group>"; };
+		C1A0DSG0000000000000001 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
+		C1A0DSG0000000000000002 /* Surfaces.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Surfaces.swift; sourceTree = "<group>"; };
+		C1A0DSG0000000000000003 /* GameArtwork.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameArtwork.swift; sourceTree = "<group>"; };
+		C1A0DSG0000000000000004 /* GameDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameDetailView.swift; sourceTree = "<group>"; };
+		C1A0DSG0000000000000005 /* ArtworkCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArtworkCache.swift; sourceTree = "<group>"; };
+		C1A0MSG0000000000000001 /* ManifestSignature.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ManifestSignature.swift; sourceTree = "<group>"; };
+		C1A0PI00000000000000000A /* PendingInstalls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingInstalls.swift; sourceTree = "<group>"; };
+		C1A0PIN0000000000000001 /* SteamClientPin.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = SteamClientPin.swift; sourceTree = "<group>"; };
+		C1A0RES0000000000000001 /* ResourceLimits.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = ResourceLimits.swift; sourceTree = "<group>"; };
+		C4BDB2294755413DAC2C448C /* gogdl */ = {isa = PBXFileReference; lastKnownFileType = folder; path = gogdl; sourceTree = "<group>"; };
+		CA11DE000000000000000001 /* ContainerSettingsRegressionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContainerSettingsRegressionTests.swift; sourceTree = "<group>"; };
+		CA11DE000000000000000002 /* ExternalVolumeRegressionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExternalVolumeRegressionTests.swift; sourceTree = "<group>"; };
+		CA11DE000000000000000003 /* GamePersistenceRegressionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GamePersistenceRegressionTests.swift; sourceTree = "<group>"; };
+		CA11DE000000000000000004 /* LibraryFilterRegressionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryFilterRegressionTests.swift; sourceTree = "<group>"; };
+		CA11DE000000000000000005 /* RuntimeProfileRegressionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeProfileRegressionTests.swift; sourceTree = "<group>"; };
+		CA11DE000000000000000006 /* WineEnvironmentRegressionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WineEnvironmentRegressionTests.swift; sourceTree = "<group>"; };
+		CA11DE00000000000000000D /* PorTalisticTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PorTalisticTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		CA11DE000000000000000021 /* RenderPathRegressionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RenderPathRegressionTests.swift; sourceTree = "<group>"; };
+		CA11DE000000000000000041 /* RebrandRegressionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RebrandRegressionTests.swift; sourceTree = "<group>"; };
+		CA11DE000000000000000052 /* RuntimeRetention.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeRetention.swift; sourceTree = "<group>"; };
+		CA11DE000000000000000054 /* RuntimeRetentionRegressionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeRetentionRegressionTests.swift; sourceTree = "<group>"; };
+		CA11DE000000000000000062 /* CrashDiagnosis.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrashDiagnosis.swift; sourceTree = "<group>"; };
+		CA11DE000000000000000064 /* LaunchOutcome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchOutcome.swift; sourceTree = "<group>"; };
+		CA11DE000000000000000066 /* RecoveryJournal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecoveryJournal.swift; sourceTree = "<group>"; };
+		CA11DE000000000000000068 /* RecoveryPlanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecoveryPlanner.swift; sourceTree = "<group>"; };
+		CA11DE00000000000000006A /* RecoveryCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecoveryCoordinator.swift; sourceTree = "<group>"; };
+		CA11DE00000000000000006C /* CrashReport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrashReport.swift; sourceTree = "<group>"; };
+		CA11DE00000000000000006E /* CrashRecoveryRegressionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrashRecoveryRegressionTests.swift; sourceTree = "<group>"; };
+		CA11DE000000000000000072 /* WebDataStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebDataStore.swift; sourceTree = "<group>"; };
+		CA11DE0000000000000000A1 /* LaunchLifecycleRegressionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchLifecycleRegressionTests.swift; sourceTree = "<group>"; };
+		D0FF43FC8DCF8A275E219B07 /* RuntimeRelease.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeRelease.swift; sourceTree = "<group>"; };
+		D2A4A3B97BB3FC883BFE7F13 /* Runtime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Runtime.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -355,6 +410,13 @@
 				6AAD31152B08693D0035FA69 /* SemanticVersion in Frameworks */,
 				6A2961072CE1DD6200917E90 /* FirebaseCrashlytics in Frameworks */,
 				6A2961032CE1DD6200917E90 /* FirebaseAnalytics in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		CA11DE000000000000000010 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -388,6 +450,7 @@
 				1217C8B02EADC544003EC8C9 /* BundleIconView.swift */,
 				1217C8B22EADC544003EC8C9 /* RichAlertView.swift */,
 				6A2934EB2BFCFAFD0035CE4B /* WebView.swift */,
+				CA11DE000000000000000072 /* WebDataStore.swift */,
 			);
 			path = Components;
 			sourceTree = "<group>";
@@ -448,6 +511,7 @@
 				D2A4A3B97BB3FC883BFE7F13 /* Runtime.swift */,
 				39FF7664115D924ABD55F38F /* RuntimeInstaller.swift */,
 				D0FF43FC8DCF8A275E219B07 /* RuntimeRelease.swift */,
+				CA11DE000000000000000052 /* RuntimeRetention.swift */,
 				6AA445752EABA0DF0064A14F /* Engine+UpdateCatalog.swift */,
 				6A0CB97F2EACCCA900757AC5 /* Engine+Extensions.swift */,
 			);
@@ -485,24 +549,11 @@
 				6AC0FE032ECE110100D3CE02 /* WineInterface+DXMT.swift */,
 				C1A0CMP0000000000000007 /* WineInterface+D3DMetal.swift */,
 				6AC0FE012ECE110100D3CE01 /* WineInterface+Certificates.swift */,
+				C1A0AB0000000000000000A1 /* WineInterface+ApplicationName.swift */,
 				6A2934C32BFCFAFD0035CE4B /* WineInterface+Container.swift */,
 				6AE18E062EBE04BA00766258 /* WineInterface+Extensions.swift */,
 			);
 			path = Wine;
-			sourceTree = "<group>";
-		};
-		C1A0CMP0000000000000201 /* Compatibility */ = {
-			isa = PBXGroup;
-			children = (
-				C1A0CMP0000000000000001 /* WindowsExecutable.swift */,
-				C1A0CMP0000000000000006 /* Provisioner.swift */,
-				C1A0CMP0000000000000005 /* RuntimeSelection.swift */,
-				C1A0CMP0000000000000004 /* CompatibilityManifest.swift */,
-				C1A0MSG0000000000000001 /* ManifestSignature.swift */,
-				C1A0CMP0000000000000003 /* CompatibilityDatabase.swift */,
-				C1A0CMP0000000000000002 /* RuntimeProfile.swift */,
-			);
-			path = Compatibility;
 			sourceTree = "<group>";
 		};
 		6A2934CA2BFCFAFD0035CE4B /* Utilities */ = {
@@ -523,22 +574,12 @@
 				6A6EE1862DBA650F00870AC4 /* Migrator.swift */,
 				6A2934C72BFCFAFD0035CE4B /* NetworkMonitor.swift */,
 				C1A0RES0000000000000001 /* ResourceLimits.swift */,
+				C1A0CP00000000000000000A /* ChildProcesses.swift */,
 				6A2934C82BFCFAFD0035CE4B /* Rosetta.swift */,
 				6A2934C92BFCFAFD0035CE4B /* VariableManager.swift */,
 				6AE18E0A2EBE11A500766258 /* CodableAppStorage.swift */,
 			);
 			path = Utilities;
-			sourceTree = "<group>";
-		};
-		C1A0DSG0000000000000201 /* DesignSystem */ = {
-			isa = PBXGroup;
-			children = (
-				C1A0DSG0000000000000001 /* Theme.swift */,
-				C1A0DSG0000000000000002 /* Surfaces.swift */,
-				C1A0DSG0000000000000003 /* GameArtwork.swift */,
-				C1A0DSG0000000000000005 /* ArtworkCache.swift */,
-			);
-			path = DesignSystem;
 			sourceTree = "<group>";
 		};
 		6A2934DA2BFCFAFD0035CE4B /* Navigation */ = {
@@ -683,6 +724,7 @@
 			children = (
 				BDC3930D304AD61F009AA2DB /* Preflight.swift */,
 				6A2934F72BFCFAFD0035CE4B /* PorTalistic */,
+				CA11DE00000000000000000E /* PorTalisticTests */,
 				6AB474962AACBBE900AB9C63 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -691,6 +733,7 @@
 			isa = PBXGroup;
 			children = (
 				6AB474952AACBBE900AB9C63 /* PorTalistic.app */,
+				CA11DE00000000000000000D /* PorTalisticTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -726,15 +769,6 @@
 			path = Local;
 			sourceTree = "<group>";
 		};
-		CE266494CE344E6BAD42147A /* GOG */ = {
-			isa = PBXGroup;
-			children = (
-				97DCFF338C72470380B53780 /* GOGGameInstallationView.swift */,
-				71E1C7F9EF8F49EBBB0BCF78 /* GOGGameUninstallationView.swift */,
-			);
-			path = GOG;
-			sourceTree = "<group>";
-		};
 		6AE18E092EBE104000766258 /* Components */ = {
 			isa = PBXGroup;
 			children = (
@@ -759,6 +793,7 @@
 			isa = PBXGroup;
 			children = (
 				6ABEA90F2ECB5895006F5182 /* GameOperationManager.swift */,
+				C1A0PI00000000000000000A /* PendingInstalls.swift */,
 				6ABEA9112ECB5CF3006F5182 /* GameOperation.swift */,
 			);
 			path = GameOperation;
@@ -774,6 +809,64 @@
 			path = Steam;
 			sourceTree = "<group>";
 		};
+		C1A0CMP0000000000000201 /* Compatibility */ = {
+			isa = PBXGroup;
+			children = (
+				C1A0CMP0000000000000001 /* WindowsExecutable.swift */,
+				C1A0CMP0000000000000006 /* Provisioner.swift */,
+				C1A0CMP0000000000000005 /* RuntimeSelection.swift */,
+				C1A0CMP0000000000000004 /* CompatibilityManifest.swift */,
+				C1A0MSG0000000000000001 /* ManifestSignature.swift */,
+				C1A0CMP0000000000000003 /* CompatibilityDatabase.swift */,
+				CA11DE00000000000000006C /* CrashReport.swift */,
+				CA11DE00000000000000006A /* RecoveryCoordinator.swift */,
+				CA11DE000000000000000068 /* RecoveryPlanner.swift */,
+				CA11DE000000000000000066 /* RecoveryJournal.swift */,
+				CA11DE000000000000000064 /* LaunchOutcome.swift */,
+				CA11DE000000000000000062 /* CrashDiagnosis.swift */,
+				C1A0CMP0000000000000002 /* RuntimeProfile.swift */,
+			);
+			path = Compatibility;
+			sourceTree = "<group>";
+		};
+		C1A0DSG0000000000000201 /* DesignSystem */ = {
+			isa = PBXGroup;
+			children = (
+				C1A0DSG0000000000000001 /* Theme.swift */,
+				C1A0DSG0000000000000002 /* Surfaces.swift */,
+				C1A0DSG0000000000000003 /* GameArtwork.swift */,
+				C1A0DSG0000000000000005 /* ArtworkCache.swift */,
+			);
+			path = DesignSystem;
+			sourceTree = "<group>";
+		};
+		CA11DE00000000000000000E /* PorTalisticTests */ = {
+			isa = PBXGroup;
+			children = (
+				CA11DE000000000000000001 /* ContainerSettingsRegressionTests.swift */,
+				CA11DE000000000000000002 /* ExternalVolumeRegressionTests.swift */,
+				CA11DE000000000000000003 /* GamePersistenceRegressionTests.swift */,
+				CA11DE000000000000000004 /* LibraryFilterRegressionTests.swift */,
+				CA11DE000000000000000005 /* RuntimeProfileRegressionTests.swift */,
+				CA11DE00000000000000006E /* CrashRecoveryRegressionTests.swift */,
+				CA11DE000000000000000054 /* RuntimeRetentionRegressionTests.swift */,
+				CA11DE000000000000000021 /* RenderPathRegressionTests.swift */,
+				CA11DE000000000000000006 /* WineEnvironmentRegressionTests.swift */,
+				CA11DE000000000000000041 /* RebrandRegressionTests.swift */,
+				CA11DE0000000000000000A1 /* LaunchLifecycleRegressionTests.swift */,
+			);
+			path = PorTalisticTests;
+			sourceTree = "<group>";
+		};
+		CE266494CE344E6BAD42147A /* GOG */ = {
+			isa = PBXGroup;
+			children = (
+				97DCFF338C72470380B53780 /* GOGGameInstallationView.swift */,
+				71E1C7F9EF8F49EBBB0BCF78 /* GOGGameUninstallationView.swift */,
+			);
+			path = GOG;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -781,6 +874,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = 6AB474A42AACBBEA00AB9C63 /* Build configuration list for PBXNativeTarget "PorTalistic" */;
 			buildPhases = (
+				CA11DE000000000000000031 /* Invariants */,
 				6AB474912AACBBE900AB9C63 /* Sources */,
 				6AB474922AACBBE900AB9C63 /* Frameworks */,
 				6AB474932AACBBE900AB9C63 /* Resources */,
@@ -812,6 +906,26 @@
 			productReference = 6AB474952AACBBE900AB9C63 /* PorTalistic.app */;
 			productType = "com.apple.product-type.application";
 		};
+		CA11DE000000000000000014 /* PorTalisticTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = CA11DE000000000000000015 /* Build configuration list for PBXNativeTarget "PorTalisticTests" */;
+			buildPhases = (
+				CA11DE00000000000000000F /* Sources */,
+				CA11DE000000000000000010 /* Frameworks */,
+				CA11DE000000000000000011 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				CA11DE000000000000000013 /* PBXTargetDependency */,
+			);
+			name = PorTalisticTests;
+			packageProductDependencies = (
+			);
+			productName = PorTalisticTests;
+			productReference = CA11DE00000000000000000D /* PorTalisticTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -824,6 +938,10 @@
 				TargetAttributes = {
 					6AB474942AACBBE900AB9C63 = {
 						CreatedOnToolsVersion = 15.0;
+					};
+					CA11DE000000000000000014 = {
+						CreatedOnToolsVersion = 26.0;
+						TestTargetID = 6AB474942AACBBE900AB9C63;
 					};
 				};
 			};
@@ -854,6 +972,7 @@
 			projectRoot = "";
 			targets = (
 				6AB474942AACBBE900AB9C63 /* PorTalistic */,
+				CA11DE000000000000000014 /* PorTalisticTests */,
 			);
 		};
 /* End PBXProject section */
@@ -872,6 +991,13 @@
 				6AACEF752C18846700258A7E /* exeIcon.icns in Resources */,
 				6A2935672BFCFAFD0035CE4B /* Assets.xcassets in Resources */,
 				6ACCEC1B2CD08DEE00611BEF /* GoogleService-Info.plist in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		CA11DE000000000000000011 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -921,6 +1047,25 @@
 			shellPath = /bin/sh;
 			shellScript = "if [ \"$SWIFTLINT\" != \"NO\" ]; then\n    if [[ \"$(uname -m)\" == arm64 ]]; then\n        export PATH=\"/opt/homebrew/bin:$PATH\"\n    fi\n\n    if which swiftlint > /dev/null; then\n      swiftlint\n    else\n      echo \"warning: SwiftLint not installed, download from https://github.com/realm/SwiftLint\"\n    fi\nfi\n";
 		};
+		CA11DE000000000000000031 /* Invariants */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = Invariants;
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "if [ -x \"$SRCROOT/Scripts/check-invariants.sh\" ]; then\n    \"$SRCROOT/Scripts/check-invariants.sh\" --warn\nelse\n    echo \"warning: Scripts/check-invariants.sh is missing — the source invariants behind the recurring faults are no longer checked\"\nfi\n";
+		};
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -944,6 +1089,12 @@
 				C1A0CMP0000000000000104 /* CompatibilityManifest.swift in Sources */,
 				C1A0MSG0000000000000101 /* ManifestSignature.swift in Sources */,
 				C1A0CMP0000000000000103 /* CompatibilityDatabase.swift in Sources */,
+				CA11DE00000000000000006B /* CrashReport.swift in Sources */,
+				CA11DE000000000000000069 /* RecoveryCoordinator.swift in Sources */,
+				CA11DE000000000000000067 /* RecoveryPlanner.swift in Sources */,
+				CA11DE000000000000000065 /* RecoveryJournal.swift in Sources */,
+				CA11DE000000000000000063 /* LaunchOutcome.swift in Sources */,
+				CA11DE000000000000000061 /* CrashDiagnosis.swift in Sources */,
 				C1A0CMP0000000000000102 /* RuntimeProfile.swift in Sources */,
 				0E9936567B6D431A94AA29A1 /* GOGGameInstallationView.swift in Sources */,
 				42A7930D2BC94C829E5B0A8A /* GOGGameUninstallationView.swift in Sources */,
@@ -984,6 +1135,7 @@
 				623C9019C1E73FCE5E33CA66 /* Runtime.swift in Sources */,
 				E27C3889C4EDC64CD19BD047 /* RuntimeInstaller.swift in Sources */,
 				92018BDB916E112563769581 /* RuntimeRelease.swift in Sources */,
+				CA11DE000000000000000051 /* RuntimeRetention.swift in Sources */,
 				6A2935372BFCFAFD0035CE4B /* Data+Extensions.swift in Sources */,
 				6A8080D52EA3611A00F10A00 /* OnboardingViewModel.swift in Sources */,
 				6A29353D2BFCFAFD0035CE4B /* LegendaryInterface.swift in Sources */,
@@ -998,10 +1150,13 @@
 				C1A0DSG000000000001003 /* GameArtwork.swift in Sources */,
 				C1A0DSG000000000001004 /* GameDetailView.swift in Sources */,
 				6A2935632BFCFAFD0035CE4B /* WebView.swift in Sources */,
+				CA11DE000000000000000071 /* WebDataStore.swift in Sources */,
 				C6291EA8CB774D53B9F85A79 /* GOGGameImportView.swift in Sources */,
 				BDC39317304AD7CD009AA2DB /* SteamGameImportView.swift in Sources */,
 				6AFBCE1B2EBECFA700EF179D /* GameCard+ImageCard+.swift in Sources */,
 				6ABEA9102ECB5895006F5182 /* GameOperationManager.swift in Sources */,
+				C1A0PI00000000000000000B /* PendingInstalls.swift in Sources */,
+				C1A0CP00000000000000000B /* ChildProcesses.swift in Sources */,
 				6A3436342DF9C0B2006429F6 /* View+Extensions.swift in Sources */,
 				6A2935582BFCFAFD0035CE4B /* SubscriptedTextView.swift in Sources */,
 				6A2935542BFCFAFD0035CE4B /* SupportView.swift in Sources */,
@@ -1028,6 +1183,7 @@
 				6AC0FE042ECE110100D3CE02 /* WineInterface+DXMT.swift in Sources */,
 				C1A0CMP0000000000000107 /* WineInterface+D3DMetal.swift in Sources */,
 				6AC0FE022ECE110100D3CE01 /* WineInterface+Certificates.swift in Sources */,
+				C1A0AB0000000000000000A2 /* WineInterface+ApplicationName.swift in Sources */,
 				6A11927E2EC8C1FA005A3E05 /* LocalGame.swift in Sources */,
 				6A8080D32EA35FA000F10A00 /* OnboardingView.swift in Sources */,
 				6ABEA9142ECC2107006F5182 /* TimeInterval+Extensions.swift in Sources */,
@@ -1070,7 +1226,33 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		CA11DE00000000000000000F /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				CA11DE000000000000000007 /* ContainerSettingsRegressionTests.swift in Sources */,
+				CA11DE000000000000000008 /* ExternalVolumeRegressionTests.swift in Sources */,
+				CA11DE000000000000000009 /* GamePersistenceRegressionTests.swift in Sources */,
+				CA11DE00000000000000000A /* LibraryFilterRegressionTests.swift in Sources */,
+				CA11DE00000000000000000B /* RuntimeProfileRegressionTests.swift in Sources */,
+				CA11DE00000000000000006D /* CrashRecoveryRegressionTests.swift in Sources */,
+				CA11DE000000000000000053 /* RuntimeRetentionRegressionTests.swift in Sources */,
+				CA11DE000000000000000022 /* RenderPathRegressionTests.swift in Sources */,
+				CA11DE00000000000000000C /* WineEnvironmentRegressionTests.swift in Sources */,
+				CA11DE000000000000000042 /* RebrandRegressionTests.swift in Sources */,
+				CA11DE0000000000000000A2 /* LaunchLifecycleRegressionTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		CA11DE000000000000000013 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 6AB474942AACBBE900AB9C63 /* PorTalistic */;
+			targetProxy = CA11DE000000000000000012 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		6AB474A22AACBBEA00AB9C63 /* Debug */ = {
@@ -1211,11 +1393,11 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 4684;
+				CURRENT_PROJECT_VERSION = 64;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_ASSET_PATHS = "\"PorTalistic/Preview Content\"";
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = M9RH7ZG8W4;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
@@ -1228,7 +1410,7 @@
 				INFOPLIST_FILE = PorTalistic/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = PorTalistic;
 				INFOPLIST_KEY_GCSupportsControllerUserInteraction = YES;
-				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.games";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2023-2025 vapidinfinity";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -1255,15 +1437,15 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				CODE_SIGN_ENTITLEMENTS = PorTalistic/PorTalistic.entitlements;
-				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_IDENTITY = "Developer ID Application";
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 4684;
+				CURRENT_PROJECT_VERSION = 64;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_ASSET_PATHS = "\"PorTalistic/Preview Content\"";
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = M9RH7ZG8W4;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
@@ -1276,7 +1458,7 @@
 				INFOPLIST_FILE = PorTalistic/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = PorTalistic;
 				INFOPLIST_KEY_GCSupportsControllerUserInteraction = YES;
-				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.games";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2023-2025 vapidinfinity";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -1293,6 +1475,56 @@
 				SWIFT_VERSION = 6.0;
 				VERSIONING_SYSTEM = "apple-generic";
 				VERSION_INFO_PREFIX = "";
+			};
+			name = Release;
+		};
+		CA11DE000000000000000016 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 64;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_HARDENED_RUNTIME = NO;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.mcstig.PorTalisticTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_INCLUDE_PATHS = "$(inherited) $(BUILT_PRODUCTS_DIR)";
+				SWIFT_STRICT_CONCURRENCY = minimal;
+				SWIFT_VERSION = 6.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/PorTalistic.app/Contents/MacOS/PorTalistic";
+			};
+			name = Debug;
+		};
+		CA11DE000000000000000017 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 64;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_HARDENED_RUNTIME = NO;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.mcstig.PorTalisticTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_INCLUDE_PATHS = "$(inherited) $(BUILT_PRODUCTS_DIR)";
+				SWIFT_STRICT_CONCURRENCY = minimal;
+				SWIFT_VERSION = 6.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/PorTalistic.app/Contents/MacOS/PorTalistic";
 			};
 			name = Release;
 		};
@@ -1313,6 +1545,15 @@
 			buildConfigurations = (
 				6AB474A52AACBBEA00AB9C63 /* Debug */,
 				6AB474A62AACBBEA00AB9C63 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		CA11DE000000000000000015 /* Build configuration list for PBXNativeTarget "PorTalisticTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				CA11DE000000000000000016 /* Debug */,
+				CA11DE000000000000000017 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

@@ -1,0 +1,1021 @@
+diff --git a/dlls/user32/msgbox.c b/dlls/user32/msgbox.c
+index 009f385..eafb412 100644
+--- a/dlls/user32/msgbox.c
++++ b/dlls/user32/msgbox.c
+@@ -34,6 +34,44 @@
+ WINE_DEFAULT_DEBUG_CHANNEL(dialog);
+ WINE_DECLARE_DEBUG_CHANNEL(msgbox);
+ 
++/* Message boxes presented by the display driver.
++ *
++ * The dialog is still built, initialised and run exactly as before: it is what
++ * disables the owner, what MB_TASKMODAL's window list hangs off, what EndDialog
++ * ends and what MessageBox's return value comes from.  Once it is ready it is
++ * offered to the driver, and a driver that can show the message box its own way
++ * (the Mac driver shows it as an NSAlert) answers nonzero.  The dialog then
++ * stays hidden, and the driver posts WM_COMMAND for the button that was
++ * pressed, which ends it like a click would.  Any other driver, or the Mac
++ * driver with UseNativeMessageBoxes=n, answers 0 and nothing changes.
++ *
++ * The message is in the range reserved for the USER driver, so it goes to the
++ * driver's WindowMessage entry point rather than to MSGBOX_DlgProc.  wparam is
++ * the MB_* style and lparam 0 to offer the message box, lparam 1 to say it has
++ * ended.  Both values must match dlls/winemac.drv/macdrv.h and
++ * dlls/winemac.drv/msgbox.c.
++ */
++#define WM_WINE_NATIVE_MSGBOX (WM_WINE_FIRST_DRIVER_MSG + 0xfe0)
++static const char native_msgbox_prop[] = "__wine_native_msgbox";
++
++static void MSGBOX_OfferToDriver( HWND hwnd, const MSGBOXPARAMSW *lpmb )
++{
++    DWORD_PTR accepted = 0;
++
++    /* The Help button keeps the box open and sends WM_HELP, which only the
++     * dialog itself can do. */
++    if (lpmb->dwStyle & MB_HELP) return;
++
++    /* SendMessageTimeout rather than SendMessage: a same-thread SendMessage can
++     * be handed straight to the window procedure without the driver seeing it. */
++    if (!SendMessageTimeoutW( hwnd, WM_WINE_NATIVE_MSGBOX, lpmb->dwStyle, 0, SMTO_NORMAL, 0, &accepted ) ||
++        !accepted)
++        return;
++
++    TRACE_(msgbox)("%p is being shown by the display driver\n", hwnd);
++    SetPropA( hwnd, native_msgbox_prop, (HANDLE)1 );
++}
++
+ struct ThreadWindows
+ {
+     UINT numHandles;
+@@ -336,9 +374,26 @@ static INT_PTR CALLBACK MSGBOX_DlgProc( HWND hwnd, UINT message,
+        NtUserSetWindowContextHelpId(hwnd, mbp->dwContextHelpId);
+        MSGBOX_OnInit(hwnd, mbp);
+        SetPropA(hwnd, "WINE_MSGBOX_HELPCALLBACK", mbp->lpfnMsgBoxCallback);
++       MSGBOX_OfferToDriver(hwnd, mbp);
+        break;
+    }
+ 
++   case WM_WINDOWPOSCHANGING:
++       if (GetPropA(hwnd, native_msgbox_prop))
++       {
++           WINDOWPOS *pos = (WINDOWPOS *)lParam;
++
++           /* The driver is showing this message box; the dialog must never appear
++            * beside it.  The property goes if the driver has to fall back. */
++           pos->flags &= ~SWP_SHOWWINDOW;
++
++           /* Being hidden is EndDialog ending it, possibly the program's doing rather
++            * than the user's.  The alert goes too, before a click can answer again. */
++           if (pos->flags & SWP_HIDEWINDOW)
++               SendMessageTimeoutW( hwnd, WM_WINE_NATIVE_MSGBOX, 0, 1, SMTO_NORMAL, 0, NULL );
++       }
++       break;
++
+    case WM_COMMAND:
+     switch (LOWORD(wParam))
+     {
+diff --git a/dlls/winemac.drv/Makefile.in b/dlls/winemac.drv/Makefile.in
+index ac70562..e04bee0 100644
+--- a/dlls/winemac.drv/Makefile.in
++++ b/dlls/winemac.drv/Makefile.in
+@@ -18,6 +18,7 @@ VER_FILEDESCRIPTION_STR = "Wine Mac driver"
+ 
+ SOURCES = \
+ 	clipboard.c \
++	cocoa_alert.m \
+ 	cocoa_app.m \
+ 	cocoa_clipboard.m \
+ 	cocoa_cursorclipping.m \
+@@ -36,6 +37,7 @@ SOURCES = \
+ 	keyboard.c \
+ 	macdrv_main.c \
+ 	mouse.c \
++	msgbox.c \
+ 	opengl.c \
+ 	surface.c \
+ 	systray.c \
+diff --git a/dlls/winemac.drv/cocoa_alert.m b/dlls/winemac.drv/cocoa_alert.m
+new file mode 100644
+index 0000000..0f507dc
+--- /dev/null
++++ b/dlls/winemac.drv/cocoa_alert.m
+@@ -0,0 +1,428 @@
++/*
++ * MACDRV Cocoa alerts, which Windows message boxes are shown as
++ *
++ * Copyright 2026 Michael Stoian
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
++ */
++
++#import <AppKit/AppKit.h>
++#include "macdrv_cocoa.h"
++#import "cocoa_app.h"
++#import "cocoa_event.h"
++#import "cocoa_window.h"
++
++#pragma GCC diagnostic ignored "-Wdeclaration-after-statement"
++
++
++/* Past this, a message goes in a scrolling view.  The alert's own label grows
++   without limit, and a stack trace would push the buttons off the screen. */
++static const NSUInteger WineAlertLongTextLength = 1000;
++static const NSUInteger WineAlertLongTextLines = 20;
++
++
++/* Windows line endings as the alert expects them, without the blank lines
++   message boxes tend to end with. */
++static NSString* WineAlertCleanText(NSString* string)
++{
++    if (!string) return @"";
++    string = [string stringByReplacingOccurrencesOfString:@"\r\n" withString:@"\n"];
++    string = [string stringByReplacingOccurrencesOfString:@"\r" withString:@"\n"];
++    return [string stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
++}
++
++static BOOL WineAlertTextIsLong(NSString* string)
++{
++    __block NSUInteger lines = 0;
++
++    if ([string length] > WineAlertLongTextLength) return YES;
++
++    [string enumerateLinesUsingBlock:^(NSString* line, BOOL* stop){
++        if (++lines > WineAlertLongTextLines) *stop = YES;
++    }];
++
++    return lines > WineAlertLongTextLines;
++}
++
++static NSView* WineAlertScrollingText(NSString* string)
++{
++    NSScrollView* scrollView = [[[NSScrollView alloc] initWithFrame:NSMakeRect(0, 0, 420, 240)] autorelease];
++    NSTextView* textView;
++    NSSize size;
++
++    scrollView.hasVerticalScroller = YES;
++    scrollView.autohidesScrollers = YES;
++    scrollView.borderType = NSBezelBorder;
++    size = [scrollView contentSize];
++
++    textView = [[[NSTextView alloc] initWithFrame:NSMakeRect(0, 0, size.width, size.height)] autorelease];
++    textView.minSize = NSMakeSize(0, size.height);
++    textView.maxSize = NSMakeSize(CGFLOAT_MAX, CGFLOAT_MAX);
++    textView.verticallyResizable = YES;
++    textView.horizontallyResizable = NO;
++    textView.autoresizingMask = NSViewWidthSizable;
++    textView.textContainer.widthTracksTextView = YES;
++    textView.editable = NO;
++    textView.selectable = YES;
++    textView.string = string;
++    textView.font = [NSFont systemFontOfSize:[NSFont smallSystemFontSize]];
++    textView.textColor = [NSColor labelColor];
++
++    scrollView.documentView = textView;
++    return scrollView;
++}
++
++
++@interface WineAlert : NSObject
++{
++    WineEventQueue* queue;
++    void* hwnd;
++    int style;
++    NSString* caption;
++    NSString* text;
++    NSArray* buttonTitles;
++    NSArray* buttonIDs;
++    NSInteger defaultIndex;
++    int cancelID;
++
++    NSAlert* alert;
++    id keyMonitor;
++    NSInteger attentionRequest;
++    BOOL finished;
++}
++
++    - (id) initWithQueue:(WineEventQueue*)inQueue hwnd:(void*)inHwnd style:(int)inStyle
++                 caption:(NSString*)inCaption text:(NSString*)inText
++            buttonTitles:(NSArray*)inButtonTitles buttonIDs:(NSArray*)inButtonIDs
++            defaultIndex:(NSInteger)inDefaultIndex cancelID:(int)inCancelID;
++
++    - (void) show;
++    - (void) dismiss;
++
++@end
++
++
++@implementation WineAlert
++
++    - (id) initWithQueue:(WineEventQueue*)inQueue hwnd:(void*)inHwnd style:(int)inStyle
++                 caption:(NSString*)inCaption text:(NSString*)inText
++            buttonTitles:(NSArray*)inButtonTitles buttonIDs:(NSArray*)inButtonIDs
++            defaultIndex:(NSInteger)inDefaultIndex cancelID:(int)inCancelID
++    {
++        self = [super init];
++        if (self)
++        {
++            queue = [inQueue retain];
++            hwnd = inHwnd;
++            style = inStyle;
++            caption = [inCaption copy];
++            text = [inText copy];
++            buttonTitles = [inButtonTitles copy];
++            buttonIDs = [inButtonIDs copy];
++            defaultIndex = inDefaultIndex;
++            cancelID = inCancelID;
++        }
++        return self;
++    }
++
++    - (void) dealloc
++    {
++        [alert release];
++        [queue release];
++        [caption release];
++        [text release];
++        [buttonTitles release];
++        [buttonIDs release];
++        [super dealloc];
++    }
++
++    /* The screen the game is on, not necessarily the one with the menu bar. */
++    - (NSScreen*) targetScreen
++    {
++        NSScreen* screen = [[[WineApplicationController sharedController] frontWineWindow] screen];
++        return screen ? screen : [[NSScreen screens] firstObject];
++    }
++
++    /* Above anything Wine puts a window at, and it puts some high: a topmost
++       window goes above the Dock, a fullscreen one above the menu bar and the
++       status items (one more if it is topmost too), and one on a captured
++       display above the shield. Wine re-levels its windows every time the app
++       is activated, so aim above where they can go, not just where they are. */
++    - (NSInteger) windowLevelFor:(NSWindow*)window
++    {
++        NSInteger level = NSStatusWindowLevel + 3;
++        NSWindow* other;
++
++        if ([[WineApplicationController sharedController] areDisplaysCaptured])
++            level = MAX(level, CGShieldingWindowLevel() + 3);
++
++        for (other in [NSApp windows])
++        {
++            if (other != window && [other isVisible] && [other level] >= level)
++                level = [other level] + 1;
++        }
++
++        return level;
++    }
++
++    - (void) show
++    {
++        WineApplicationController* controller = [WineApplicationController sharedController];
++        NSString* headline = WineAlertCleanText(caption);
++        NSString* body = WineAlertCleanText(text);
++        NSWindow* window;
++        NSRect visible, frame;
++        NSUInteger i;
++
++        if (finished) return;
++
++        @try
++        {
++            alert = [[NSAlert alloc] init];
++
++            switch (style)
++            {
++                case ALERT_STYLE_CRITICAL:  alert.alertStyle = NSAlertStyleCritical; break;
++                case ALERT_STYLE_WARNING:   alert.alertStyle = NSAlertStyleWarning; break;
++                default:                    alert.alertStyle = NSAlertStyleInformational; break;
++            }
++
++            /* The caption is the headline, as in any Mac alert, and the message goes
++               under it. A box with no caption has only the message to lead with. */
++            if (WineAlertTextIsLong(body))
++            {
++                alert.accessoryView = WineAlertScrollingText(body);
++                body = @"";
++            }
++            else if (![headline length])
++            {
++                headline = body;
++                body = @"";
++            }
++            alert.messageText = headline;
++            alert.informativeText = body;
++
++            /* The first button is rightmost, and the default is whichever one the
++               message box made default, not necessarily the first. Escape is handled
++               below, so that it can answer OK where Windows would. */
++            for (i = 0; i < [buttonTitles count]; i++)
++            {
++                NSButton* button = [alert addButtonWithTitle:buttonTitles[i]];
++                button.tag = [buttonIDs[i] integerValue];
++                button.target = self;
++                button.action = @selector(buttonPressed:);
++                button.keyEquivalent = ((NSInteger)i == defaultIndex) ? @"\r" : @"";
++            }
++
++            [alert layout];
++            window = [alert window];
++            window.releasedWhenClosed = NO;
++            window.collectionBehavior |= NSWindowCollectionBehaviorMoveToActiveSpace |
++                                         NSWindowCollectionBehaviorFullScreenAuxiliary;
++            window.level = [self windowLevelFor:window];
++            /* It floats that high only while we are active; on deactivation it
++               hides, as any alert does, rather than covering other apps. */
++            window.hidesOnDeactivate = YES;
++            /* Mouse moves go to the key window. Taking them is what lets Wine see
++               the pointer is over something that isn't a Windows window, and show
++               it: a game that hid the cursor would otherwise leave it hidden here. */
++            window.acceptsMouseMovedEvents = YES;
++
++            /* Centred across and a little above centre, where AppKit puts an alert,
++               but on the game's screen. */
++            visible = [[self targetScreen] visibleFrame];
++            frame = [window frame];
++            frame.origin.x = NSMidX(visible) - NSWidth(frame) / 2;
++            frame.origin.y = NSMinY(visible) + (NSHeight(visible) - NSHeight(frame)) * 2 / 3;
++            [window setFrameOrigin:frame.origin];
++
++            keyMonitor = [[NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown
++                                                                handler:^NSEvent*(NSEvent* event){
++                return [self handleKeyDown:event] ? nil : event;
++            }] retain];
++
++            /* What showing any Windows window does. If macOS won't bring us forward,
++               bounce in the Dock until the user does: the program is waiting on this. */
++            [controller transformProcessToForeground:YES];
++            if ([NSApp isHidden])
++                [NSApp unhide:nil];
++            [controller tryToActivateIgnoringOtherApps:YES];
++            [window makeKeyAndOrderFront:nil];
++            attentionRequest = [NSApp requestUserAttention:NSCriticalRequest];
++        }
++        @catch (id e)
++        {
++            ERR(@"Couldn't show a message box as an alert, so the dialog will be shown: %@\n", e);
++            [self finishWithResponse:0];
++        }
++    }
++
++    - (BOOL) handleKeyDown:(NSEvent*)event
++    {
++        NSEventModifierFlags modifiers;
++        NSString* characters;
++
++        if (finished || [event window] != [alert window]) return NO;
++
++        /* A key held down since before the alert came up repeats into it. That is the
++           game's key, perhaps the very Escape or Return that brought the box up, and
++           it must not answer it. */
++        if ([event isARepeat]) return YES;
++
++        modifiers = [event modifierFlags] & (NSEventModifierFlagShift | NSEventModifierFlagControl |
++                                             NSEventModifierFlagOption | NSEventModifierFlagCommand);
++        characters = [event charactersIgnoringModifiers];
++
++        /* Escape, and Command-period, answer Cancel if there is one and OK if that's
++           the only button. Otherwise nothing, as on Windows. */
++        if ((!modifiers && [event keyCode] == kVK_Escape) ||
++            (modifiers == NSEventModifierFlagCommand && [characters isEqualToString:@"."]))
++        {
++            if (cancelID)
++                [self finishWithResponse:cancelID];
++            else
++                NSBeep();
++            return YES;
++        }
++
++        /* Command-C copies the whole message, as Control-C does on Windows. Useful
++           for passing on an error nobody could otherwise select. */
++        if (modifiers == NSEventModifierFlagCommand && [[characters lowercaseString] isEqualToString:@"c"])
++        {
++            NSString* title = WineAlertCleanText(caption);
++            NSString* message = WineAlertCleanText(text);
++            NSPasteboard* pasteboard = [NSPasteboard generalPasteboard];
++
++            if ([title length])
++                message = [NSString stringWithFormat:@"%@\n\n%@", title, message];
++            [pasteboard clearContents];
++            [pasteboard setString:message forType:NSPasteboardTypeString];
++            return YES;
++        }
++
++        return NO;
++    }
++
++    - (void) buttonPressed:(id)sender
++    {
++        [self finishWithResponse:(int)[sender tag]];
++    }
++
++    - (void) closeWindow
++    {
++        if (keyMonitor)
++        {
++            [NSEvent removeMonitor:keyMonitor];
++            [keyMonitor release];
++            keyMonitor = nil;
++        }
++
++        if (attentionRequest)
++        {
++            [NSApp cancelUserAttentionRequest:attentionRequest];
++            attentionRequest = 0;
++        }
++
++        /* Closed rather than ordered out: the application controller keeps a list
++           of windows that have been key, and only forgets one when it closes. */
++        [[alert window] close];
++    }
++
++    /* 0 for response means the alert couldn't be shown. The answer is queued
++       before the window closes, so the dialog ends ahead of the focus changes
++       the closing causes, and Windows gives focus back the way it always does. */
++    - (void) finishWithResponse:(int)response
++    {
++        macdrv_event* event;
++
++        if (finished) return;
++        finished = YES;
++
++        event = macdrv_create_event(ALERT_RESPONSE, nil);
++        event->alert_response.alert = (macdrv_alert)self;
++        event->alert_response.hwnd = hwnd;
++        event->alert_response.response = response;
++        [queue postEvent:event];
++        macdrv_release_event(event);
++
++        [self closeWindow];
++    }
++
++    - (void) dismiss
++    {
++        if (finished) return;
++        finished = YES;
++        [self closeWindow];
++    }
++
++@end
++
++
++/***********************************************************************
++ *              macdrv_create_alert
++ *
++ * Show a Windows message box as an alert, without waiting for it. The
++ * button the user picks comes back as an ALERT_RESPONSE event on queue,
++ * carrying its entry from button_ids. The caller owns the result and gives
++ * it back, answered or not, with macdrv_release_alert.
++ */
++macdrv_alert macdrv_create_alert(macdrv_event_queue queue, void *hwnd, int style,
++                                 CFStringRef caption, CFStringRef text,
++                                 CFArrayRef button_titles, const int *button_ids,
++                                 int default_button, int cancel_id)
++{
++@autoreleasepool
++{
++    NSMutableArray* ids = [NSMutableArray array];
++    WineAlert* alert;
++    macdrv_alert a;
++    CFIndex i;
++
++    for (i = 0; i < CFArrayGetCount(button_titles); i++)
++        [ids addObject:[NSNumber numberWithInt:button_ids[i]]];
++
++    alert = [[WineAlert alloc] initWithQueue:(WineEventQueue*)queue hwnd:hwnd style:style
++                                     caption:(NSString*)caption text:(NSString*)text
++                                buttonTitles:(NSArray*)button_titles buttonIDs:ids
++                                defaultIndex:default_button cancelID:cancel_id];
++    if (!alert) return NULL;
++
++    /* The block holds the pointer, not a reference: the caller's reference keeps
++       it alive until macdrv_release_alert, whose block runs after this one. */
++    a = (macdrv_alert)alert;
++    OnMainThreadAsync(^{
++        [(WineAlert*)a show];
++    });
++
++    return a;
++}
++}
++
++/***********************************************************************
++ *              macdrv_release_alert
++ *
++ * Dismiss an alert if it is still up, and release it. On the main thread,
++ * where an NSAlert has to be let go of.
++ */
++void macdrv_release_alert(macdrv_alert a)
++{
++    /* The block holds the pointer, not a reference. Holding one would let the
++       block's own release, which can happen on this thread, be the last. */
++    OnMainThreadAsync(^{
++        WineAlert* alert = (WineAlert*)a;
++        [alert dismiss];
++        [alert release];
++    });
++}
+diff --git a/dlls/winemac.drv/cocoa_app.m b/dlls/winemac.drv/cocoa_app.m
+index 102a5b7..f254d4d 100644
+--- a/dlls/winemac.drv/cocoa_app.m
++++ b/dlls/winemac.drv/cocoa_app.m
+@@ -1821,6 +1821,11 @@ static NSString* WineLocalizedString(unsigned int stringID)
+             {
+                 WineWindow* window = (WineWindow*)[anEvent window];
+                 [self noteKey:keyCode pressed:FALSE];
++                /* A key pressed in a Windows window can be let go over one that isn't,
++                   such as the alert a message box is shown as. Windows saw it go down,
++                   so it has to see it come up, or the key stays held there. */
++                if (![window isKindOfClass:[WineWindow class]])
++                    window = [self frontWineWindow];
+                 if ([window isKindOfClass:[WineWindow class]])
+                     [window postKeyEvent:anEvent];
+             }
+diff --git a/dlls/winemac.drv/event.c b/dlls/winemac.drv/event.c
+index d75e14b..cff33b5 100644
+--- a/dlls/winemac.drv/event.c
++++ b/dlls/winemac.drv/event.c
+@@ -42,6 +42,7 @@ CGRect ime_composition_rect;
+ static const char *dbgstr_event(int type)
+ {
+     static const char * const event_names[] = {
++        "ALERT_RESPONSE",
+         "APP_ACTIVATED",
+         "APP_DEACTIVATED",
+         "APP_QUIT_REQUESTED",
+@@ -117,6 +118,7 @@ static macdrv_event_mask get_event_mask(DWORD mask)
+ 
+     if (mask & QS_POSTMESSAGE)
+     {
++        event_mask |= event_mask_for_type(ALERT_RESPONSE);
+         event_mask |= event_mask_for_type(APP_ACTIVATED);
+         event_mask |= event_mask_for_type(APP_DEACTIVATED);
+         event_mask |= event_mask_for_type(APP_QUIT_REQUESTED);
+@@ -386,6 +388,9 @@ void macdrv_handle_event(const macdrv_event *event)
+ 
+     switch (event->type)
+     {
++    case ALERT_RESPONSE:
++        macdrv_alert_response(event);
++        break;
+     case APP_ACTIVATED:
+         macdrv_app_activated();
+         break;
+@@ -516,7 +521,12 @@ BOOL macdrv_ProcessEvents(DWORD mask)
+         data->current_event->type != QUERY_EVENT_NO_PREEMPT_WAIT &&
+         data->current_event->type != APP_QUIT_REQUESTED &&
+         data->current_event->type != WINDOW_DRAG_BEGIN)
+-        event_mask = 0;  /* don't process nested events */
++    {
++        /* Don't process nested events, except the answer to a message box: a program
++           that shows one while an event is being handled, say from WM_ACTIVATE, would
++           otherwise wait for it forever.  All that answer does is post a message. */
++        event_mask &= event_mask_for_type(ALERT_RESPONSE);
++    }
+ 
+     while (macdrv_copy_event_from_queue(data->queue, event_mask, &event))
+     {
+diff --git a/dlls/winemac.drv/macdrv.h b/dlls/winemac.drv/macdrv.h
+index 13f71f3..56088f1 100644
+--- a/dlls/winemac.drv/macdrv.h
++++ b/dlls/winemac.drv/macdrv.h
+@@ -100,6 +100,12 @@ enum macdrv_window_messages
+     WM_MACDRV_RELEASE_REMOTE_LAYER,
+ };
+ 
++/* Sent by user32 for each message box it is about to show, with the MB_* style
++   as wparam, so that the driver can show it natively instead; and again with
++   lparam 1 when it ends.  At a fixed value, because user32 has its own copy:
++   see dlls/user32/msgbox.c. */
++#define WM_WINE_NATIVE_MSGBOX (WM_WINE_FIRST_DRIVER_MSG + 0xfe0)
++
+ struct macdrv_thread_data
+ {
+     macdrv_event_queue          queue;
+@@ -266,6 +272,11 @@ extern CFArrayRef create_app_icon_images(void);
+ extern void macdrv_status_item_mouse_button(const macdrv_event *event);
+ extern void macdrv_status_item_mouse_move(const macdrv_event *event);
+ 
++extern bool use_native_message_boxes;
++extern LRESULT macdrv_native_msgbox(HWND hwnd, UINT style);
++extern void macdrv_native_msgbox_ended(HWND hwnd);
++extern void macdrv_alert_response(const macdrv_event *event);
++
+ extern void check_retina_status(void);
+ extern void init_user_driver(void);
+ 
+diff --git a/dlls/winemac.drv/macdrv_cocoa.h b/dlls/winemac.drv/macdrv_cocoa.h
+index dedb152..8127b78 100644
+--- a/dlls/winemac.drv/macdrv_cocoa.h
++++ b/dlls/winemac.drv/macdrv_cocoa.h
+@@ -108,6 +108,7 @@ typedef struct macdrv_opaque_metal_view* macdrv_metal_view;
+ typedef struct macdrv_opaque_metal_layer* macdrv_metal_layer;
+ typedef struct macdrv_opaque_metal_swapchain* macdrv_metal_swapchain;
+ typedef struct macdrv_opaque_status_item* macdrv_status_item;
++typedef struct macdrv_opaque_alert* macdrv_alert;
+ struct macdrv_event;
+ struct macdrv_query;
+ 
+@@ -270,6 +271,7 @@ extern void macdrv_free_monitors(struct macdrv_monitor* monitors, int monitor_co
+ 
+ /* event */
+ enum {
++    ALERT_RESPONSE,
+     APP_ACTIVATED,
+     APP_DEACTIVATED,
+     APP_QUIT_REQUESTED,
+@@ -322,6 +324,11 @@ typedef struct macdrv_event {
+     int                 type;
+     macdrv_window       window;
+     union {
++        struct {
++            macdrv_alert    alert;
++            void           *hwnd;
++            int             response;   /* the button's ID, or 0 if the alert couldn't be shown */
++        }                                           alert_response;
+         struct {
+             int reason;
+         }                                           app_quit_requested;
+@@ -471,6 +478,20 @@ extern int macdrv_register_hot_key(macdrv_event_queue q, unsigned int vkey, unsi
+ extern void macdrv_unregister_hot_key(macdrv_event_queue q, unsigned int vkey, unsigned int mod_flags);
+ 
+ 
++/* alert: Windows message boxes shown as native alerts */
++enum {
++    ALERT_STYLE_INFORMATIONAL,
++    ALERT_STYLE_WARNING,
++    ALERT_STYLE_CRITICAL,
++};
++
++extern macdrv_alert macdrv_create_alert(macdrv_event_queue queue, void *hwnd, int style,
++                                        CFStringRef caption, CFStringRef text,
++                                        CFArrayRef button_titles, const int *button_ids,
++                                        int default_button, int cancel_id);
++extern void macdrv_release_alert(macdrv_alert alert);
++
++
+ /* window */
+ struct macdrv_window_features {
+     unsigned int    title_bar:1;
+diff --git a/dlls/winemac.drv/macdrv_main.c b/dlls/winemac.drv/macdrv_main.c
+index ae87cf8..d431156 100644
+--- a/dlls/winemac.drv/macdrv_main.c
++++ b/dlls/winemac.drv/macdrv_main.c
+@@ -57,6 +57,7 @@ bool use_precise_scrolling = true;
+ int gl_surface_mode = GL_SURFACE_IN_FRONT_OPAQUE;
+ bool retina_enabled = false;
+ bool enable_app_nap = false;
++bool use_native_message_boxes = true;
+ 
+ pthread_key_t macdrv_thread_data_key = 0;
+ UINT64 app_icon_callback = 0;
+@@ -372,6 +373,9 @@ static void setup_options(void)
+     if (!get_config_key(hkey, appkey, "EnableAppNap", buffer, sizeof(buffer)))
+         enable_app_nap = IS_OPTION_TRUE(buffer[0]);
+ 
++    if (!get_config_key(hkey, appkey, "UseNativeMessageBoxes", buffer, sizeof(buffer)))
++        use_native_message_boxes = IS_OPTION_TRUE(buffer[0]);
++
+     /* Don't use appkey.  The DPI and monitor sizes should be consistent for all
+        processes in the prefix. */
+     if (!get_config_key(hkey, NULL, "RetinaMode", buffer, sizeof(buffer)))
+diff --git a/dlls/winemac.drv/msgbox.c b/dlls/winemac.drv/msgbox.c
+new file mode 100644
+index 0000000..a5ba88c
+--- /dev/null
++++ b/dlls/winemac.drv/msgbox.c
+@@ -0,0 +1,294 @@
++/*
++ * MACDRV message boxes shown as native alerts
++ *
++ * Copyright 2026 Michael Stoian
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
++ */
++
++/*
++ * user32 builds every message box as a dialog, then offers it to the driver
++ * with WM_WINE_NATIVE_MSGBOX before showing it.  Taking it means showing an
++ * NSAlert with the dialog's caption, text and buttons, and answering 1; user32
++ * then keeps the dialog hidden but runs its modal loop as usual.  The button
++ * the user picks comes back as an ALERT_RESPONSE event on this thread, and is
++ * posted to the dialog as the WM_COMMAND a click on that button would have
++ * sent.  So the owner is disabled, MB_TASKMODAL is honoured and MessageBox
++ * returns exactly as it always did; only what's on screen changes.  When the
++ * dialog ends some other way (EndDialog from the program, DestroyWindow) the
++ * alert is taken down with it.
++ */
++
++#if 0
++#pragma makedep unix
++#endif
++
++#include "config.h"
++
++#include <stdlib.h>
++#include <string.h>
++
++#include "macdrv.h"
++#include "wine/list.h"
++
++WINE_DEFAULT_DEBUG_CHANNEL(macdrv);
++
++
++/* The static control holding the message: dlls/user32/resources.h. */
++#define MSGBOX_IDTEXT 0xffff
++
++/* Set by user32 on a message box whose dialog must stay hidden, and taken off
++   here if the alert can't be shown after all.  Must match dlls/user32/msgbox.c. */
++static const WCHAR native_msgbox_propW[] =
++    {'_','_','w','i','n','e','_','n','a','t','i','v','e','_','m','s','g','b','o','x',0};
++
++/* The order user32 lays message box buttons out in, left to right.  An alert
++   puts the first button it is given rightmost, as the primary action, which
++   is where macOS wants Yes and OK: to the right of No and Cancel. */
++static const UINT button_order[] =
++    { IDYES, IDNO, IDOK, IDABORT, IDRETRY, IDCANCEL, IDIGNORE, IDTRYAGAIN, IDCONTINUE };
++
++struct native_msgbox
++{
++    struct list     entry;
++    HWND            hwnd;
++    macdrv_alert    alert;
++};
++
++static struct list native_msgboxes = LIST_INIT(native_msgboxes);
++static pthread_mutex_t native_msgboxes_mutex = PTHREAD_MUTEX_INITIALIZER;
++
++
++/* "&Yes" as "Yes", and "&&" as "&".  Chinese and Japanese translations put the
++   mnemonic after the label instead, as a trailing "(&Y)"; that goes entirely. */
++static INT strip_mnemonic(WCHAR *text, INT len)
++{
++    INT i, j;
++
++    for (i = 0; i + 3 < len; i++)
++    {
++        if (text[i] == '(' && text[i + 1] == '&' && text[i + 2] != '&' && text[i + 3] == ')')
++        {
++            INT start = i, end = i + 4;
++
++            while (start > 0 && text[start - 1] == ' ') start--;
++            memmove(text + start, text + end, (len - end) * sizeof(WCHAR));
++            len -= end - start;
++            break;
++        }
++    }
++
++    for (i = j = 0; i < len; i++)
++    {
++        if (text[i] == '&' && ++i == len) break;
++        text[j++] = text[i];
++    }
++
++    return j;
++}
++
++
++/* A window's text as a CFString.  Not limited to a title's length: a message
++   box's text can run to a stack trace. */
++static CFStringRef copy_window_text(HWND hwnd, BOOL strip_mnemonics)
++{
++    static const INT max_len = 0x8000;
++    CFStringRef ret;
++    WCHAR *text;
++    INT len;
++
++    if (!(text = malloc(max_len * sizeof(WCHAR)))) return NULL;
++
++    len = NtUserInternalGetWindowText(hwnd, text, max_len);
++    if (strip_mnemonics) len = strip_mnemonic(text, len);
++    ret = CFStringCreateWithCharacters(NULL, (const UniChar *)text, len);
++
++    free(text);
++    return ret;
++}
++
++
++/* Takes a message box off the list.  Whoever gets it back owns its alert. */
++static struct native_msgbox *remove_native_msgbox(HWND hwnd, macdrv_alert alert)
++{
++    struct native_msgbox *msgbox, *found = NULL;
++
++    pthread_mutex_lock(&native_msgboxes_mutex);
++    LIST_FOR_EACH_ENTRY(msgbox, &native_msgboxes, struct native_msgbox, entry)
++    {
++        if (msgbox->hwnd == hwnd && (!alert || msgbox->alert == alert))
++        {
++            list_remove(&msgbox->entry);
++            found = msgbox;
++            break;
++        }
++    }
++    pthread_mutex_unlock(&native_msgboxes_mutex);
++
++    return found;
++}
++
++
++/***********************************************************************
++ *              macdrv_native_msgbox
++ *
++ * Handler for WM_WINE_NATIVE_MSGBOX.  Everything shown is read back from the
++ * dialog user32 has just built rather than recomputed, so its translations
++ * come along, and so does anything that changed it first, such as a CBT hook
++ * relabelling the buttons.  Returns 1 if an alert is on its way.
++ */
++LRESULT macdrv_native_msgbox(HWND hwnd, UINT style)
++{
++    HWND child, text_hwnd = 0, buttons[ARRAY_SIZE(button_order)] = { 0 };
++    int ids[ARRAY_SIZE(button_order)];
++    int count = 0, default_index = -1, cancel_id = 0, alert_style;
++    CFStringRef caption = NULL, text = NULL;
++    struct macdrv_thread_data *thread_data;
++    struct native_msgbox *msgbox = NULL;
++    CFMutableArrayRef titles;
++    LRESULT ret = 0;
++    UINT i;
++
++    /* Help keeps the box open and sends WM_HELP, which only the dialog can do. */
++    if (!use_native_message_boxes || (style & MB_HELP)) return 0;
++
++    for (child = NtUserGetWindowRelative(hwnd, GW_CHILD); child;
++         child = NtUserGetWindowRelative(child, GW_HWNDNEXT))
++    {
++        UINT id = NtUserGetWindowLongPtrW(child, GWLP_ID);
++
++        /* user32 destroys the buttons a style doesn't use, and hides Help. */
++        if (!(NtUserGetWindowLongW(child, GWL_STYLE) & WS_VISIBLE)) continue;
++
++        if (id == MSGBOX_IDTEXT) text_hwnd = child;
++        for (i = 0; i < ARRAY_SIZE(button_order); i++)
++            if (id == button_order[i]) buttons[i] = child;
++    }
++
++    if (!(titles = CFArrayCreateMutable(NULL, ARRAY_SIZE(button_order), &kCFTypeArrayCallBacks)))
++        return 0;
++
++    for (i = 0; i < ARRAY_SIZE(button_order); i++)
++    {
++        CFStringRef title;
++
++        if (!buttons[i]) continue;
++        if (!(title = copy_window_text(buttons[i], TRUE))) goto done;
++        CFArrayAppendValue(titles, title);
++        CFRelease(title);
++
++        if ((NtUserGetWindowLongW(buttons[i], GWL_STYLE) & BS_TYPEMASK) == BS_DEFPUSHBUTTON)
++            default_index = count;
++        if (button_order[i] == IDCANCEL) cancel_id = IDCANCEL;
++        ids[count++] = button_order[i];
++    }
++
++    /* A box with nothing to press could never be closed: leave it to the dialog. */
++    if (!count) goto done;
++    if (default_index < 0) default_index = 0;
++    /* Escape answers a lone OK, as it does on Windows; with no Cancel and more
++       than one button it does nothing. */
++    if (!cancel_id && count == 1 && ids[0] == IDOK) cancel_id = IDOK;
++
++    switch (style & MB_ICONMASK)
++    {
++    case MB_ICONHAND:           alert_style = ALERT_STYLE_CRITICAL; break;
++    case MB_ICONEXCLAMATION:    alert_style = ALERT_STYLE_WARNING; break;
++    default:                    alert_style = ALERT_STYLE_INFORMATIONAL; break;
++    }
++
++    caption = copy_window_text(hwnd, FALSE);
++    if (text_hwnd) text = copy_window_text(text_hwnd, FALSE);
++
++    if (!(msgbox = malloc(sizeof(*msgbox)))) goto done;
++
++    /* The answer comes back through this thread's event queue, so it needs one
++       even if the program hasn't opened a window of its own yet. */
++    thread_data = macdrv_init_thread_data();
++
++    msgbox->hwnd = hwnd;
++    msgbox->alert = macdrv_create_alert(thread_data->queue, hwnd, alert_style, caption, text,
++                                        titles, ids, default_index, cancel_id);
++    if (!msgbox->alert) goto done;
++
++    pthread_mutex_lock(&native_msgboxes_mutex);
++    list_add_tail(&native_msgboxes, &msgbox->entry);
++    pthread_mutex_unlock(&native_msgboxes_mutex);
++
++    TRACE("showing %p as an alert: %s, %d button(s), default %d, cancel %d\n", hwnd,
++          debugstr_cf(caption), count, default_index, cancel_id);
++    msgbox = NULL;
++    ret = 1;
++
++done:
++    free(msgbox);
++    if (caption) CFRelease(caption);
++    if (text) CFRelease(text);
++    CFRelease(titles);
++    return ret;
++}
++
++
++/***********************************************************************
++ *              macdrv_alert_response
++ *
++ * Handler for ALERT_RESPONSE events: the user answered an alert, or it
++ * couldn't be shown and the dialog has to be shown instead.
++ */
++void macdrv_alert_response(const macdrv_event *event)
++{
++    HWND hwnd = event->alert_response.hwnd;
++    int response = event->alert_response.response;
++    struct native_msgbox *msgbox;
++
++    /* Not listed any more: the dialog was ended some other way, which already
++       dismissed the alert. */
++    if (!(msgbox = remove_native_msgbox(hwnd, event->alert_response.alert))) return;
++
++    if (response)
++    {
++        TRACE("%p answered with %d\n", hwnd, response);
++        NtUserPostMessage(hwnd, WM_COMMAND, MAKEWPARAM(response, BN_CLICKED), 0);
++    }
++    else
++    {
++        WARN("%p couldn't be shown as an alert; showing the dialog instead\n", hwnd);
++        NtUserRemoveProp(hwnd, native_msgbox_propW);
++        NtUserShowWindow(hwnd, SW_SHOWNORMAL);
++    }
++
++    macdrv_release_alert(msgbox->alert);
++    free(msgbox);
++}
++
++
++/***********************************************************************
++ *              macdrv_native_msgbox_ended
++ *
++ * A message box's dialog has ended: user32 says so when EndDialog hides it,
++ * and it is called for every window destroyed besides.  One the program
++ * ended itself, from a timer or with a WM_CLOSE, takes its alert with it,
++ * and an answer still on its way for it is ignored.
++ */
++void macdrv_native_msgbox_ended(HWND hwnd)
++{
++    struct native_msgbox *msgbox;
++
++    if (!(msgbox = remove_native_msgbox(hwnd, NULL))) return;
++
++    TRACE("%p ended with its alert still up; dismissing it\n", hwnd);
++    macdrv_release_alert(msgbox->alert);
++    free(msgbox);
++}
+diff --git a/dlls/winemac.drv/window.c b/dlls/winemac.drv/window.c
+index 0d2de29..cf981c2 100644
+--- a/dlls/winemac.drv/window.c
++++ b/dlls/winemac.drv/window.c
+@@ -1267,6 +1267,8 @@ void macdrv_DestroyWindow(HWND hwnd)
+ 
+     TRACE("%p\n", hwnd);
+ 
++    macdrv_native_msgbox_ended(hwnd);
++
+     if (!(data = get_win_data(hwnd))) return;
+ 
+     if (data->drag_event) NtSetEvent(data->drag_event, NULL);
+@@ -1573,6 +1575,13 @@ LRESULT macdrv_WindowMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+             release_win_data(data);
+         }
+         return 0;
++    case WM_WINE_NATIVE_MSGBOX:
++        if (lp)
++        {
++            macdrv_native_msgbox_ended(hwnd);
++            return 0;
++        }
++        return macdrv_native_msgbox(hwnd, wp);
+     }
+ 
+     FIXME("unrecognized window msg %x hwnd %p wp %lx lp %lx\n", msg, hwnd, (unsigned long)wp, lp);

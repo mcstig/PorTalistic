@@ -31,7 +31,7 @@ struct ProminentOperationCard: View {
             .artworkFadesOut()
             .overlay(alignment: .bottomLeading) {
                 VStack(alignment: .leading, spacing: Theme.Spacing.medium) {
-                    Text(operation.type.description.uppercased())
+                    Text(operation.statusDescription.uppercased())
                         .font(Theme.Text.heroEyebrow)
                         .tracking(1.4)
                         .foregroundStyle(.white.opacity(0.75))
@@ -80,7 +80,7 @@ struct OperationCard: View {
                     .truncationMode(.tail)
 
                 HStack(spacing: Theme.Spacing.xsmall) {
-                    PortalBadge(operation.type.description,
+                    PortalBadge(operation.statusDescription,
                                 systemImage: "progress.indicator",
                                 tint: Theme.Palette.brandSecondary)
 
@@ -113,7 +113,7 @@ extension OperationCard {
                     .clipShape(.capsule)
             } else if operationManager.queue.contains(operation), !operation.isCancelled {
                 Button {
-                    operation.cancel()
+                    operationManager.cancel(operation)
                 } label: {
                     Image(systemName: "minus")
                         .padding(2)

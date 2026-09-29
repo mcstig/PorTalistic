@@ -75,7 +75,7 @@ final class FileLocations {
     }
     
     static func isWritableFolder(url: URL) -> Bool { // does the same as FileManager.default.isWritableFile, just a second option
-        let tempFileName = "_Mythic\(UUID().uuidString).temp"
+        let tempFileName = "_\(Branding.name)\(UUID().uuidString).temp"
         let tempFileURL = url.appendingPathComponent(tempFileName)
 
         do {

@@ -51,14 +51,24 @@ import OSLog
     ///
     /// Filter first, because it is linear and the sort is not, and collect the operating
     /// games once before the sort rather than per comparison.
-    func library(inStorefront storefront: Game.Storefront?) -> [Game] {
+    func library(inStorefront storefront: Game.Storefront?,
+                 titleOrder: TitleOrder = .ascending,
+                 installedFirst: Bool = true) -> [Game] {
+        // Installing, updating, repairing — work worth watching, and worth having at the top
+        // while it happens. A *launch* is an operation too, and now that one lives as long as
+        // the game does, including it here meant pressing Play tore the library apart and left
+        // the game you were playing pinned to the front of it for the whole session.
         let operating: Set<Game.ID> = .init(
             GameOperationManager.shared.queue.lazy
-                .filter { $0.isExecuting }
+                .filter { $0.isExecuting && $0.type.modifiesFiles }
                 .map { $0.game.id }
         )
 
-        return GameDataStore.shared.library
+        // Annotated, and not by accident: `library` is a `Set`, so the unannotated `filter`
+        // is `Set`'s, which hashes every game it keeps to build another set — for a
+        // collection that is about to be sorted into an array anyway. The annotation picks
+        // `Sequence.filter`, which is the array this returns.
+        let matching: [Game] = GameDataStore.shared.library
             .filter { game in
                 guard storefront == nil || game.storefront == storefront else { return false }
 
@@ -89,20 +99,40 @@ import OSLog
                     }
                 }
             }
-            .sorted { lhs, rhs in
-                // Busy first, then installed, then by name. Written as one comparator so the
-                // collection is walked once; as separate sorts, each pass had to undo some
-                // of the previous one's work to get here.
-                let lhsOperating = operating.contains(lhs.id)
-                let rhsOperating = operating.contains(rhs.id)
-                if lhsOperating != rhsOperating { return lhsOperating }
 
+        return Self.ordered(matching, operating: operating, titleOrder: titleOrder, installedFirst: installedFirst)
+    }
+
+    /// The order the library is shown in: games being written to first, then — unless it has
+    /// been turned off — installed games before the rest, and by name within each, A to Z or
+    /// Z to A.
+    ///
+    /// One comparator, so the collection is walked once; as separate sorts, each pass had to
+    /// undo some of the previous one's work. Pure and static, so the rule is tested without a
+    /// library or an operation queue.
+    nonisolated static func ordered(_ games: [Game],
+                                    operating: Set<Game.ID>,
+                                    titleOrder: TitleOrder,
+                                    installedFirst: Bool) -> [Game] {
+        games.sorted { lhs, rhs in
+            let lhsOperating = operating.contains(lhs.id)
+            let rhsOperating = operating.contains(rhs.id)
+            if lhsOperating != rhsOperating { return lhsOperating }
+
+            if installedFirst {
                 let lhsInstalled = lhs.isInstalled
                 let rhsInstalled = rhs.isInstalled
                 if lhsInstalled != rhsInstalled { return lhsInstalled }
-
-                return lhs.title < rhs.title
             }
+
+            let comparison = Game.nameOrder(lhs, rhs)
+
+            // The same name on two storefronts: always the same way round, rather than however
+            // the sort happened to leave them, so the pair doesn't swap places on a refresh.
+            if comparison == .orderedSame { return lhs.id < rhs.id }
+
+            return (comparison == .orderedAscending) == (titleOrder == .ascending)
+        }
     }
 
     var suggestedTokens: [SearchToken] {
@@ -122,7 +152,6 @@ import OSLog
         return suggestions
     }
 
-    private var sortOptions: [SortOptions] = [.favorite, .installed, .title]
     private let logger: Logger = .custom(category: "GameListViewModel")
     
     var isUpdatingLibrary: Bool = false
@@ -184,9 +213,16 @@ extension GameListViewModel {
         case list = "List"
     }
 
-    enum SortOptions: CaseIterable, Sendable {
-        case favorite
-        case installed
-        case title
+    /// Which way round the library's names run: A to Z, or Z to A.
+    ///
+    /// Chosen from the Sort menu and kept under ``titleOrderStorageKey``; whether installed
+    /// games come first is kept under ``installedFirstStorageKey``. Both are read by the list
+    /// that draws the library and handed to ``library(inStorefront:titleOrder:installedFirst:)``.
+    enum TitleOrder: String, CaseIterable, Sendable {
+        case ascending
+        case descending
     }
+
+    nonisolated static let titleOrderStorageKey: String = "libraryTitleOrder"
+    nonisolated static let installedFirstStorageKey: String = "libraryInstalledFirst"
 }

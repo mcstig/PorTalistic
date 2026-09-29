@@ -1,10 +1,13 @@
-name: Build Mythic
+name: Build PorTalistic
 on:
   push:
     paths: &workflow_paths
       - '.github/workflows/build.yml'
-      - 'Mythic.xcodeproj/**'
-      - 'Mythic/**'
+      - 'PorTalistic.xcodeproj/**'
+      - 'PorTalistic/**'
+      - 'PorTalisticTests/**'
+      - 'Compatibility/**'
+      - 'Scripts/**'
   pull_request:
     paths: *workflow_paths
   workflow_dispatch:
@@ -15,7 +18,16 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
+  # Cheap, and it catches the faults no unit test can see — a rule with two copies, a
+  # `FileManager` call added to something that draws three hundred times a second. Runs
+  # first because it takes a second and a build takes minutes.
+  invariants:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v5
+    - run: Scripts/check-invariants.sh
+
+  test:
     runs-on: macos-26
     steps:
     - uses: actions/checkout@v5
@@ -24,11 +36,56 @@ jobs:
       with:
         key: xcode-cache-deriveddata-${{ github.workflow }}-${{ github.sha }}
         restore-keys: xcode-cache-deriveddata-${{ github.workflow }}-
-        
+
+    # `test`, not `build`. The regression suite is the point of having this: every test in
+    # PorTalisticTests stands for something that reached a user, and most of them came back
+    # a second time. Signing is left on — the suite runs inside the app, so the test host
+    # has to be loadable, and the project already signs ad-hoc for macOS.
     - run: |
-        xcodebuild -scheme Mythic \
-          CODE_SIGNING_ALLOWED=NO \
+        xcodebuild test \
+          -scheme PorTalistic \
+          -destination 'platform=macOS' \
           SWIFTLINT=NO \
           -parallel-testing-enabled YES \
-          -jobs $(sysctl -n hw.ncpu) \
-          -verbose
+          -jobs $(sysctl -n hw.ncpu)
+
+  # `test` runs Debug, and Debug never runs the optimiser. That gap hid a compiler crash: the
+  # `EarlyPerfInliner` pass recursed until it ran out of stack on one `deinit`, so every Debug
+  # build and all ~125 tests were green while `xcodebuild archive` could not finish at all — and
+  # nothing found out until somebody tried to cut a release.
+  #
+  # So: compile Release too, both architectures, every time. No signing and no archive, because
+  # the point is the compiler, not the certificate — a CI runner has neither a Developer ID nor
+  # any business holding one.
+  release-build:
+    runs-on: macos-26
+    steps:
+    - uses: actions/checkout@v5
+
+    # macOS ships bash 3.2 — Apple never moved past the last GPLv2 release — and its parser
+    # rejects things every modern bash accepts. A `case` inside a command substitution is one:
+    # valid on the Linux runner the invariants job uses, a syntax error on the only machine
+    # that ever cuts a release, and invisible until the release is half-built.
+    #
+    # `/bin/bash` explicitly, not `bash`, which on a runner with Homebrew is version 5.
+    - name: Check the shell scripts against macOS's own bash
+      run: |
+        for script in Scripts/*.sh; do
+          /bin/bash -n "$script" || exit 1
+        done
+        /bin/bash --version | head -1
+
+    - uses: irgaly/xcode-cache@v1
+      with:
+        key: xcode-cache-release-${{ github.workflow }}-${{ github.sha }}
+        restore-keys: xcode-cache-release-${{ github.workflow }}-
+
+    - run: |
+        xcodebuild build \
+          -scheme PorTalistic \
+          -configuration Release \
+          -destination 'generic/platform=macOS' \
+          SWIFTLINT=NO \
+          CODE_SIGNING_ALLOWED=NO \
+          CODE_SIGNING_REQUIRED=NO \
+          -jobs $(sysctl -n hw.ncpu)

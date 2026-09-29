@@ -167,7 +167,24 @@ do {
     fail("couldn't write \(signatureURL.path): \(error.localizedDescription)")
 }
 
+// Written beside the signature so a stale pair can be caught without a crypto library.
+//
+// The failure this prevents is silent and total: a manifest edited after it was signed still
+// looks committed and correct, and every app that fetches it discards it — the remote fix path
+// does nothing at all and says nothing. `Scripts/check-invariants.sh` compares this digest
+// against the file, which is a check that runs in CI with nothing but `sha256sum`.
+let digestURL = manifestURL.appendingPathExtension("sha256")
+let digest = SHA256.hash(data: manifest).map { String(format: "%02x", $0) }.joined()
+
+do {
+    try digest.appending("\n").write(to: digestURL, atomically: true, encoding: .utf8)
+} catch {
+    fail("couldn't write \(digestURL.path): \(error.localizedDescription)")
+}
+
 report("""
     Signed \(manifestURL.lastPathComponent) (\(manifest.count) bytes).
-    Wrote \(signatureURL.lastPathComponent). Commit both — the app fetches them side by side.
+    Wrote \(signatureURL.lastPathComponent) and \(digestURL.lastPathComponent).
+    Commit all three — the app fetches the first two side by side, and the digest is what stops
+    a manifest edited after signing from shipping unverifiable.
     """)

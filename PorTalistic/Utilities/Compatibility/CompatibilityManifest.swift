@@ -75,6 +75,15 @@ struct CompatibilityManifest: Decodable {
         /// See `RuntimeRelease.exposesMetalEscapes`. Absent means false, which is the safe
         /// default: claiming it wrongly gets a game a Direct3D 11 layer that half-works.
         var exposesMetalEscapes: Bool?
+        /// See `RuntimeRelease.hasNativeThirtyTwoBit`. Absent means false, and like
+        /// `exposesMetalEscapes` it is held to the shipped value where ids collide: it decides
+        /// which build a game is sent to, so a fetched file must not be able to claim it.
+        var hasNativeThirtyTwoBit: Bool?
+        /// See `RuntimeRelease.family`. Absent means the build is its own lineage, so it is
+        /// never pruned and never prunes anything — and like the two flags above it is held
+        /// to the shipped value where ids collide, because a family decides which builds get
+        /// deleted and a fetched file must not be able to point that at something else.
+        var family: String?
         var supportLibraries: SupportLibrariesEntry?
 
         struct SupportLibrariesEntry: Decodable {
@@ -91,6 +100,9 @@ struct CompatibilityManifest: Decodable {
         /// One of `RuntimeProfile.GraphicsBackend`'s raw values.
         var graphicsBackend: String?
         var requiresModernNetworking: Bool?
+        var requiresNativeThirtyTwoBit: Bool?
+        /// Winetricks verbs the prefix needs, e.g. `["d3dcompiler_43"]`.
+        var winetricks: [String]?
         var settings: SettingsEntry?
         var note: String?
 
@@ -102,6 +114,11 @@ struct CompatibilityManifest: Decodable {
             var msync: Bool?
             var metalHUD: Bool?
             var avx2: Bool?
+            var captureDisplaysForFullscreen: Bool?
+            /// Wine's own override specs, keyed by DLL: `{"atiadlxx": "d"}`. Use `"n,b"`
+            /// rather than `"n"` — native-only turns a missing file into a game that will
+            /// not launch at all.
+            var dllOverrides: [String: String]?
             /// One of `Wine.WindowsVersion`'s raw values, e.g. `"10"`.
             var windowsVersion: String?
         }
@@ -300,7 +317,9 @@ struct CompatibilityManifest: Decodable {
                                         payloadSubpath: shipped.payloadSubpath,
                                         executableSubpath: shipped.executableSubpath,
                                         summary: entry.summary,
+                                        family: shipped.family,
                                         exposesMetalEscapes: shipped.exposesMetalEscapes,
+                                        hasNativeThirtyTwoBit: shipped.hasNativeThirtyTwoBit,
                                         supportLibraries: shipped.supportLibraries)
                 continue
             }
@@ -311,7 +330,48 @@ struct CompatibilityManifest: Decodable {
             resolved.append(release)
         }
 
-        return resolved
+        return Self.newestFirstWithinFamilies(resolved)
+    }
+
+    /// Newest first within each family, families left where they were.
+    ///
+    /// Catalogue order is preference order, and a manifest's new entries are appended — so a
+    /// newer build of a lineage landed *behind* the one it supersedes, and `ranked()` went on
+    /// choosing the older one. Nothing about that is visible: the download happens, the build
+    /// installs, and it is simply never selected.
+    ///
+    /// Reordered within the family's own positions rather than globally, because the order
+    /// *between* families is a deliberate preference — the bundled engine's path first, DXMT
+    /// ahead of wined3d for Direct3D 11 — and sorting the whole list by version would throw
+    /// that away.
+    private static func newestFirstWithinFamilies(_ releases: [RuntimeRelease]) -> [RuntimeRelease] {
+        var positionsByFamily: [String: [Int]] = .init()
+
+        for (index, release) in releases.enumerated() {
+            positionsByFamily[release.resolvedFamily, default: []].append(index)
+        }
+
+        var ordered = releases
+
+        for (_, positions) in positionsByFamily where positions.count > 1 {
+            let sorted = positions
+                .map { releases[$0] }
+                .enumerated()
+                .sorted { left, right in
+                    // Index as the tie-break, so equal versions keep the order they arrived in
+                    // rather than depending on how the sort happens to be implemented.
+                    left.element.version == right.element.version
+                        ? left.offset < right.offset
+                        : left.element.version > right.element.version
+                }
+                .map(\.element)
+
+            for (position, release) in zip(positions, sorted) {
+                ordered[position] = release
+            }
+        }
+
+        return ordered
     }
 
     /// A new runtime entry, if it passes every check. `nil` and a log line otherwise: one bad
@@ -359,7 +419,9 @@ struct CompatibilityManifest: Decodable {
                      payloadSubpath: entry.payloadSubpath,
                      executableSubpath: entry.executableSubpath,
                      summary: entry.summary,
+                     family: entry.family,
                      exposesMetalEscapes: entry.exposesMetalEscapes ?? false,
+                     hasNativeThirtyTwoBit: entry.hasNativeThirtyTwoBit ?? false,
                      supportLibraries: entry.supportLibraries.map {
                          .init(downloadURL: $0.downloadURL,
                                sha256: $0.sha256.lowercased(),
@@ -405,6 +467,7 @@ struct CompatibilityManifest: Decodable {
                          titles: titles,
                          graphicsBackend: entry.graphicsBackend.flatMap(RuntimeProfile.GraphicsBackend.init(rawValue:)),
                          requiresModernNetworking: entry.requiresModernNetworking,
+                         requiresNativeThirtyTwoBit: entry.requiresNativeThirtyTwoBit,
                          settings: .init(dxvk: entry.settings?.dxvk,
                                          dxvkAsync: entry.settings?.dxvkAsync,
                                          retinaMode: entry.settings?.retinaMode,
@@ -412,8 +475,11 @@ struct CompatibilityManifest: Decodable {
                                          msync: entry.settings?.msync,
                                          metalHUD: entry.settings?.metalHUD,
                                          avx2: entry.settings?.avx2,
+                                         captureDisplaysForFullscreen: entry.settings?.captureDisplaysForFullscreen,
                                          windowsVersion: entry.settings?.windowsVersion
-                                            .flatMap(Wine.WindowsVersion.init(rawValue:))),
+                                            .flatMap(Wine.WindowsVersion.init(rawValue:)),
+                                         dllOverrides: entry.settings?.dllOverrides),
+                         winetricks: entry.winetricks ?? [],
                          note: entry.note)
         }
     }

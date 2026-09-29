@@ -67,12 +67,15 @@ extension Bundle {
     }
     
     /**
-     A directory within games where Mythic will download to by default.
+     A directory within games where the app downloads to by default.
      (Force-unwrappable)
+
+     Named after the app. A library already installed in upstream's `Games/Mythic` keeps
+     installing there: see `Migrator.v0_6_0.keepUpstreamGamesFolderIfInUse()`.
      */
     static var appGames: URL? {
         if let games = FileLocations.globalGames {
-            let appGamesURL = games.appending(path: "Mythic")
+            let appGamesURL = games.appending(path: Branding.name)
             do {
                 try FileManager.default.createDirectory(
                     at: appGamesURL,

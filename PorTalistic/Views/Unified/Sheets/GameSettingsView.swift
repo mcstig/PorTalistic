@@ -594,6 +594,15 @@ private extension GameSettingsView {
             .init(label: String(localized: "AVX2"),
                   help: String(localized: "Report AVX2 support to the game. A few refuse to start without it."),
                   override: \.avx2, container: \.avx2),
+            .init(label: String(localized: "Capture the display for fullscreen"),
+                  help: String(localized: """
+                      Let a fullscreen game have the display to itself. Off, Wine gives it a \
+                      window the size of the screen and the menu bar and Dock stay on top of \
+                      it. On is properly fullscreen, but it blanks every other attached \
+                      display for as long as the game is — capturing one display captures all \
+                      of them.
+                      """),
+                  override: \.captureDisplaysForFullscreen, container: \.captureDisplaysForFullscreen),
             .init(label: String(localized: "Metal HUD"),
                   help: String(localized: "Apple's frame-rate overlay, drawn on top of the game."),
                   override: \.metalHUD, container: \.metalHUD)
@@ -650,6 +659,7 @@ private extension GameSettingsView {
                                                            msync: settings.msync,
                                                            metalHUD: settings.metalHUD,
                                                            avx2: settings.avx2,
+                                                           captureDisplaysForFullscreen: settings.captureDisplaysForFullscreen,
                                                            windowsVersion: settings.windowsVersion)
 
         return floor.overlaid(with: profile?.settings ?? .init())

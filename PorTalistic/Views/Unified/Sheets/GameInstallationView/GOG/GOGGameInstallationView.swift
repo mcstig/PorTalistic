@@ -49,23 +49,62 @@ struct GOGGameInstallationView: View {
         return attributes?[.systemFreeSize] as? Int64
     }
 
+    /// The probe currently asking gogdl about this game, and which generation of the question
+    /// it is answering.
+    @State private var metadataProbe: Task<Void, Never>?
+    @State private var probeGeneration: Int = 0
+
+    /// The Install button's own busy state, rather than the metadata lookup's. Sharing them
+    /// meant pressing Install wrote the probe's flag and `OperationButton`'s `defer` cleared it
+    /// again the moment the action returned, stopping a spinner that belonged to something
+    /// else.
+    @State private var isStartingInstallation: Bool = false
+
+    /// Ask gogdl about this game, for the platform now selected.
+    ///
+    /// The same fault the Epic sheet had, in the same shape. This sheet opens with `platform`
+    /// at a default, asks about that default straight away, and only afterwards works out which
+    /// platforms the game actually offers — and the request made once the real platform was
+    /// known used to be rejected by `guard !isFetchingMetadata` because the first one had not
+    /// come back yet. The answer left on screen was about a build that does not exist.
     private func spawnMetadataFetchTask() {
-        guard !isFetchingMetadata else { return }
+        // Waits for the platforms to be known, not for the selection to be among them —
+        // requiring that meant a game whose list came back empty was never asked about at all.
+        guard supportedPlatforms != nil else { return }
 
-        Task(priority: .userInitiated) { [game, platform] in
+        metadataProbe?.cancel()
+        probeGeneration += 1
+        let generation = probeGeneration
+
+        let probe = Task(priority: .userInitiated) { [game, platform] in
             withAnimation { isFetchingMetadata = true }
-            defer { withAnimation { isFetchingMetadata = false } }
 
-            language = await GOGDL.installLanguage()
+            let fetchedLanguage = await GOGDL.installLanguage()
 
             do {
-                metadata = try await GOGDL.metadata(for: game, platform: platform)
+                let fetched = try await GOGDL.metadata(for: game, platform: platform)
+
+                // A newer question has been asked; its answer is the one that belongs here.
+                guard generation == probeGeneration else { return }
+
+                language = fetchedLanguage
+                metadata = fetched
                 metadataError = nil
             } catch {
+                guard generation == probeGeneration else { return }
+
+                language = fetchedLanguage
                 metadata = nil
                 metadataError = error
             }
+
+            withAnimation { isFetchingMetadata = false }
         }
+        metadataProbe = probe
+
+        // No watchdog. The same thirty-second one was added here and it was wrong for the same
+        // reason: these lookups renew a storefront login before they answer, and being slow is
+        // not being stuck. Bounding them belongs to the process that runs them.
     }
 
     var body: some View {
@@ -117,11 +156,19 @@ struct GOGGameInstallationView: View {
                             }
                         }
                         .task(priority: .userInitiated) {
-                            // Sorted so a native build wins where GOG ships one.
-                            let platforms = game.getSupportedPlatforms()?
+                            // Sorted so a native build wins where GOG ships one, and falling
+                            // back to every platform rather than to none: an undetectable list
+                            // left the picker empty and the game un-installable, where offering
+                            // both and letting gogdl refuse the wrong one costs nothing.
+                            let retrieved = game.getSupportedPlatforms() ?? .init()
+                            let platforms = (retrieved.isEmpty ? Set(Game.Platform.allCases) : retrieved)
                                 .sorted(by: { $0 == .macOS && $1 != .macOS })
+
                             supportedPlatforms = platforms
-                            self.platform = platforms?.first ?? self.platform
+
+                            if !platforms.contains(self.platform), let first = platforms.first {
+                                self.platform = first
+                            }
                         }
 
                         LabeledContent {
@@ -152,6 +199,15 @@ struct GOGGameInstallationView: View {
 
                 Spacer()
 
+                // The lookup's own spinner, for the same reason as Epic's: it used to ride on
+                // the Install button, and moving that button to its own flag left nothing
+                // drawing it.
+                if isFetchingMetadata {
+                    ProgressView()
+                        .controlSize(.small)
+                        .progressViewStyle(.circular)
+                }
+
                 if let availableSpace = availableSpaceInBytes,
                    let installSize = installSizeInBytes {
                     // Nothing to draw — the size is a badge in the header now. This only
@@ -176,12 +232,13 @@ struct GOGGameInstallationView: View {
                         }
                 }
 
-                // The same control Epic's sheet uses: the spinner rides beside the label
-                // while the size lookup is in flight, and the button is disabled until it
-                // lands.
+                // The same control Epic's sheet uses. The spinner here is this button's own:
+                // it used to ride on `isFetchingMetadata`, which belongs to the size lookup —
+                // and the comment that used to sit here claimed the button was disabled until
+                // that landed, which it never was.
                 OperationButton(
                     "Install",
-                    operating: $isFetchingMetadata,
+                    operating: $isStartingInstallation,
                     successful: .constant(nil),
                     placement: .leading
                 ) {
@@ -200,7 +257,11 @@ struct GOGGameInstallationView: View {
                 .disabled(supportedPlatforms == nil)
                 .disabled(!FileManager.default.isWritableFile(atPath: baseURL.path))
                 .onAppear(perform: { spawnMetadataFetchTask() })
+                .onChange(of: game, { spawnMetadataFetchTask() })
                 .onChange(of: platform, { spawnMetadataFetchTask() })
+                // Not redundant: when the game's only platform is the one `platform` already
+                // holds, resolving the list changes nothing and the probe would never run.
+                .onChange(of: supportedPlatforms, { spawnMetadataFetchTask() })
                 .buttonStyle(.portalProminent)
             }
             .padding(.top)

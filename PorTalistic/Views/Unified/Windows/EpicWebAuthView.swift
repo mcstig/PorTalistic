@@ -235,7 +235,7 @@ private struct EpicInterceptorWebView: NSViewRepresentable {
     func makeNSView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
 
-        config.websiteDataStore = WKWebsiteDataStore(forIdentifier: Legendary.webDataStoreIdentifier)
+        config.websiteDataStore = WebDataStore.persistent(for: Legendary.webDataStoreIdentifier)
 
         // Appended to WebKit's own user agent rather than replacing it, which produces a
         // genuine Safari-shaped string without this having to invent — and then maintain —

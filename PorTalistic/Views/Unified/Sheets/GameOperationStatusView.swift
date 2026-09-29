@@ -41,13 +41,17 @@ struct GameOperationStatusView: View {
                         Text(operation.progressKVOBridge.fractionCompleted.formatted(.percent))
                     }
 
-                    if operation.type.modifiesFiles {
+                    // Chunks, not files. legendary's `Progress: X% (a/b)` counts chunk tasks, and
+                    // labelling that "Files" read as a game made of tens of thousands of small files
+                    // — which sent a slow-download diagnosis in the wrong direction. Shown only when
+                    // something reports it: GOG does not, and "(0/0)" said nothing.
+                    if operation.type.modifiesFiles, let total = operation.progressKVOBridge.fileTotalCount, total > 0 {
                         HStack {
-                            Label("Files", systemImage: "folder")
-                            
+                            Label("Chunks", systemImage: "square.stack.3d.up")
+
                             Spacer()
-                            
-                            Text("(\(operation.progressKVOBridge.fileCompletedCount ?? 0)/\(operation.progressKVOBridge.fileTotalCount ?? 0))")
+
+                            Text("\(operation.progressKVOBridge.fileCompletedCount ?? 0) of \(total)")
                         }
                     }
 
@@ -68,6 +72,29 @@ struct GameOperationStatusView: View {
                             Spacer()
 
                             Text("\(ByteCountFormatter.string(fromByteCount: Int64(throughput), countStyle: .file))/s")
+                        }
+                    }
+
+                    // What explains a dip, read as a pair. Full cache and fast disk writes: the
+                    // disk is the limit. Full cache and disk writes near zero: waiting on one slow
+                    // chunk, so the connection. Low cache and a low speed: the connection.
+                    if let cache = operation.progressKVOBridge.downloadCacheUsage {
+                        HStack {
+                            Label("Download Cache", systemImage: "memorychip")
+
+                            Spacer()
+
+                            Text(ByteCountFormatter.string(fromByteCount: cache, countStyle: .memory))
+                        }
+                    }
+
+                    if let disk = operation.progressKVOBridge.diskWriteThroughput {
+                        HStack {
+                            Label("Writing to Disk", systemImage: "internaldrive")
+
+                            Spacer()
+
+                            Text("\(ByteCountFormatter.string(fromByteCount: disk, countStyle: .file))/s")
                         }
                     }
                 }

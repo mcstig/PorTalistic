@@ -31,7 +31,7 @@ struct EpicGamesGameImportView: View {
     private var installableGames: [EpicGamesGame] {
         gameDataStore.library
             .compactMap { $0 as? EpicGamesGame }
-            .sorted(by: { $0.title < $1.title })
+            .sorted(by: { Game.nameOrder($0, $1) == .orderedAscending })
             .filter({ $0.installationState == .uninstalled })
     }
     

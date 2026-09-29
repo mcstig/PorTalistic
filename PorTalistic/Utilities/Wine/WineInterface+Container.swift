@@ -120,8 +120,39 @@ extension Wine.Container {
         /// going to get — which is the small window Horizon Chase Turbo kept opening in,
         /// every time, after Retina Mode was defaulted off and the 192 that only made sense
         /// with it on stayed behind.
-        var displayScaling: Int { retinaMode ? 192 : 96 }
+        var displayScaling: Int { Self.displayScaling(forRetinaMode: retinaMode) }
+
+        /// The DPI that has to accompany a given Retina Mode.
+        ///
+        /// A function as well as a property because the caller that matters most doesn't have
+        /// a `Settings` to ask: ``Wine/toggleRetinaMode(containerURL:toggle:)`` is handed a
+        /// bare `Bool`. This rule had three copies — there, in `Provisioner.apply`'s
+        /// `expectedScaling`, and here — and the small window came back the moment they
+        /// stopped agreeing. One function, three call sites.
+        static func displayScaling(forRetinaMode retinaMode: Bool) -> Int {
+            retinaMode ? 192 : 96
+        }
         var avx2: Bool
+
+        /// Whether a fullscreen game gets the display to itself.
+        ///
+        /// Wine's `CaptureDisplaysForFullscreen`. With it off — Wine's default and now ours — a
+        /// "fullscreen" game is a window the size of the screen, with the macOS menu bar and
+        /// the Dock drawn on top of it. That is not a game ignoring its own settings; it is the
+        /// driver never taking the display, and clicking into the game raises the window and
+        /// makes it look fixed, which is how it hides.
+        ///
+        /// **Off, having been tried on.** Turning it on does exactly what it says: games that
+        /// ask for fullscreen cover the screen properly. It also blanks every other attached
+        /// display for as long as the game is fullscreen, because capturing a display captures
+        /// all of them — there is no "just this one". On a two-monitor desk that trade is worse
+        /// than the menu bar: a browser or a guide on the second screen going black is a real
+        /// loss, and the Dock over a corner of the game is an annoyance. Windows behaves the
+        /// other way, which is why this was worth trying.
+        ///
+        /// Kept as a setting rather than removed, per game, for anyone who would rather have
+        /// the screen than the second monitor.
+        var captureDisplaysForFullscreen: Bool
 
         /// wined3d's command-stream thread, which Wine calls CSMT.
         ///
@@ -153,6 +184,7 @@ extension Wine.Container {
              windowsVersion: Wine.WindowsVersion = .win11,
              scaling: Int = 96,
              avx2: Bool = true,
+             captureDisplaysForFullscreen: Bool = false,
              commandStreamThread: Bool = true,
              runtimeID: String? = nil) {
             self.runtimeID = runtimeID
@@ -163,6 +195,7 @@ extension Wine.Container {
             self.dxvkAsync = dxvkAsync
             self.windowsVersion = windowsVersion
             self.scaling = scaling
+            self.captureDisplaysForFullscreen = captureDisplaysForFullscreen
             self.commandStreamThread = commandStreamThread
             self.avx2 = {
                 if #available(macOS 15.0, *) {
@@ -190,6 +223,7 @@ extension Wine.Container.Settings: Codable {
         case windowsVersion
         case scaling
         case avx2
+        case captureDisplaysForFullscreen
         case commandStreamThread
         case runtimeID
     }
@@ -206,6 +240,12 @@ extension Wine.Container.Settings: Codable {
         self.windowsVersion = try container.decodeIfPresent(Wine.WindowsVersion.self, forKey: .windowsVersion) ?? self.windowsVersion
         self.scaling = try container.decodeIfPresent(Int.self, forKey: .scaling) ?? self.scaling
         self.avx2 = try container.decodeIfPresent(Bool.self, forKey: .avx2) ?? self.avx2
+        // Absent from every container written before this existed, and from every container
+        // written while it briefly defaulted to `true` — in both cases they take the `init()`
+        // default below, and the prefix's registry is rewritten before the next launch anyway.
+        self.captureDisplaysForFullscreen = try container.decodeIfPresent(Bool.self,
+                                                                          forKey: .captureDisplaysForFullscreen)
+            ?? self.captureDisplaysForFullscreen
         self.commandStreamThread = try container.decodeIfPresent(Bool.self, forKey: .commandStreamThread) ?? self.commandStreamThread
         self.runtimeID = try container.decodeIfPresent(String.self, forKey: .runtimeID)
     }

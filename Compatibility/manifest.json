@@ -4,6 +4,7 @@
   "runtimes": [
     {
       "id": "wine-stable-11.0",
+      "family": "wine-stable",
       "name": "Wine Stable 11.0",
       "version": "11.0.0",
       "downloadURL": "https://github.com/Gcenx/macOS_Wine_builds/releases/download/11.0_1/wine-stable-11.0_1-osx64.tar.xz",
@@ -14,6 +15,7 @@
     },
     {
       "id": "wine-sikarugir-11.0",
+      "family": "wine-sikarugir",
       "name": "Sikarugir Wine 11.0",
       "version": "11.0.0",
       "downloadURL": "https://github.com/Sikarugir-App/Engines/releases/download/v1.0/WS11WineSikarugir11.0.tar.xz",
@@ -27,6 +29,19 @@
         "sha256": "f35b11837c79ca5ca23a0190784b44a5dd40deacf59bae4366e6032dcd4998fa",
         "payloadSubpath": "Template-1.0.14.app/Contents/Frameworks"
       }
+    },
+    {
+      "id": "wine-dxmt-11.16",
+      "family": "wine-dxmt",
+      "name": "Wine 11.16 (DXMT)",
+      "version": "11.16.0",
+      "downloadURL": "https://github.com/mcstig/PorTalistic/releases/download/wine-dxmt-11.16/wine-dxmt-11.16.tar.xz",
+      "sha256": "55248a10f9771bb5d73e7fcaac3d52ca40414cb8601c4bb9bc330fbb2e81c54b",
+      "payloadSubpath": "wine-dxmt-11.16",
+      "executableSubpath": "bin/wine",
+      "summary": "Wine 11.16 from winehq source with CodeWeavers' winemac.drv patch, so a Direct3D 11 swap chain has a CAMetalLayer to present into. Built rather than downloaded because no published build has both that and a prefix that boots here. Also the only build with a real i386 architecture (--enable-archs=i386,x86_64) rather than 32-on-64, which is what 32-bit games with deep call stacks need. Compiled without gnutls, so Windows code running inside the installation gets no TLS — which games do not use, because the store client and the launcher both live outside it.",
+      "exposesMetalEscapes": true,
+      "hasNativeThirtyTwoBit": true
     }
   ],
 
@@ -38,10 +53,25 @@
       "note": "Retina Mode off: with it on, Prey's 2048×1330 fullscreen is rendered into a quarter of a 4096×2660 desktop and every display gets captured."
     },
     {
+      "ids": ["epicGames:bc2c95c6ff564a16b26644f1d3ac3c55"],
+      "titles": ["BioShock Remastered"],
+      "requiresNativeThirtyTwoBit": true,
+      "winetricks": ["d3dcompiler_43", "d3dcompiler_47"],
+      "settings": {
+        "dllOverrides": {
+          "atiadlxx": "d",
+          "d3dcompiler_43": "n,b",
+          "d3dcompiler_47": "n,b"
+        }
+      },
+      "note": "AMD's Display Library disabled: the game asks Wine's atiadlxx for the graphics adapter, Wine's copy is a stub that succeeds without producing a context, and the game reads through the null it is handed — 'Unhandled page fault on read access to 00000050'. The logo appears and the process is gone. Disabled rather than stubbed differently, because a DLL that fails to load sends the game down its 'no such hardware' path, which is the truth on a Mac. Native d3dcompiler as well, which is what the winetricks verbs are for: past the adapter query the game compiles its shaders at runtime and Wine's own HLSL compiler cannot ('Unhandled instruction type HLSL_IR_JUMP' for every shader with a branch), then faults on the shader thread two disclaimers in. It imports 43, not 47 — BioshockHD.exe names D3DCOMPILER_43.dll in its import table — and both are 'n,b', never a bare 'n': 'n' is native-only, so a failed verb download would mean the game will not start at all rather than merely losing the fix."
+    },
+    {
       "ids": ["gog:1164193173"],
       "titles": ["Blades of Time"],
-      "settings": { "retinaMode": true },
-      "note": "Retina Mode on. It is the opposite of what Prey wants in the same container: with it off, this reaches wined3d's fullscreen path — different code from the windowed one — and crashes there with a stack overflow on the render thread."
+      "requiresNativeThirtyTwoBit": true,
+      "settings": { "retinaMode": false },
+      "note": "Needs a Wine with a real i386 architecture, which on this catalogue means the DXMT build. On the bundled engine — CrossOver-derived and therefore 32-on-64, where every Win32 call reaches the 64-bit side through a thunk and the frames come out deeper than this game was built for — pressing Escape through the opening cinematic exhausts the main thread's stack: an exception frame twelve kilobytes below the bottom of a 1MB stack, then 'NtRaiseException Exception frame is not in stack limits'. Retina Mode off, unlike the earlier note here: turning it on also stopped the crash, but only by taking every attached display into backing mode, which blanks the second monitor. The runtime is the fix; Retina Mode was a symptom."
     }
   ]
 }

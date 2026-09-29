@@ -90,6 +90,13 @@ private struct GameDetailContent: View {
         .gameSettingsSheet(game: $game, isPresented: $isSettingsPresented)
         .gameUninstallSheet(game: $game, isPresented: $isUninstallPresented)
         .task(id: game.id) { await load() }
+        // The page resolves a profile once, and the recovery loop rewrites what that profile is
+        // made of after a game exits — so what the app had just decided only showed up if you
+        // left the page and came back to it. Only the profile: the size on disk is a walk of
+        // the whole install folder and nothing about it has changed.
+        .onChange(of: RecoveryCoordinator.shared.journalRevision) { _, _ in
+            Task { await loadProfile() }
+        }
         .task(priority: .background) {
             discordRPC.setPresence({
                 var presence: RichPresence = .init()
@@ -147,15 +154,23 @@ private struct GameDetailContent: View {
                 GameCard.MenuView(game: $game,
                                   isSettingsPresented: $isSettingsPresented,
                                   isUninstallPresented: $isUninstallPresented)
-                    .buttonStyle(.portalQuietCompact)
+                    .buttonStyle(.portalFloating)
                     .menuIndicator(.hidden)
                     .fixedSize()
-                    .foregroundStyle(.white)
-                    .padding(Theme.Spacing.small)
-                    .floatingCapsule(interactive: true)
 
-                GameCard.FavouriteToggle(game: $game)
+                GameCard.FavouriteToggle(game: $game, isOnHero: true)
             }
+
+            // What the game is doing, if anything: the same control the cards carry, so a
+            // download is visible on the page most likely to be open while it runs. Until now
+            // this page showed nothing at all — a game installing looked, from here, exactly
+            // like one that had never been asked for.
+            HStack(spacing: Theme.Spacing.small) {
+                GameCard.OperationStatus(game: $game, withLabel: true)
+
+                ConfigurationStatus(game: $game)
+            }
+            .frame(maxWidth: 520, alignment: .leading)
         }
         .padding(Theme.Spacing.xlarge)
     }
@@ -214,7 +229,8 @@ private struct GameDetailContent: View {
                         Button("Settings", systemImage: "gear") { isSettingsPresented = true }
                         GameCard.Buttons.UpdateButton(game: $game, withLabel: true)
                         GameCard.Buttons.VerificationButton(game: $game, withLabel: true)
-                        Button("Uninstall", systemImage: "xmark.bin") { isUninstallPresented = true }
+                        GameCard.Buttons.UninstallButton(game: $game, withLabel: true,
+                                                         isUninstallSheetPresented: $isUninstallPresented)
                     }
                     .buttonStyle(.portalCompact)
                     .controlSize(.small)
@@ -225,8 +241,12 @@ private struct GameDetailContent: View {
 
     // MARK: Loading
 
-    private func load() async {
+    private func loadProfile() async {
         profile = await Provisioner.shared.profile(for: game)
+    }
+
+    private func load() async {
+        await loadProfile()
 
         guard case .installed(let location, _) = game.installationState else {
             sizeOnDisk = nil
@@ -259,6 +279,43 @@ private struct GameDetailContent: View {
             total += Int64(size)
         }
         return total
+    }
+}
+
+/// What a launch is doing to this game's configuration, while it is doing it.
+///
+/// "Starting" says the game is on its way. It does not say that the app is, at that moment,
+/// putting a configuration it decided after the last failure into the container — which is the
+/// slow half of pressing Play, and the half somebody who has watched a game fail four times is
+/// actually waiting on. Shown beside the launch's own status, and only while a launch is live.
+private struct ConfigurationStatus: View {
+    @Binding var game: Game
+
+    @Bindable private var operationManager: GameOperationManager = .shared
+
+    var body: some View {
+        // Not while it is being force-quit: "Running current configuration" beside "Force
+        // quitting" is two statements about a launch that is ending.
+        if let operation = operationManager.launchOperation(for: game), !operation.isForceQuitting {
+            HStack(spacing: Theme.Spacing.small) {
+                if operation.isApplyingConfiguration {
+                    ProgressView()
+                        .controlSize(.small)
+
+                    Text("Applying new configuration")
+                } else {
+                    Image(systemName: "gearshape")
+                        .imageScale(.small)
+
+                    Text("Running current configuration")
+                }
+            }
+            .font(.callout)
+            .lineLimit(1)
+            .help(operation.pendingConfigurationChange ?? String(localized: "Nothing about how this game runs changed since the last time it was started."))
+            .padding(Theme.Spacing.small)
+            .artworkChip(in: .capsule)
+        }
     }
 }
 
@@ -296,28 +353,55 @@ struct RuntimeProfilePanel: View {
                     }
                 }
 
-                if profile.reasons.isEmpty {
+                if profile.reasons.isEmpty, !profile.hasExhaustedRecovery {
                     Text("Nothing in this game's files said how it renders, so it gets the runtime's own defaults.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 } else {
                     VStack(alignment: .leading, spacing: Theme.Spacing.small) {
-                        ForEach(profile.reasons, id: \.self) { reason in
-                            HStack(alignment: .firstTextBaseline, spacing: Theme.Spacing.small) {
-                                Image(systemName: "checkmark.circle")
-                                    .foregroundStyle(Theme.Palette.brandSecondary)
-                                    .imageScale(.small)
+                        ForEach(Array(Self.rows(of: profile.reasons).enumerated()), id: \.offset) { _, reason in
+                            row(reason, systemImage: "checkmark.circle", tint: Theme.Palette.brandSecondary)
+                        }
 
-                                Text(reason)
-                                    .font(.callout)
-                                    .foregroundStyle(.secondary)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
+                        if profile.hasExhaustedRecovery {
+                            // Deliberately not a checkmark: everything above is something that is
+                            // true of this game's setup, and this is the app saying it has nothing
+                            // left to try. A notification said so once, at a moment nobody may
+                            // have been watching; this is where it stays said.
+                            row(String(localized: "PorTalistic has tried every configuration it knows for this game. Nothing else it can change on its own is likely to help."),
+                                systemImage: "exclamationmark.triangle",
+                                tint: .orange)
                         }
                     }
                 }
             }
         }
+    }
+
+    private func row(_ text: String, systemImage: String, tint: Color) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: Theme.Spacing.small) {
+            Image(systemName: systemImage)
+                .foregroundStyle(tint)
+                .imageScale(.small)
+
+            Text(text)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// One row per line, rather than one row per reason.
+    ///
+    /// A reason can carry more than one line — what the app learns about a game is written as
+    /// paragraphs — and a multi-line `Text` gets the row's checkmark against its first line and
+    /// nothing against the rest, which reads as though some of them are switched off. They are
+    /// all equally true; they were one string.
+    static func rows(of reasons: [String]) -> [String] {
+        reasons
+            .flatMap { $0.components(separatedBy: .newlines) }
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
     }
 
     static func sourceDescription(_ source: RuntimeProfile.Source) -> String {

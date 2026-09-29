@@ -23,6 +23,13 @@ import OSLog
  later improve an existing game without the profile having to change.
  */
 struct RuntimeProfile: Codable, Hashable {
+    /// Everything but ``hasExhaustedRecovery``, which is this machine's history with a game
+    /// rather than anything about the game — the doc comment on it says it is never published,
+    /// and this is what makes that true rather than a promise.
+    enum CodingKeys: String, CodingKey {
+        case requirements, graphicsBackend, settings, winetricks, source, reasons
+    }
+
     /// What a runtime has to be able to do for this game.
     var requirements: Requirements
 
@@ -35,8 +42,25 @@ struct RuntimeProfile: Codable, Hashable {
     /// has. Every field optional: a profile states only what it has an opinion about.
     var settings: SettingsOverride
 
+    /// Winetricks verbs this game's prefix needs, installed once per container.
+    ///
+    /// Prefix *preparation*, not a per-launch setting, which is why it lives here rather than
+    /// in ``SettingsOverride``: it downloads and installs real DLLs, takes a while, and only
+    /// has to happen once. A DLL override alone is not enough for the cases that need this —
+    /// `d3dcompiler_47=n` with no native file present falls straight through to Wine's own
+    /// builtin and changes nothing.
+    var winetricks: [String] = []
+
     /// Where the decision came from, most authoritative first.
     var source: Source
+
+    /// Whether the app has run out of configurations to try for this game.
+    ///
+    /// Not part of the decision, and shown beside it: the page that explains how a game runs is
+    /// where somebody looks when it doesn't, and "there is nothing else I know to try" is the
+    /// one thing that page could not say. Never published — it is about this machine's history
+    /// with the game, not about the game.
+    var hasExhaustedRecovery: Bool = false
 
     /// Why, in plain words, one line per reason.
     ///
@@ -60,12 +84,70 @@ struct RuntimeProfile: Codable, Hashable {
         /// anything network-heavy trips over it constantly.
         var modernNetworking: Bool = false
 
+        /// A Wine with a real 32-bit architecture, rather than CrossOver's 32-on-64.
+        ///
+        /// Not the same claim as ``thirtyTwoBit``, which only says the game *is* 32-bit —
+        /// every runtime here can start one of those. This says the game cannot survive
+        /// 32-on-64, where each Win32 call reaches the 64-bit side through a thunk and the
+        /// frames come out deeper than the program was built for. A game with a 1MB main
+        /// thread stack that fits on Windows can run out of it here, and what that looks like
+        /// is not a tidy error: Blades of Time exhausts the stack on its fullscreen path and
+        /// Wine cannot even dispatch the guard-page fault, because there is no stack left to
+        /// build a handler frame on.
+        ///
+        /// Only a curated entry sets this. Nothing in an executable says "I will overflow" —
+        /// it is something a game has to be observed doing.
+        var nativeThirtyTwoBit: Bool = false
+
         /// Native Vulkan, which no runtime here provides. Recorded so the profile can say so
         /// rather than quietly choosing something that won't work.
         var nativeVulkan: Bool = false
+
+        /// The Direct3D implementation this game should be *given*, when something has an
+        /// opinion about it: a curated entry, a fix the app worked out after a failure, or a
+        /// person.
+        ///
+        /// A preference among runtimes rather than a demand on one, which is why
+        /// ``Runtime/satisfies(_:)`` ignores it and only the ranking reads it — a game asking
+        /// for an implementation this Mac hasn't got still has to launch on something.
+        ///
+        /// It lives here, among the demands, for a duller reason: `Requirements` is what every
+        /// part of the launch path already carries. Threading a second value through
+        /// `prepare`, `usableContainer` and both `Runtime.select` calls would have worked until
+        /// the one that forgot it quietly went back to choosing for itself — which is the fault
+        /// this exists to fix. Until it was read anywhere, an entry naming a backend changed a
+        /// badge on the game's page and nothing else.
+        var preferredDirect3D: GraphicsBackend?
+
+        /// The demands nothing on this Mac could meet, in the person's words.
+        ///
+        /// Only the hard ones. `preferredDirect3D` is a preference and never the reason a game
+        /// refuses to start, so naming it here would send somebody looking for a Wine build
+        /// that was never the problem.
+        var unmetDescriptions: [String] {
+            var described: [String] = []
+
+            if direct3DOnMetal {
+                described.append(String(localized: "Direct3D 10 or newer translated to Metal"))
+            }
+
+            if nativeThirtyTwoBit {
+                described.append(String(localized: "a Wine built with a real 32-bit architecture"))
+            }
+
+            if modernNetworking {
+                described.append(String(localized: "a Wine new enough to have a working socket layer"))
+            }
+
+            if nativeVulkan {
+                described.append(String(localized: "native Vulkan"))
+            }
+
+            return described
+        }
     }
 
-    enum GraphicsBackend: String, Codable, Hashable {
+    enum GraphicsBackend: String, Codable, Hashable, CaseIterable {
         /// Apple's Direct3D-on-Metal, as shipped in the Game Porting Toolkit derived engine.
         ///
         /// Not something Mythic can provide: Apple's Game Porting Toolkit licence restricts
@@ -122,7 +204,19 @@ struct RuntimeProfile: Codable, Hashable {
         var msync: Bool?
         var metalHUD: Bool?
         var avx2: Bool?
+        var captureDisplaysForFullscreen: Bool?
         var windowsVersion: Wine.WindowsVersion?
+
+        /// DLLs this game needs treated differently, as Wine's own override specs — `"d"` to
+        /// disable, `"n"` native, `"n,b"` native then builtin.
+        ///
+        /// The most common single line on every community "settings that make this game work"
+        /// list, and until now the one thing a curated entry could not say. BioShock Remastered
+        /// needs `atiadlxx` disabled: Wine's copy is a stub, `ADL_Main_Control_Create`
+        /// succeeds without producing a context, and the game then reads through the null it
+        /// was handed. A DLL that fails to load sends a game down its "no such hardware" path;
+        /// a stub that lies sends it into a page fault.
+        var dllOverrides: [String: String]?
 
         var isEmpty: Bool {
             self == .init()
@@ -138,7 +232,21 @@ struct RuntimeProfile: Codable, Hashable {
                   msync: other.msync ?? msync,
                   metalHUD: other.metalHUD ?? metalHUD,
                   avx2: other.avx2 ?? avx2,
-                  windowsVersion: other.windowsVersion ?? windowsVersion)
+                  captureDisplaysForFullscreen: other.captureDisplaysForFullscreen ?? captureDisplaysForFullscreen,
+                  windowsVersion: other.windowsVersion ?? windowsVersion,
+                  dllOverrides: Self.merging(dllOverrides, other.dllOverrides))
+        }
+
+        /// Merged rather than replaced, unlike every other field here.
+        ///
+        /// Two layers can each have a DLL to say something about — a curated entry disabling
+        /// `atiadlxx` and a user forcing a native `d3dcompiler_47`, say — and letting the outer
+        /// one drop the inner one would lose a fix silently. Same key, outer wins.
+        private static func merging(_ base: [String: String]?, _ other: [String: String]?) -> [String: String]? {
+            guard let base else { return other }
+            guard let other else { return base }
+
+            return base.merging(other) { _, outer in outer }
         }
     }
 }
@@ -156,8 +264,10 @@ extension RuntimeProfile {
     /// Direct3D 11, and would go stale if it did.
     static func resolve(executable: WindowsExecutable?,
                         databaseEntry: CompatibilityDatabase.Entry? = nil,
-                        userOverride: SettingsOverride? = nil) -> RuntimeProfile {
+                        userOverride: SettingsOverride? = nil,
+                        hasExhaustedRecovery: Bool = false) -> RuntimeProfile {
         var profile = executable.map(inferred(from:)) ?? .unknownGame
+        profile.hasExhaustedRecovery = hasExhaustedRecovery
 
         if let entry = databaseEntry {
             profile = profile.refined(by: entry)
@@ -291,17 +401,33 @@ extension RuntimeProfile {
     )
 
     /// This profile with a curated entry's opinions applied over it.
-    private func refined(by entry: CompatibilityDatabase.Entry) -> RuntimeProfile {
+    ///
+    /// Not private only so the suite can hold the one thing about it that was silently wrong
+    /// for a while: an entry naming a Direct3D implementation has to reach the *ranking*, not
+    /// just the badge.
+    func refined(by entry: CompatibilityDatabase.Entry) -> RuntimeProfile {
         var refined = self
         refined.source = .database
 
         if let backend = entry.graphicsBackend {
             refined.graphicsBackend = backend
+
+            // The half that was missing. Setting this alone told the game's page which
+            // implementation to draw in a badge and left the launch to choose for itself, so
+            // every entry that named one — curated, or learned after a game failed four times
+            // — promised a change nothing made.
+            refined.requirements.preferredDirect3D = backend
         }
 
         if entry.requiresModernNetworking == true {
             refined.requirements.modernNetworking = true
         }
+
+        if entry.requiresNativeThirtyTwoBit == true {
+            refined.requirements.nativeThirtyTwoBit = true
+        }
+
+        refined.winetricks = Array(Set(refined.winetricks + entry.winetricks)).sorted()
 
         refined.settings = refined.settings.overlaid(with: entry.settings)
 

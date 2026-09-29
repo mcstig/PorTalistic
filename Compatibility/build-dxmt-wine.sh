@@ -24,6 +24,12 @@
 #  and written up in RuntimeSelection.swift. Sikarugir's engine has the hooks but cannot
 #  boot a prefix here at all. So: patch the driver, build the Wine.
 #
+#  And with the driver being patched anyway, message boxes. Stock Wine draws a Windows
+#  message box itself, in Tahoma, with Windows buttons, and on a Mac it looks like exactly
+#  that. `patches/native-message-boxes.patch` shows each one as an NSAlert instead: the
+#  same answers and the same modality, only what is on screen changes. It is ours, so
+#  there is nothing to fetch, and `test-dxmt-wine.sh` checks it against the build.
+#
 #  ── Licensing ─────────────────────────────────────────────────────────────────────────
 #
 #  Wine is LGPL-2.1+ and aquadran's patch is compatible with it. Nothing here touches
@@ -44,6 +50,8 @@ PATCH_URL="https://raw.githubusercontent.com/macgameport/cities-skylines-2-macos
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PATCH="$REPO/Compatibility/patches/wineandaqua-dxmt.patch"
+# Ours: message boxes as native alerts. Written against the tree aquadran's patch leaves.
+ALERTS_PATCH="$REPO/Compatibility/patches/native-message-boxes.patch"
 
 WORK="$HOME/Games/wine-dxmt-build"
 SRC="$WORK/wine-$WINE_VERSION"
@@ -128,13 +136,27 @@ else
     ok "downloaded and verified"
 fi
 
-if [[ -f "$SRC/.dxmt-patched" ]]; then
+# Applied in this order. The unpacked tree records which set it has, as one digest over
+# all of them, and a tree with any other set (an older version of one, or without a new
+# one) is unpacked again rather than patched on top of: `patch --forward` can't take back a
+# hunk that has since changed. Unpacking again doesn't mean building Wine again. tar puts
+# back every file's original modification time, so make recompiles only what the patches
+# touch.
+PATCHES=("$PATCH" "$ALERTS_PATCH")
+[[ -f "$ALERTS_PATCH" ]] || die "$ALERTS_PATCH is missing"
+PATCHSET="$(for p in "${PATCHES[@]}"; do shasum -a 256 "$p"; done | awk '{print $1}' | shasum -a 256 | awk '{print $1}')"
+
+if [[ -f "$SRC/.patchset" && "$(cat "$SRC/.patchset")" == "$PATCHSET" ]]; then
     ok "source already unpacked and patched"
 else
     rm -rf "$SRC"
     tar -xJf "$TARBALL" -C "$WORK"
-    ( cd "$SRC" && patch -p1 --forward < "$PATCH" )
-    touch "$SRC/.dxmt-patched"
+    for p in "${PATCHES[@]}"; do
+        ( cd "$SRC" && patch -p1 --forward --quiet < "$p" ) \
+            || die "$(basename "$p") doesn't apply to Wine $WINE_VERSION"
+        ok "applied $(basename "$p")"
+    done
+    echo "$PATCHSET" > "$SRC/.patchset"
     ok "unpacked and patched"
 fi
 
@@ -367,6 +389,21 @@ else
     die "winemac.so is missing ${missing_markers[*]} — the patch didn't take"
 fi
 
+# And the message boxes. `UseNativeMessageBoxes` is the driver's switch for them and
+# `ALERT_RESPONSE` the event that brings an answer back; `__wine_native_msgbox` is the
+# window property user32 keeps its own dialog hidden by, and has to be in both user32s,
+# or 32-bit games get Wine's dialog. Whether they work takes a window server:
+# test-dxmt-wine.sh.
+for marker in UseNativeMessageBoxes ALERT_RESPONSE; do
+    grep -qa "$marker" "$PREFIX/lib/wine/x86_64-unix/winemac.so" \
+        || die "winemac.so has no $marker — native-message-boxes.patch didn't take"
+done
+for arch in x86_64 i386; do
+    grep -qa "__wine_native_msgbox" "$PREFIX/lib/wine/$arch-windows/user32.dll" \
+        || die "the $arch user32.dll doesn't offer message boxes to the driver — native-message-boxes.patch didn't take"
+done
+ok "message boxes come up as native alerts, for 64-bit and 32-bit programs"
+
 # The dylibs travel with the runtime, in `Frameworks` — not an arbitrary name:
 # `RuntimeInstaller.supportLibrariesDirectoryName` is "Frameworks", and
 # `Wine.transformProcess` puts that directory on `DYLD_FALLBACK_LIBRARY_PATH`. Same
@@ -466,7 +503,7 @@ else
 fi
 
 # A marker, so PorTalistic can tell this build apart from a stock one.
-echo "wine-$WINE_VERSION + aquadran winemac.drv DXMT patch ($PATCH_SHA256)" > "$PREFIX/dxmt_clientsurface"
+echo "wine-$WINE_VERSION + aquadran winemac.drv DXMT patch ($PATCH_SHA256) + native message boxes (patch set $PATCHSET)" > "$PREFIX/dxmt_clientsurface"
 
 # ── Package ──────────────────────────────────────────────────────────────────────────────
 say "Packaging"
@@ -488,12 +525,18 @@ $(printf '\033[1;32m━━ done ━━\033[0m')
 
 Next, in this order:
 
+  0. Check it: bash Compatibility/test-dxmt-wine.sh
+     Message boxes answered as programs answer them, 64-bit and 32-bit, a few seconds.
+     Add --look to see one of each kind for yourself.
+
   1. Point PorTalistic at it locally and let it install DXMT on top:
        Settings ▸ Services ▸ Wine Runtimes, or just launch a Direct3D 11 game once
        the manifest entry below is in place.
 
   2. Manifest entry — add to Compatibility/manifest.json under "runtimes", then
      re-sign with: swift Compatibility/sign-manifest.swift
+     Every rebuild is a new sha256, and while this build is DEBUG-only the same digest
+     goes in the unreleased entry in RuntimeRelease.swift too.
 
        {
          "id": "wine-dxmt-$WINE_VERSION",
@@ -504,7 +547,7 @@ Next, in this order:
          "payloadSubpath": "$(basename "$PREFIX")",
          "executableSubpath": "bin/wine",
          "exposesMetalEscapes": true,
-         "summary": "Wine $WINE_VERSION built from winehq source with aquadran's winemac.drv patch, so DXMT has a CAMetalLayer to present into. Built here rather than downloaded: no shipped build has both a working prefix and the Metal hooks."
+         "summary": "Wine $WINE_VERSION built from winehq source with aquadran's winemac.drv patch, so DXMT has a CAMetalLayer to present into, and with message boxes shown as native macOS alerts. Built here rather than downloaded: no shipped build has both a working prefix and the Metal hooks."
        }
 
   3. If device creation works but swap chains still fail, the prebuilt DXMT release was

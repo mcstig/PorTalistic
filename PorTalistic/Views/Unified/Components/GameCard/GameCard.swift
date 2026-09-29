@@ -31,6 +31,25 @@ import SwiftUI
     /// until it settles. Deliberately not read from any `body` — only inside event handlers,
     /// where reading it registers no dependency.
     var isScrolling: Bool = false
+
+    /// The pointer arrived on a game's card or row, or left it.
+    ///
+    /// Writes only when something changes. `@Observable` announces every write, including one
+    /// that changes nothing, and every card on screen reads ``gameID`` — so a redundant write
+    /// redrew all of them, and clearing an id that was already clear did it at the start of
+    /// every scroll.
+    func pointer(isOver: Bool, gameID id: Game.ID) {
+        if isOver {
+            if gameID != id { gameID = id }
+        } else if gameID == id {
+            gameID = nil
+        }
+    }
+
+    /// Nothing is hovered any more — the pointer left the grid, or it started to scroll.
+    func clear() {
+        if gameID != nil { gameID = nil }
+    }
 }
 
 /// Turns the scroll view's phase into ``CardHoverState/isScrolling``.
@@ -49,7 +68,7 @@ struct ScrollPhaseReporter: ViewModifier {
 
                 // Once, at the start. Leaving a card hovered through a scroll would strand
                 // its Play button somewhere in the middle of the grid.
-                if isScrolling { hover.gameID = nil }
+                if isScrolling { hover.clear() }
             }
         } else {
             content
@@ -129,6 +148,10 @@ struct GameCard: View {
 
     private var isHovering: Bool { hover.gameID == game.id }
 
+    /// Greyed out: not installed, and not what the pointer is on — which is when a game you
+    /// could install gets its colour back.
+    private var isMuted: Bool { !game.isInstalled && !isHovering }
+
     /// For the children that still take a `Binding<Game>`.
     ///
     /// `.constant` is honest here rather than lossy: `Game` is a reference type, so every
@@ -149,13 +172,7 @@ struct GameCard: View {
             // body on purpose — an event handler registers no observation dependency.
             guard !hover.isScrolling else { return }
 
-            withAnimation(Theme.Motion.hover) {
-                if hovering {
-                    hover.gameID = game.id
-                } else if hover.gameID == game.id {
-                    hover.gameID = nil
-                }
-            }
+            withAnimation(Theme.Motion.hover) { hover.pointer(isOver: hovering, gameID: game.id) }
         }
         .contextMenu {
             GameCard.ContextMenuItems(game: boundGame,
@@ -171,7 +188,7 @@ struct GameCard: View {
     private var artwork: some View {
         ZStack {
             NavigationLink(value: GameRoute(gameID: game.id)) {
-                GameArtwork(game: game, url: game.verticalImageURL, orientation: .vertical)
+                GameArtwork(game: game, url: game.verticalImageURL, orientation: .vertical, isMuted: isMuted)
                     .aspectRatio(Theme.Grid.artworkAspectRatio, contentMode: .fit)
                     .artworkScrim(opacity: isHovering ? 0.7 : 0)
             }
@@ -185,16 +202,27 @@ struct GameCard: View {
             overlayControls
         }
         .background {
-            if glowRadius > 0, let url = game.verticalImageURL {
-                GameArtwork(game: nil, url: url, cornerRadius: 0)
-                    .blur(radius: glowRadius)
-                    .opacity(0.55)
-                    .scaleEffect(1.04)
-                    .allowsHitTesting(false)
+            ZStack {
+                if glowRadius > 0, let url = game.verticalImageURL {
+                    GameArtwork(game: nil, url: url, cornerRadius: 0, isMuted: isMuted)
+                        .blur(radius: glowRadius)
+                        .opacity(0.55)
+                        .scaleEffect(1.04)
+                        .allowsHitTesting(false)
+                }
+
+                // The lift's shadow: only while lifted, and cast by a plain shape. As a modifier
+                // on the card it was worked out from everything the card draws — art, star,
+                // badges — in a pass of its own, on every card, on every frame of a scroll, at
+                // an opacity of zero.
+                if isHovering {
+                    RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous)
+                        .fill(Color.black)
+                        .shadow(color: .black.opacity(0.35), radius: 14, y: 6)
+                }
             }
         }
         .scaleEffect(isHovering ? 1.02 : 1)
-        .shadow(color: .black.opacity(isHovering ? 0.35 : 0), radius: 14, y: 6)
         .zIndex(isHovering ? 1 : 0)
     }
 
@@ -206,7 +234,7 @@ struct GameCard: View {
                     PortalBadge(String(localized: "Update"), systemImage: "arrow.down.circle")
                         .foregroundStyle(.white)
                         .padding(Theme.Spacing.xsmall)
-                        .floatingCapsule()
+                        .artworkChip(in: .capsule)
                         .help("An update is available. Install it from this game's menu.")
                 }
 
@@ -240,7 +268,7 @@ struct GameCard: View {
                     // longer needs to be truncated to a word and a half.
                     .lineLimit(2, reservesSpace: true)
                     .multilineTextAlignment(.leading)
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(isMuted ? Color.secondary : Color.primary)
                     .help(game.title)
 
                 HStack(spacing: Theme.Spacing.xsmall) {
@@ -286,13 +314,18 @@ extension GameCard {
     struct OperationStatus: View {
         @Binding var game: Game
 
+        /// A game's page has room for the percentage beside the bar; a card's corner has not.
+        var withLabel: Bool = false
+
         @Bindable private var operationManager: GameOperationManager = .shared
 
         var body: some View {
             if let operation = operationManager.operation(for: game) {
-                OperationCard.StatusView(operation: .constant(operation), withLabel: false)
+                OperationCard.StatusView(operation: .constant(operation), withLabel: withLabel)
                     .padding(Theme.Spacing.small)
-                    .floatingCapsule()
+                    // A chip, not glass, on the game's page too: it is the same control, and
+                    // the page scrolls as well.
+                    .artworkChip(in: .capsule)
             }
         }
     }
@@ -307,7 +340,7 @@ extension GameCard {
 
         var body: some View {
             if let operation = operationManager.operation(for: game) {
-                Text(operation.type.description)
+                Text(operation.statusDescription)
                     .font(Theme.Text.badge)
                     .foregroundStyle(Theme.Palette.brandSecondary)
                     .lineLimit(1)
@@ -331,8 +364,18 @@ extension GameCard {
 
 extension GameCard {
     /// The star, as a control on the artwork rather than a glyph beside the title.
+    ///
+    /// The whole circle is the button. It used to be a `.plain` button — whose only clickable
+    /// part is what it draws, so the star itself — with padding and glass wrapped around it
+    /// from outside. A click on the rim of the circle therefore went through to the card's
+    /// artwork, which is a link, and opened the game's page instead of favouriting the game.
     struct FavouriteToggle: View {
         @Binding var game: Game
+
+        /// On a card: a small star on a tinted chip, because a card scrolls and glass would be
+        /// worked out again on every frame. On a hero: glass, in the row it shares with Play,
+        /// at Play's size.
+        var isOnHero: Bool = false
 
         var body: some View {
             Button {
@@ -342,10 +385,9 @@ extension GameCard {
                     .symbolVariant(game.isFavourited ? .fill : .none)
                     .contentTransition(.symbolEffect(.replace))
                     .foregroundStyle(game.isFavourited ? .yellow : .white)
-                    .padding(Theme.Spacing.small - 2)
             }
-            .buttonStyle(.plain)
-            .floatingCapsule(interactive: true)
+            .buttonStyle(isOnHero ? PortalButtonStyle(emphasis: .floating)
+                                  : PortalButtonStyle(emphasis: .onArtwork, isCompact: true))
             .help(game.isFavourited
                   ? String(localized: "Remove \(game.description) from your favourites")
                   : String(localized: "Add \(game.description) to your favourites"))

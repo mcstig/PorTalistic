@@ -410,14 +410,14 @@ extension SettingsView {
                     operating: $isCleaning,
                     successful: $isCleanupSuccessful
                 ) {
-                    // TODO: make function in LegendaryInterface
-                    let process: Process = .init()
-                    process.arguments = ["cleanup"]
-                    await Legendary.transformProcess(process)
-                    
-                    let result = try? await process.runWrapped()
-                    isCleanupSuccessful = result?.standardError?.contains("Cleanup complete")
+                    // Not a bare `legendary cleanup`: the files it deletes include the
+                    // `.resume` that lets an interrupted download carry on from where it
+                    // stopped, so pressing this mid-install would quietly cost somebody their
+                    // download. `cleanUpStaleData()` declines in that case, and says so by
+                    // reporting failure here rather than a checkmark over nothing.
+                    isCleanupSuccessful = await Legendary.cleanUpStaleData()
                 }
+                .help("Removes Epic metadata, manifests and temporary files that are no longer needed. Declines while a game is downloading: it would delete the files an interrupted download picks up from.")
 
                 OperationButton(
                     "Manually Synchronise Cloud Saves",
@@ -425,14 +425,9 @@ extension SettingsView {
                     operating: $isEpicCloudSynchronising,
                     successful: $isEpicCloudSyncSuccessful
                 ) {
-                    // TODO: make function in LegendaryInterface
                     let regex = try! Regex(#"Got [0-9]+ remote save game"#) // swiftlint:disable:this force_try
-                    let process: Process = .init()
-                    process.arguments = ["-y", "sync-saves"]
-                    await Legendary.transformProcess(process)
-                    
-                    let result = try? await process.runWrapped()
-                    
+                    let result = await Legendary.synchroniseCloudSaves()
+
                     isEpicCloudSyncSuccessful = (try? regex.firstMatch(in: result?.standardError ?? "") != nil)
                 }
 

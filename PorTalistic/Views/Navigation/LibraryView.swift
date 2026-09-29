@@ -23,6 +23,8 @@ struct LibraryView: View {
     @Bindable var gameListViewModel: GameListViewModel = .shared
     @CodableAppStorage("gameListLayout") var gameListLayout: GameListViewModel.Layout = .grid
     @AppStorage(GameCardSize.storageKey) private var cardSize: GameCardSize = .regular
+    @AppStorage(GameListViewModel.titleOrderStorageKey) private var titleOrder: GameListViewModel.TitleOrder = .ascending
+    @AppStorage(GameListViewModel.installedFirstStorageKey) private var installedFirst: Bool = true
 
     var body: some View {
         VStack(spacing: 0) {
@@ -162,6 +164,22 @@ struct LibraryView: View {
                             }
                         }
                         .menuIndicator(.hidden)
+                    }
+
+                    ToolbarItem(placement: .automatic) {
+                        Menu("Sort", systemImage: "arrow.up.arrow.down") {
+                            Picker("Name", selection: $titleOrder) {
+                                Text("A to Z").tag(GameListViewModel.TitleOrder.ascending)
+                                Text("Z to A").tag(GameListViewModel.TitleOrder.descending)
+                            }
+                            .pickerStyle(.inline)
+
+                            // On by default, which is how the library has always been ordered:
+                            // what can be played first, each group by name. Off, it is one list.
+                            Toggle("Installed Games First", isOn: $installedFirst)
+                        }
+                        .menuIndicator(.hidden)
+                        .help("Sort the library by name")
                     }
                 }
             }

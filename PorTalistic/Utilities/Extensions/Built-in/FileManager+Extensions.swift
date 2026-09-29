@@ -32,7 +32,7 @@ extension FileManager {
     }
 
     func createUniqueTemporaryDirectory() throws -> URL {
-        let temporaryDirectory = temporaryDirectory.appending(path: "Mythic/\(UUID().uuidString)")
+        let temporaryDirectory = temporaryDirectory.appending(path: "\(Branding.name)/\(UUID().uuidString)")
         try createDirectory(at: temporaryDirectory, withIntermediateDirectories: true, attributes: nil)
         return temporaryDirectory
     }

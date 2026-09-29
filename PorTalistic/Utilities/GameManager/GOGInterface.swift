@@ -213,7 +213,37 @@ final class GOG {
         try? FileManager.default.removeItem(at: authConfigURL)
         try? FileManager.default.removeItem(at: cacheURL)
         memoizedCache = nil
+
+        // Rotates the WebKit data store, leaving the old jar's cookies unreachable. Without
+        // this, signing out drops the token and leaves the website session intact.
+        UserDefaults.standard.removeObject(forKey: webDataStoreKey)
+
         log.notice("Signed out of GOG")
+    }
+
+    private static let webDataStoreKey = "gogWebDataStore"
+
+    /// The cookie jar GOG's pages share — the sign-in window and the store.
+    ///
+    /// Persisted on first read, and that is the whole point. It used to be
+    /// `@CodableAppStorage("gogWebDataStore") var … = UUID()` on the web view, and that
+    /// property wrapper does not write its default back to `UserDefaults` — so with the key
+    /// unset, every view that read it evaluated `UUID()` for itself and got a *different*
+    /// identifier. Two separate cookie jars: you signed in through the sign-in window and the
+    /// store, browsing with the other one, asked you to sign in again.
+    ///
+    /// Epic hit this first and fixed it in ``Legendary/webDataStoreIdentifier``; the same
+    /// fault was still here, and would have shipped the moment GOG got a store page of its
+    /// own. See ``signOut()`` for the rotation.
+    static var webDataStoreIdentifier: UUID {
+        if let stored = try? UserDefaults.standard.decodeAndGet(UUID.self, forKey: webDataStoreKey) {
+            return stored
+        }
+
+        let fresh: UUID = .init()
+        _ = try? UserDefaults.standard.encodeAndSet(fresh, forKey: webDataStoreKey)
+        log.notice("Created a WebKit data store for GOG's pages.")
+        return fresh
     }
 
     /// A token that will still be accepted, refreshing first if the stored one won't be.

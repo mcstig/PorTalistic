@@ -58,8 +58,24 @@ class LocalGameManager {
                 configuration.arguments = game.launchArguments
                 
                 if (try? location.resourceValues(forKeys: [.contentTypeKey]).contentType)?.conforms(to: .bundle) == true {
+                    // `openApplication` can't be interrupted, and it waits for the application to
+                    // finish launching — seconds, for a game. A Force Quit already pressed is heard
+                    // here rather than after it.
+                    try Task.checkCancellation()
+
                     let application = try await NSWorkspace.shared.openApplication(at: location, configuration: configuration)
-                    
+
+                    // And one pressed while it was opening lands here, with the game up: ended now,
+                    // rather than by the wait below — whose handler runs as it is entered, before
+                    // there is anything listening for the game to go.
+                    guard !Task.isCancelled else {
+                        application.forceTerminate()
+                        return
+                    }
+
+                    // A native game is up as soon as its application is.
+                    await MainActor.run { Game.operationManager.noteGameAppeared(forGameID: game.id) }
+
                     // await application closure
                     await withTaskCancellationHandler {
                         await withCheckedContinuation { continuation in
@@ -73,7 +89,9 @@ class LocalGameManager {
                             }
                         }
                     } onCancel: {
-                        application.terminate()
+                        // Force Quit, not a request: `terminate()` asks, and a game that is still
+                        // starting — or that puts up "are you sure?" — simply carries on.
+                        application.forceTerminate()
                     }
                 } else {
                     throw CocoaError(.serviceApplicationLaunchFailed)
@@ -115,7 +133,9 @@ class LocalGameManager {
                 // Until now a local game's entire output went to the app's own stderr, which
                 // means nowhere unless the app happened to be running from Xcode.
                 let logURL = Wine.logURL(forGameTitled: game.title, inContainerAtURL: containerURL)
-                let logHandle = Wine.beginLogging(to: logURL, describing: location)
+                let logHandle = Wine.beginLogging(to: logURL,
+                                                  describing: location,
+                                                  environment: environment)
 
                 if let logHandle {
                     process.standardOutput = logHandle
@@ -124,13 +144,58 @@ class LocalGameManager {
 
                 defer { try? logHandle?.close() }
 
-                try process.run()
+                // How Force Quit reaches this launch, whenever it is pressed. The process used to be
+                // started with nothing watching for a stop, so a Force Quit pressed while the
+                // container was being set up found nothing to stop and the game started anyway.
+                // Killed rather than asked: see the same launch on the Epic path.
+                let launch: StoppableLaunch = .init(halting: { $0.stopIfRunning(SIGKILL) })
 
-                process.waitUntilExit()
+                // And what reaches the prefix — see the same pair on the GOG path.
+                let forceQuit: Wine.ForceQuit = .init(containerAt: containerURL)
 
-                // Put the container back — shared per runtime, so this game's settings left
-                // behind would quietly become the next game's.
-                await Provisioner.shared.revert(plan)
+                try await withTaskCancellationHandler {
+                    try launch.launch(process)
+                } onCancel: {
+                    launch.stop()
+                }
+
+                // See `Wine.superviseGame(named:startedAs:hidingLauncher:forGameWithID:)`: the
+                // Mac driver defers the display mode until its process is active, so a game
+                // that stays behind the library comes up windowed — and the person pressed
+                // Play, so the game is what they asked to be looking at. The same watch is
+                // what keeps the launch alive while the game is.
+                let executableName = location.lastPathComponent
+                let winePID = process.processIdentifier
+                let launchedGameID = game.id
+
+                // The plan and the transcript, hoisted for the same reason as the pid: the
+                // post-mortem runs after the game exits, and it has to read *this* launch's
+                // log against *this* launch's settings.
+                let launchedPlan = plan
+                let launchedTranscriptURL = logURL
+
+                await withTaskCancellationHandler {
+                    async let supervised: Void = Wine.superviseGame(named: executableName,
+                                                                    startedAs: winePID,
+                                                                    hidingLauncher: false,
+                                                                    forGameWithID: launchedGameID,
+                                                                    plan: launchedPlan,
+                                                                    transcriptAt: launchedTranscriptURL)
+
+                    await process.waitUntilExitOrCancellation()
+                    await supervised
+                } onCancel: {
+                    // Stopping a game means stopping the prefix it runs in — see the same
+                    // handler on the GOG path. Through the launch, never `terminate()`, which
+                    // raises on a process that is not running.
+                    launch.stop()
+                    forceQuit.begin()
+                }
+
+                // Made certain before the launch is over — see `Wine.forceQuit(containerAt:)`.
+                if launch.hasBeenStopped {
+                    await forceQuit.finish()
+                }
             }
         }
 

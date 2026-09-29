@@ -452,7 +452,7 @@ struct SteamGameImportView: View {
             try await gameDataStore.refreshFromStorefronts(.steam)
             importedGames = gameDataStore.library
                 .compactMap { $0 as? SteamGame }
-                .sorted(by: { $0.title < $1.title })
+                .sorted(by: { Game.nameOrder($0, $1) == .orderedAscending })
         } catch {
             scanErrorDescription = error.localizedDescription
         }

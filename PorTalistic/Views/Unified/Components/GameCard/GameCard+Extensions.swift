@@ -52,6 +52,9 @@ extension GameCard {
                 .disabled(!networkMonitor.isReachable(for: game.storefront))
                 .disabled(game.storefront == .local)
                 .disabled(operationManager.queue.contains(where: { $0.game == game && $0.type == .repair }))
+                // A game that isn't on disk has nothing to verify. Gated on the library's own
+                // view of that, not the filesystem: this is a button in a card grid.
+                .disabled(!game.isInstalled)
                 .alert("Unable to verify installation.",
                        isPresented: $isVerificationErrorAlertPresented,
                        presenting: verificationError) { _ in
@@ -96,6 +99,9 @@ extension GameCard {
                 // FIXME: .disabled(game.checkIfGameIsRunning())
                 .disabled(game.isUpdateAvailable != true)
                 .disabled(operationManager.queue.contains(where: { $0.game == game && $0.type == .update }))
+                // A game that isn't on disk has nothing to update. Gated on the library's own
+                // view of that, not the filesystem: this is a button in a card grid.
+                .disabled(!game.isInstalled)
                 .help("Update \"\(game.title)\"")
             }
         }
@@ -183,6 +189,9 @@ extension GameCard {
                     }
                 }
                 .disabled(operationManager.queue.contains(where: { $0.game == game && $0.type == .uninstall }))
+                // A game that isn't on disk has nothing to remove. Gated on the library's own
+                // view of that, not the filesystem: this is a button in a card grid.
+                .disabled(!game.isInstalled)
                 // FIXME: .disabled(game.checkIfGameIsRunning())
                 .help("Uninstall \"\(game.title)\"")
                 .onHover { hovering in
@@ -251,14 +260,14 @@ extension GameCard {
         @EnvironmentObject var networkMonitor: NetworkMonitor
         @Bindable private var operationManager: GameOperationManager = .shared
 
-        /// Set when Play is pressed and cleared a few seconds later.
+        /// Set while Play has been pressed and the launch hasn't been queued yet.
         ///
-        /// There is no "the game's window appeared" signal to wait for. `checkIfGameIsRunning`
-        /// is a stub for Windows games — which is all of them that matter here — and the launch
-        /// operation begins executing the instant it is queued, so it cannot tell starting from
-        /// running either. A fixed interval is the honest version of what this shows: *we have
-        /// asked, give it a moment*. It ends early if the launch fails.
-        @State private var isStarting: Bool = false
+        /// Only that gap. Everything after it belongs to the launch operation, which now lives
+        /// as long as the game does and says whether the game is still starting or up — see
+        /// ``GameOperation/launchPhase``. This used to be a fixed six seconds because there was
+        /// nothing to ask: the spinner stopped while the game was still loading, and Play went
+        /// live again underneath it, so a second press started a second copy.
+        @State private var isRequestingLaunch: Bool = false
 
         @State private var isInstallSheetPresented: Bool = false
         @State private var isLaunchErrorAlertPresented: Bool = false
@@ -283,20 +292,17 @@ extension GameCard {
 
         private var play: some View {
             Button {
-                isStarting = true
+                isRequestingLaunch = true
 
                 Task(priority: .userInitiated) {
+                    defer { isRequestingLaunch = false }
+
                     do {
                         try await game.launch()
                     } catch {
                         launchError = error
                         isLaunchErrorAlertPresented = true
-                        isStarting = false
-                        return
                     }
-
-                    try? await Task.sleep(for: .seconds(6))
-                    isStarting = false
                 }
             } label: {
                 icon(systemImage: "play.fill")
@@ -336,6 +342,7 @@ extension GameCard {
         }
 
         private var playHelp: String {
+            if launchOperation?.isForceQuitting == true { return String(localized: "Force quitting \"\(game.title)\"…") }
             if isStarting { return String(localized: "Starting \"\(game.title)\"…") }
             if isRunning { return String(localized: "\"\(game.title)\" is already running.") }
             if isBusy { return String(localized: "\(game.description) has work outstanding.") }
@@ -398,20 +405,20 @@ extension GameCard {
             .contentShape(.rect)
         }
 
-        /// Everything that differs between the card's quiet row and the hero's glass pill.
+        /// Everything that differs between the card's quiet row and the hero's glass circle.
         private struct Chrome: ViewModifier {
             let isOnHero: Bool
             let isDimmed: Bool
 
             func body(content: Content) -> some View {
                 if isOnHero {
+                    // The glass is the button's own, so the whole circle turns violet under
+                    // the pointer and the whole circle can be clicked. It used to be padding
+                    // and glass wrapped around a quiet button: violet in the middle, a dark
+                    // ring round it that did nothing. Dimmed while the game runs by being
+                    // disabled, which the style shows.
                     content
-                        .buttonStyle(.portalQuietCompact)
-                        .foregroundStyle(isDimmed
-                                         ? AnyShapeStyle(HierarchicalShapeStyle.tertiary)
-                                         : AnyShapeStyle(Color.white))
-                        .padding(Theme.Spacing.small)
-                        .floatingCapsule(interactive: true)
+                        .buttonStyle(.portalFloating)
                 } else {
                     content
                         .buttonStyle(.portalQuietCompact)
@@ -426,10 +433,18 @@ extension GameCard {
 
         private var isInstalled: Bool { game.isInstalled }
 
-        /// A launch already in flight. Pressing again would start a second copy.
-        private var isRunning: Bool {
-            !isStarting && operationManager.queue.contains { $0.game == game && $0.type == .launch }
+        /// The launch this game is living in, if it has one.
+        private var launchOperation: GameOperation? { operationManager.launchOperation(for: game) }
+
+        /// Asked for, and not on screen yet. Both phases before the game appears: a launch
+        /// spends the first of them setting the container up, and Play has to stay spent for
+        /// that whole time or a second press starts a second copy.
+        private var isStarting: Bool {
+            isRequestingLaunch || launchOperation.map { $0.launchPhase != .running } == true
         }
+
+        /// Up. Pressing again would start a second copy.
+        private var isRunning: Bool { launchOperation?.launchPhase == .running }
 
         /// Work that touches the game's files, which Play and Install both have to wait for.
         private var isBusy: Bool {
@@ -504,7 +519,12 @@ extension GameCard {
             Divider()
 
             Button("Settings...", systemImage: "gear") { isSettingsPresented = true }
-            Button("Uninstall...", systemImage: "xmark.bin") { isUninstallPresented = true }
+
+            // The component, not a second copy of it. A hardcoded button here is how the
+            // right-click menu kept offering Uninstall for a game that was never installed
+            // after `UninstallButton` learned not to.
+            GameCard.Buttons.UninstallButton(game: $game, withLabel: true,
+                                             isUninstallSheetPresented: $isUninstallPresented)
         }
     }
 

@@ -27,6 +27,66 @@ final class Migrator {
         v0_1_0.migrate()
         v0_3_2.migrate()
         v0_5_0.migrate()
+        v0_6_1.migrate()
+    }
+
+    /// Retina Mode off on containers made before that became the default.
+    struct v0_6_1 { // swiftlint:disable:this type_name
+        private init() {}
+
+        static func migrate() {
+            Task(operation: { await Migrator.v0_6_1.turnOffContainerRetinaModeIfNecessary() })
+        }
+
+        static let hasRunKey = "didMigrateContainerRetinaMode"
+
+        /// The settings a container carrying the old default should end up with.
+        ///
+        /// Pure, and separate from the loop below, so that it can be tested. The fault this
+        /// migration exists for was invisible in the code — every default read correctly —
+        /// and showed up only in the data on disk.
+        static func settingsMigratedOffRetina(_ settings: Wine.Container.Settings) -> Wine.Container.Settings {
+            var migrated = settings
+            migrated.retinaMode = false
+
+            // Brought back into step deliberately. A container left carrying 192 beside Retina
+            // off is the contradiction `Settings.displayScaling` exists to prevent, and one of
+            // the containers this was written for was in exactly that state.
+            migrated.scaling = migrated.displayScaling
+
+            return migrated
+        }
+
+        /// Turn Retina Mode off on every existing container, once.
+        ///
+        /// Changing `Wine.Container.Settings()`'s default only affects containers created
+        /// *after* the change, and nobody upgrading has one of those — so every container in
+        /// the field was still stored `retinaMode: true`, which is the baseline every game in
+        /// it inherits.
+        ///
+        /// Not cosmetic. A game handed a desktop at the display's full backing resolution
+        /// writes that resolution into its *own* saved settings, and asks for it again next
+        /// time. Horizon Chase Turbo had saved 4096×2660 in the one container where it had
+        /// been given a Retina desktop and 2048×1330 in the two where it had not; on a 1×
+        /// desktop the first cannot be satisfied, and the game opened in a small window.
+        ///
+        /// Stored settings only, never the prefix's registry. The registry half is written
+        /// before every launch by ``Provisioner/apply(_:to:)`` anyway, and doing it here would
+        /// mean starting Wine once per container during launch — work at startup that touches
+        /// the user's game data is its own recurring fault.
+        ///
+        /// Once, not on every launch: Retina Mode is still a per-container control, and a
+        /// migration that re-ran would take it back off the user every time they set it.
+        static func turnOffContainerRetinaModeIfNecessary() async {
+            guard !UserDefaults.standard.bool(forKey: hasRunKey) else { return }
+
+            for container in Wine.containerObjects where container.settings.retinaMode {
+                log.notice("Turning Retina Mode off for container \(container.name) — it predates that being the default.")
+                container.settings = settingsMigratedOffRetina(container.settings)
+            }
+
+            UserDefaults.standard.set(true, forKey: hasRunKey)
+        }
     }
 
     /// The rebrand from Mythic to PorTalistic.
@@ -53,6 +113,7 @@ final class Migrator {
             migrateUserDefaultsDomain()
             migrateApplicationSupportFolder()
             migrateContainerFolder()
+            keepUpstreamGamesFolderIfInUse()
         }
 
         // MARK: - Defaults
@@ -140,6 +201,50 @@ final class Migrator {
 
             try? UserDefaults.standard.encodeAndSet(rewritten, forKey: "containerURLs")
             log.notice("Rebrand: repointed \(rewritten.count, privacy: .public) container URLs")
+        }
+
+        // MARK: - Install folder
+
+        static let installFolderDecidedKey = "didDecideInstallFolderAfterRebrand"
+
+        /// Keep a library that is already in upstream's games folder installing there.
+        ///
+        /// The default install folder is named after the app (`Bundle.appGames`), so the rename
+        /// changed it from `Games/Mythic` to `Games/PorTalistic`. That default is also where
+        /// installed games are looked for — a GOG install record without a location of its own
+        /// is found at the install folder plus the game's name — so a Mac that never chose a
+        /// folder, and has games in the old one, gets the old one written down. Nothing moves.
+        ///
+        /// Once, not every launch: decided again later, a `Games/Mythic` that upstream's own app
+        /// filled after the fact would take this app's default away from it.
+        static func keepUpstreamGamesFolderIfInUse() {
+            guard !UserDefaults.standard.bool(forKey: installFolderDecidedKey),
+                  let games = FileLocations.globalGames else { return }
+
+            let upstream = games.appending(path: previousApplicationSupportName)
+            let keep = shouldKeepUpstreamGamesFolder(
+                hasChosenInstallFolder: UserDefaults.standard.object(forKey: "installBaseURL") != nil,
+                upstreamFolderContents: try? FileManager.default.contentsOfDirectory(atPath: upstream.path)
+            )
+
+            if keep {
+                UserDefaults.standard.set(upstream, forKey: "installBaseURL")
+                log.notice("Rebrand: kept \(upstream.prettyPath, privacy: .public) as the install folder, because games are installed there")
+            }
+
+            UserDefaults.standard.set(true, forKey: installFolderDecidedKey)
+        }
+
+        /// Whether upstream's games folder stays the install folder. Separate so it can be tested.
+        ///
+        /// - Parameters:
+        ///   - hasChosenInstallFolder: whether an install folder is already stored. A folder
+        ///     somebody chose is never overridden.
+        ///   - upstreamFolderContents: what's in `Games/Mythic`, or `nil` if there's no such
+        ///     folder. Hidden files like `.DS_Store` don't count as a library.
+        static func shouldKeepUpstreamGamesFolder(hasChosenInstallFolder: Bool, upstreamFolderContents: [String]?) -> Bool {
+            guard !hasChosenInstallFolder, let upstreamFolderContents else { return false }
+            return upstreamFolderContents.contains { !$0.hasPrefix(".") }
         }
 
         // MARK: - Moving
@@ -325,7 +430,11 @@ final class Migrator {
             log.info("Migrating container scaling")
             // If scaling value is 0, it does not have a default scale set.
             for container in Wine.containerObjects where container.settings.scaling == 0 {
-                let defaultScale = Wine.Container.Settings().scaling
+                // The container's own pairing, not a global default. Writing 96 into a
+                // prefix whose Retina Mode is on is the same contradiction the other way
+                // round, and prefixes this migration still reaches are old enough to have
+                // it on. See `Wine.Container.Settings.displayScaling`.
+                let defaultScale = container.settings.displayScaling
 
                 do {
                     try await Wine.setDisplayScaling(containerURL: container.url, dpi: defaultScale)

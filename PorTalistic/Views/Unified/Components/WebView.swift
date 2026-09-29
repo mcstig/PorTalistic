@@ -121,12 +121,25 @@ struct WebView: NSViewRepresentable {
 /// drops every `window.open()` and `target="_blank"` navigation, and tells the page nothing
 /// about it — so a sign-in that opens its login in a new window just stops, and the site is
 /// left to guess. Epic's guess is "Uh oh, something went wrong."
-final class WebViewWindowOpener: NSObject, WKUIDelegate {
+final class WebViewWindowOpener: NSObject, WKUIDelegate, NSWindowDelegate {
     /// Windows the page opened, keyed by the web view inside each.
     ///
     /// Retained here because `isReleasedWhenClosed` is off: WebKit can still talk to the web
     /// view after the page has closed its window.
     private var windows: [ObjectIdentifier: NSWindow] = .init()
+
+    /// The page each popup was opened *from*, weakly.
+    ///
+    /// Kept so that a popup closing can reload the page underneath it. A sign-in that happens
+    /// in a popup leaves the opener rendered exactly as it was before — Epic's store then
+    /// shows a Sign In button over a session that is perfectly signed in, and the giveaway is
+    /// that buying the game works anyway. Nothing tells a single-page app its cookies changed
+    /// while it wasn't looking; the close of the window it opened is the signal.
+    private var openers: [ObjectIdentifier: WeakWebView] = .init()
+
+    private struct WeakWebView {
+        weak var value: WKWebView?
+    }
 
     nonisolated static let log: Logger = .custom(category: "webViewWindows")
 
@@ -161,19 +174,56 @@ final class WebViewWindowOpener: NSObject, WKUIDelegate {
         window.title = navigationAction.request.url?.host ?? Branding.name
         window.contentView = popup
         window.isReleasedWhenClosed = false
+        window.delegate = self
         window.center()
         window.makeKeyAndOrderFront(nil)
 
         windows[.init(popup)] = window
+        openers[.init(popup)] = .init(value: webView)
         Self.log.notice("Opened a window for \(window.title, privacy: .public).")
 
         return popup
     }
 
     /// Closes a window the page opened, when the page closes it — which is how an OAuth hop
-    /// signs off.
+    /// signs off, and reloads the page that opened it.
+    ///
+    /// The reload is the fix for a signed-in store still showing Sign In. A popup that closes
+    /// itself has almost always just finished something the opener cares about — a sign-in, a
+    /// purchase, an age gate — and the opener has no way to find out: its cookies changed
+    /// underneath it and no navigation happened. Reloading is cheap, and being wrong about it
+    /// costs a page refresh nobody notices.
     func webViewDidClose(_ webView: WKWebView) {
-        windows.removeValue(forKey: .init(webView))?.close()
+        finish(.init(webView))
+    }
+
+    /// The same thing, when the *person* closes the window rather than the page.
+    ///
+    /// Half the reason this exists: a sign-in finished in a popup that the user then dismisses
+    /// by hand never calls `webViewDidClose`, so without this the opener would be reloaded for
+    /// a flow that closed itself and not for one somebody closed — the same stale Sign In
+    /// button, reachable a different way.
+    func windowWillClose(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow,
+              let key = windows.first(where: { $0.value === window })?.key else { return }
+
+        finish(key)
+    }
+
+    /// Forget a popup and reload whatever opened it. Safe to call twice: the page closing its
+    /// own window triggers `windowWillClose` straight afterwards, and the second pass finds
+    /// nothing left to do.
+    private func finish(_ key: ObjectIdentifier) {
+        let window = windows.removeValue(forKey: key)
+        let opener = openers.removeValue(forKey: key)?.value
+
+        window?.delegate = nil
+        window?.close()
+
+        if let opener {
+            Self.log.notice("A window closed; reloading the page that opened it.")
+            opener.reload()
+        }
     }
 }
 

@@ -39,3 +39,50 @@ made from them means publishing the corresponding source, which is what pinning 
 tarball and keeping the patch here is for. Nothing in this path involves Apple's Game
 Porting Toolkit or `D3DMetal.framework`, whose licence is non-commercial only, or any
 CrossOver binary.
+
+## `native-message-boxes.patch`
+
+PorTalistic's own. A Windows message box (`MessageBox` and everything built on it:
+`MessageBoxEx`, `MessageBoxIndirect`, `ShellMessageBox`, `FatalAppExit`) comes up as a
+native macOS alert instead of the dialog Wine draws itself, in Tahoma with Windows buttons.
+Applied after `wineandaqua-dxmt.patch`, which it is written against.
+
+**How.** user32 still builds, initialises and runs the message box's dialog exactly as
+before: it disables the owner, honours `MB_TASKMODAL`, and is what `MessageBox` gets its
+answer from. Once the dialog is ready, user32 offers it to the display driver with a
+driver-range message, `WM_WINE_NATIVE_MSGBOX`. The Mac driver reads the caption, text and
+buttons back out of the dialog (so Wine's translations come along, and so does anything a
+program changed first, like relabelled buttons) and shows an `NSAlert`. The dialog stays
+hidden, and the button the user picks comes back as an `ALERT_RESPONSE` event and is posted
+to the dialog as the `WM_COMMAND` a click on that button would have sent. If the program ends
+the dialog itself first (`EndDialog`, `WM_CLOSE`), the alert goes with it. Any other driver
+answers the message with 0 and nothing changes.
+
+What an alert does that the dialog did: the first button is rightmost, where macOS puts the
+primary action; Return presses the message box's default button, not necessarily the first;
+Escape and ⌘-period answer Cancel if there is one and OK if that's the only button, and
+nothing otherwise, as on Windows; ⌘C copies the caption and message. A key the game was
+holding when the box came up (the Escape that opened it, say) doesn't answer it by repeating
+into it, and Windows still sees that key let go. What it adds: it comes
+up on the game's screen, above a fullscreen or topmost game window, and bounces in the Dock
+if macOS won't bring the game forward. A message too long for an alert's label goes in a
+scrolling view, so the buttons stay on screen.
+
+**What stays Wine's own dialog.** A message box with a Help button (`MB_HELP`): Help keeps
+the box open and sends `WM_HELP`, which an alert can't. And anything that isn't
+`MessageBox`: `TaskDialog`, `SHMessageBoxCheck`, a program's own dialogs, Wine's crash
+dialog.
+
+**Switching it off.** `UseNativeMessageBoxes`, a string, `n` to turn it off: under
+`HKCU\Software\Wine\Mac Driver` for a whole prefix, or under
+`HKCU\Software\Wine\AppDefaults\<game>.exe\Mac Driver` for one program. On by default.
+
+**Checked by** `build-dxmt-wine.sh`, which refuses a build without it in `winemac.so` and in
+both `user32.dll`s, and `test-dxmt-wine.sh`, which answers a run of message boxes the way
+programs do, 64-bit and 32-bit, with it on and with it off (`tests/msgbox-test.c`). The same
+checks fail on a Wine without the patch, which is how they were checked.
+
+**Only in this Wine.** Games on the bundled engine, Wine Stable or Sikarugir still get Wine's
+dialog: those are prebuilt, and this is a change to Wine itself.
+
+**Licence.** LGPL-2.1-or-later, like the Wine it patches.

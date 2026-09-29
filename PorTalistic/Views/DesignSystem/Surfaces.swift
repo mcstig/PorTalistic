@@ -32,6 +32,8 @@ extension View {
     ///
     /// - Parameter interactive: pass `true` for something the pointer acts on, which on
     ///   macOS 26 lets the glass respond to the pointer as a control rather than sit inert.
+    ///   Only a button's own style should: glass the pointer acts on belongs inside the
+    ///   button, as ``PortalButtonStyle/Emphasis/floating`` draws it, never wrapped around one.
     func floatingSurface<S: InsettableShape>(in shape: S, interactive: Bool = false) -> some View {
         modifier(FloatingSurface(shape: shape, interactive: interactive))
     }
@@ -42,10 +44,10 @@ extension View {
                         interactive: interactive)
     }
 
-    /// ``floatingSurface(in:interactive:)`` on a capsule — the shape of every pill control here.
-    func floatingCapsule(interactive: Bool = false) -> some View {
-        floatingSurface(in: .capsule, interactive: interactive)
-    }
+    // `floatingCapsule()` used to live here. Its last callers were a card's update badge and
+    // progress pill, which sit on ``artworkChip(in:)`` now because a card scrolls; before that
+    // it was wrapped around buttons, which is a ring the pointer can see and the button cannot.
+    // A button that floats uses ``PortalButtonStyle/Emphasis/floating``.
 
     /// Content that sits *on* the window rather than over other content: a card in a grid,
     /// a row in a list, a panel of settings. Opaque, bordered, and optionally lifted.
@@ -67,17 +69,22 @@ extension View {
     /// never has to be a question.
     func artworkScrim(height: CGFloat? = nil, opacity: CGFloat = 0.88) -> some View {
         overlay(alignment: .bottom) {
-            LinearGradient(
-                stops: [
-                    .init(color: .black.opacity(0), location: 0),
-                    .init(color: .black.opacity(opacity * 0.45), location: 0.55),
-                    .init(color: .black.opacity(opacity), location: 1)
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .frame(height: height)
-            .allowsHitTesting(false)
+            // Nothing at all at zero, rather than a gradient of clear. A card's scrim is off
+            // until the pointer arrives, and a transparent gradient is still blended over the
+            // whole of every card, on every frame of a scroll.
+            if opacity > 0 {
+                LinearGradient(
+                    stops: [
+                        .init(color: .black.opacity(0), location: 0),
+                        .init(color: .black.opacity(opacity * 0.45), location: 0.55),
+                        .init(color: .black.opacity(opacity), location: 1)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .frame(height: height)
+                .allowsHitTesting(false)
+            }
         }
     }
 
@@ -100,6 +107,23 @@ extension View {
                 endPoint: .bottom
             )
         }
+        // Flattened into one picture. A mask is drawn in a pass of its own, and every hero this
+        // is on sits in something that scrolls — so the full width of the art, scrim and all,
+        // was drawn offscreen again on every frame of a scroll, to produce a picture that had
+        // not changed. Flattened, a scroll only moves it; new art is what redraws it.
+        .drawingGroup()
+    }
+
+    /// A small surface on a card's artwork: its star, its update badge, its progress.
+    ///
+    /// Not glass, and not a material. A card scrolls, and glass or a material works out again
+    /// what is behind it on every frame that it moves — once for every chip on screen, which on
+    /// a grid of cards kept scrolling well short of the display's refresh rate. Glass is for
+    /// controls floating above content, not for the content itself. A dark tint reads much the
+    /// same over artwork and costs one blend.
+    func artworkChip<S: InsettableShape>(in shape: S) -> some View {
+        background(Color.black.opacity(0.42), in: shape)
+            .overlay(shape.strokeBorder(Color.white.opacity(0.16), lineWidth: 0.8))
     }
 }
 
@@ -227,7 +251,7 @@ private struct CardSurface: ViewModifier {
 
 // MARK: - Buttons
 
-/// Every button in the app, in three degrees of emphasis.
+/// Every button in the app: three degrees of emphasis, and two kinds that sit over artwork.
 ///
 /// There were eight different button styles in use — `.borderedProminent` in nineteen
 /// places, `.borderless` in nine, `.bordered`, `.accessoryBar`, `.plain` — which is why the
@@ -244,6 +268,18 @@ struct PortalButtonStyle: ButtonStyle {
         /// An icon in a row or a toolbar, where a solid block of colour would be noise —
         /// no fill until the pointer arrives, and then a clear violet one.
         case quiet
+        /// A control on its own over artwork: Play, the menu and the star on a game's page and
+        /// on Home, the star on a card. Glass until the pointer arrives, then violet to the edge.
+        ///
+        /// The glass belongs to the button here rather than being wrapped around it. Wrapped
+        /// around it, as it was, the violet filled a pill inside a ring of glass, and the ring
+        /// ignored the pointer — clicks included, which is how a click on the rim of a card's
+        /// star opened the game's page instead of favouriting it.
+        case floating
+        /// `.floating` for a control on a card's artwork — the star in a card's corner — on
+        /// ``SwiftUI/View/artworkChip(in:)`` rather than glass, because a card scrolls. The same
+        /// size rules, the same violet to the edge, and the whole circle is the button.
+        case onArtwork
     }
 
     var emphasis: Emphasis = .standard
@@ -281,23 +317,62 @@ struct PortalButtonStyle: ButtonStyle {
         private var shape: Capsule { .init(style: .continuous) }
 
         var body: some View {
-            configuration.label
-                .font(.system(isCompact ? .footnote : .body, weight: .semibold))
-                .foregroundStyle(foreground)
-                .padding(.horizontal, horizontalPadding)
-                .padding(.vertical, isCompact ? Theme.Spacing.xsmall + 1 : Theme.Spacing.small)
-                .background { background }
-                .overlay {
-                    if emphasis != .quiet {
-                        shape.strokeBorder(.white.opacity(isEnabled ? 0.22 : 0.08), lineWidth: 0.8)
-                    }
-                }
+            surface
+                // After everything that draws the button, the glass included, so all of it is
+                // the button: padding and glass are not hit-testable on their own.
                 .contentShape(.capsule)
                 .scaleEffect(configuration.isPressed ? 0.97 : 1)
                 .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
                 .animation(Theme.Motion.hover, value: isHovering)
                 .onHover { isHovering = $0 }
         }
+
+        @ViewBuilder
+        private var surface: some View {
+            switch emphasis {
+            case .floating:
+                circle.floatingSurface(in: shape, interactive: true)
+            case .onArtwork:
+                circle.artworkChip(in: shape)
+            case .prominent, .standard, .quiet:
+                styledLabel
+                    .padding(.horizontal, horizontalPadding)
+                    .padding(.vertical, isCompact ? Theme.Spacing.xsmall + 1 : Theme.Spacing.small)
+                    .background { background }
+                    .overlay {
+                        if emphasis != .quiet {
+                            shape.strokeBorder(.white.opacity(isEnabled ? 0.22 : 0.08), lineWidth: 0.8)
+                        }
+                    }
+            }
+        }
+
+        /// A control over artwork, before its surface: at least a circle — an icon comes out
+        /// round, and a word comes out as a pill as tall as the circles beside it — with the
+        /// fill put on before the surface, so the violet reaches the edge of it.
+        private var circle: some View {
+            styledLabel
+                .frame(minWidth: floatingDiameter, minHeight: floatingDiameter)
+                .background { background }
+        }
+
+        private var styledLabel: some View {
+            configuration.label
+                .font(.system(textStyle, weight: .semibold))
+                .foregroundStyle(foreground)
+        }
+
+        private var textStyle: Font.TextStyle {
+            switch emphasis {
+            // A floating icon has a circle to itself rather than a line of text to sit in.
+            case .floating, .onArtwork: isCompact ? .body : .title3
+            default:                    isCompact ? .footnote : .body
+            }
+        }
+
+        /// 44 on a hero, the height its controls already were, so the row does not move; 28
+        /// for the star in the corner of a card.
+        private var floatingDiameter: CGFloat { isCompact ? 28 : 44 }
 
         /// Icon-only buttons get square padding so they come out round rather than oval.
         private var horizontalPadding: CGFloat {
@@ -311,7 +386,7 @@ struct PortalButtonStyle: ButtonStyle {
             guard isEnabled else { return emphasis == .quiet ? .secondary : .white.opacity(0.55) }
 
             switch emphasis {
-            case .prominent, .standard:
+            case .prominent, .standard, .floating, .onArtwork:
                 return .white
             case .quiet:
                 // White once there's a violet fill behind it; the ordinary foreground until
@@ -333,7 +408,7 @@ struct PortalButtonStyle: ButtonStyle {
                     .fill(isHovering && isEnabled ? highlightColor : baseColor)
                     .opacity(isEnabled ? 1 : 0.4)
                     .brightness(configuration.isPressed ? -0.06 : 0)
-            case .quiet:
+            case .quiet, .floating, .onArtwork:
                 shape
                     .fill(baseColor.opacity(isHovering && isEnabled ? (configuration.isPressed ? 1 : 0.85) : 0))
             }
@@ -358,6 +433,12 @@ extension ButtonStyle where Self == PortalButtonStyle {
     /// An icon in a row, a toolbar, or beside a field.
     static var portalQuiet: PortalButtonStyle { .init(emphasis: .quiet) }
     static var portalQuietCompact: PortalButtonStyle { .init(emphasis: .quiet, isCompact: true) }
+
+    /// A control on its own over artwork: glass, then violet to the edge under the pointer.
+    static var portalFloating: PortalButtonStyle { .init(emphasis: .floating) }
+
+    /// The same, on a card's artwork: on a tinted chip rather than glass, because a card scrolls.
+    static var portalOnArtwork: PortalButtonStyle { .init(emphasis: .onArtwork, isCompact: true) }
 }
 
 /// A row in a selectable rail — the storefront list in Import Game, and anywhere else a

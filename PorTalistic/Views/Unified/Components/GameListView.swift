@@ -24,6 +24,8 @@ struct GameListView: View {
     // Read once here and handed to the cards, rather than each card keeping its own
     // defaults observer.
     @AppStorage("gameImageCardBlur") private var glowRadius: Double = 0
+    @AppStorage(GameListViewModel.titleOrderStorageKey) private var titleOrder: GameListViewModel.TitleOrder = .ascending
+    @AppStorage(GameListViewModel.installedFirstStorageKey) private var installedFirst: Bool = true
 
     @State private var isGameImportViewPresented: Bool = false
 
@@ -31,7 +33,9 @@ struct GameListView: View {
     /// view's own state and rebuild the grid.
     @State private var hover: CardHoverState = .init()
 
-    private var games: [Game] { viewModel.library(inStorefront: storefront) }
+    private var games: [Game] {
+        viewModel.library(inStorefront: storefront, titleOrder: titleOrder, installedFirst: installedFirst)
+    }
 
     /// Worked out once per body pass and handed down.
     ///
@@ -70,7 +74,7 @@ struct GameListView: View {
                     case .list:
                         LazyVStack(spacing: Theme.Spacing.small) {
                             ForEach(games) { game in
-                                ListGameCard(game: game)
+                                ListGameCard(game: game, hover: hover)
                             }
                         }
                         .padding(Theme.Spacing.large)
@@ -80,7 +84,7 @@ struct GameListView: View {
                 // this is the half that clears it when the pointer leaves the grid entirely,
                 // which no individual card is in a position to notice.
                 .modifier(ScrollPhaseReporter(hover: hover))
-                .onHover { if !$0 { hover.gameID = nil } }
+                .onHover { if !$0 { hover.clear() } }
             }
         }
         // On the `Group`, so it outlives its own result. Attached to the scroll view inside

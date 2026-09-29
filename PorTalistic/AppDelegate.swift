@@ -20,7 +20,22 @@ import FirebaseCrashlytics
 
 // TODO: modularise
 class AppDelegate: NSObject, NSApplicationDelegate {
+    /// Whether this process was started to run tests rather than to be used.
+    ///
+    /// A unit test bundle is hosted by the app, so `xcodebuild test` launches PorTalistic and
+    /// loads the tests into it. Without this, everything below would run against the real
+    /// machine on every ⌘U: the migrator moves folders, the provisioner starts installing
+    /// runtimes, `refreshFromStorefronts()` talks to Epic and GOG, and the library gets
+    /// rewritten in `UserDefaults`. A test suite that edits the thing it is testing is worse
+    /// than no test suite. Tests get the app's code; they don't get its side effects.
+    static var isRunningTests: Bool {
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+            || NSClassFromString("XCTestCase") != nil
+    }
+
     func applicationDidFinishLaunching(_: Notification) {
+        guard !Self.isRunningTests else { return }
+
         // First, before anything derives a path from the app's name or identifier.
         //
         // Both of the app's data locations are derived rather than chosen — application
@@ -39,6 +54,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // while operations are in flight, so this is safe to fire at launch.
         Task { @MainActor in
             Provisioner.shared.start()
+        }
+
+        // Force Quit, the Dock and ⌘-Tab list a Windows program under the name the engine gives
+        // it, and the engine gives it upstream's: `BioshockHD.exe (Mythic)`. This renames them
+        // once they have a window. See `Wine.ApplicationNaming`.
+        Task { @MainActor in
+            Wine.ApplicationNaming.shared.start()
         }
 
         // MARK: Firebase Configuration
@@ -69,7 +91,30 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         ])
 
         Task {
+            // Whatever the last session left running. An orphaned legendary keeps downloading
+            // where nothing can see it and keeps its installed-games lock, which is how an
+            // install resumed here was refused outright — in a modal, at startup. See
+            // `ChildProcesses.stopOrphans(of:within:)`.
+            //
+            // Beside the library rather than in front of it: stopping something that refuses to
+            // stop takes a while, and the first screen has no reason to wait for it. The resume
+            // does wait, because that is the one that would land on the lock.
+            async let orphansStopped: Int = ChildProcesses.stopOrphans(
+                of: [Legendary.legendaryExecutableURL, GOGDL.executableURL].compactMap { $0 }
+            )
+
             try? await GameDataStore.shared.refreshFromStorefronts()
+            _ = await orphansStopped
+
+            // Anything that was downloading when the app last closed, started again and shown
+            // — after the library, because an install is queued against a game and there are
+            // none before this. See `PendingInstalls`.
+            await PendingInstalls.resumeInterrupted()
+
+            // Last, and only if the line above queued nothing: legendary's housekeeping deletes
+            // the file that makes resuming possible, so it may not run in front of a download
+            // that is counting on it.
+            await Legendary.cleanUpStaleData()
         }
 
         // MARK: Start metadata update cycle for Legendary
@@ -82,11 +127,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // MARK: Autosync Legendary cloud saves
         Task(priority: .utility) {
-            let process: Process = .init()
-            process.arguments = ["-y", "sync-saves"]
-            await Legendary.transformProcess(process)
-            
-            try process.run()
+            await Legendary.synchroniseCloudSaves()
         }
 
         // MARK: DiscordRPC Delegate Ininitialisation & Connection
@@ -99,8 +140,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 #if !DEBUG
         if !Bundle.main.bundleURL.pathComponents.contains("Applications") {
             let alert = NSAlert()
-            alert.messageText = String(localized: "Mythic has detected it's running outside of the applications folder.")
-            alert.informativeText = String(localized: "It's recommended to move Mythic into the Applications folder on your device.")
+            alert.messageText = String(localized: "\(Branding.name) has detected it's running outside of the applications folder.")
+            alert.informativeText = String(localized: "It's recommended to move \(Branding.name) into the Applications folder on your device.")
             alert.alertStyle = .informational
             alert.addButton(withTitle: String(localized: "OK"))
 
@@ -148,28 +189,64 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @MainActor func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard GameOperationManager.shared.queue.contains(where: { $0.type.modifiesFiles }) else { return .terminateNow }
+        guard GameOperationManager.shared.queue.contains(where: { $0.type.modifiesFiles }) else {
+            // Nothing worth asking about — but not necessarily nothing running. The app starts
+            // `legendary` for its own errands, and those are not operations, so an empty queue
+            // used to quit straight past them and leave one behind. No alert: the person is not
+            // being asked to make a decision about the app's own housekeeping, only waited for.
+            guard ChildProcesses.hasLiveProcesses else { return .terminateNow }
+
+            Self.finishTerminating(sender, quitting: true)
+            return .terminateLater
+        }
 
         let alert: NSAlert = .init()
         
         alert.messageText = String(localized: "Are you sure you want to quit?")
-        alert.informativeText = String(localized: "Mythic is still operating on games.")
+        alert.informativeText = String(localized: "\(Branding.name) is still operating on games. Downloads will stop, and pick up where they left off the next time you open \(Branding.name).")
         alert.alertStyle = .warning
         
         alert.addButton(withTitle: String(localized: "Quit"))
         alert.addButton(withTitle: String(localized: "Cancel"))
 
-        if let window = sender.windows.first {
+        // The window the person is looking at, and only if it is free to show a sheet — the
+        // same rule as the operation-failure alert, for the same reason: a window hosts one
+        // sheet, and a second waits invisibly behind the first. It matters more here, because
+        // the reply below is the only thing that ends the quit: attached to a busy window, or
+        // to `windows.first` when there are no windows at all, ⌘Q hung for good with the
+        // downloads still running.
+        let window = (NSApp.keyWindow ?? NSApp.mainWindow)
+            .flatMap { $0.attachedSheet == nil && $0.isVisible ? $0 : nil }
+
+        if let window {
             alert.beginSheetModal(for: window) { response in
-                if case .alertFirstButtonReturn = response {
-                    sender.reply(toApplicationShouldTerminate: true)
-                } else {
-                    sender.reply(toApplicationShouldTerminate: false)
-                }
+                Self.finishTerminating(sender, quitting: response == .alertFirstButtonReturn)
             }
+        } else {
+            NSApp.activate()
+            Self.finishTerminating(sender, quitting: alert.runModal() == .alertFirstButtonReturn)
         }
 
         return .terminateLater
+    }
+
+    /// Stop the downloads, then let the quit through.
+    ///
+    /// Quitting waits for the downloads it stops: `legendary` and `gogdl` write their resume
+    /// state when they are interrupted, and terminating the instant they are asked to leaves
+    /// that unwritten — a download that would start again from nothing next time.
+    ///
+    /// Always asynchronous, including the "no, don't quit" answer: replying before
+    /// `applicationShouldTerminate` has returned `.terminateLater` is not a thing AppKit
+    /// promises anything about.
+    @MainActor private static func finishTerminating(_ sender: NSApplication, quitting: Bool) {
+        Task { @MainActor in
+            if quitting {
+                await GameOperationManager.shared.stopFileOperationsForQuit()
+            }
+
+            sender.reply(toApplicationShouldTerminate: quitting)
+        }
     }
 
     @MainActor
@@ -178,27 +255,45 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             try? Wine.killAll()
         }
 
-        Task.detached(priority: .userInitiated) {
-            await GameOperationManager.shared.cancelAllOperations()
-        }
-
-        Task.detached(priority: .userInitiated) {
-            let process: Process = .init()
-            process.arguments = ["cleanup"]
-            await Legendary.transformProcess(process)
-            
-            try process.run()
-        }
+        // Downloads are stopped in `applicationShouldTerminate`, where there is still time to
+        // wait for them to write down where they got to. Nothing is cancelled here: the queue
+        // now holds a launch for as long as its game is running, and cancelling one of those
+        // kills the game — which is `quitOnAppClose`'s decision, taken above, and nobody
+        // else's.
+        //
+        // legendary's housekeeping used to run here, from a detached task that was started and
+        // never waited for. It deleted legendary's temporary files — including the `.resume`
+        // that `applicationShouldTerminate` had just stopped the download in order to write —
+        // so an install picked back up at the next launch downloaded the whole game again. It
+        // now runs at launch, once the library is refreshed and only when no download would be
+        // sacrificed to it. See `Legendary.cleanUpStaleData()`.
     }
 }
 
-extension AppDelegate: UNUserNotificationCenterDelegate {}
+extension AppDelegate: UNUserNotificationCenterDelegate {
+    /// Show a notification even when this app is the one in front.
+    ///
+    /// Without this, macOS silently drops every notification posted while the app is frontmost
+    /// — and frontmost is exactly where it is at the moment that matters. A game exits, the
+    /// front comes back here, and the post-mortem then says what it found: that a download has
+    /// finished, that it changed a configuration for the next run, or that it has tried
+    /// everything it knows and is out of ideas. All of it went nowhere. The delegate was set
+    /// and left empty, so the feature looked implemented from every side except the one the
+    /// person is on.
+    func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
+        // No sound. Every one of these arrives just after something finished — a download, a
+        // game — and a noise for each would be the app talking over the thing the person went
+        // back to.
+        [.banner, .list]
+    }
+}
 
 extension AppDelegate: SwordRPCDelegate {
     func swordRPCDidConnect(_ rpc: SwordRPC) {
         rpc.setPresence({
             var presence: RichPresence = .init()
-            presence.details = "Idling in Mythic"
+            presence.details = "Idling in \(Branding.name)"
             presence.state = "Idle"
             presence.timestamps.start = .now
             presence.assets.largeImage = "macos_512x512_2x"

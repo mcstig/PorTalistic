@@ -103,3 +103,7 @@ iOSInjectionProject/
 manifest-signing-key
 *.signing-key
 *.private-key
+
+# Logs and prefix state captured while debugging. These have held live
+# bearer tokens — see redactSecrets(inLogAt:).
+_debug/

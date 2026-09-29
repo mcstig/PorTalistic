@@ -34,6 +34,14 @@ struct HomeView: View {
 
     private var recent: Game? { gameDataStore.recent }
 
+    /// Which card the pointer is over, for every shelf on the page.
+    ///
+    /// One for the page rather than one per shelf, because the page scrolls too: with each shelf
+    /// reporting only its own sideways scroll, scrolling the page down slid cards under a still
+    /// pointer and lit them one after another — lift, shadow, and the grey of an uninstalled
+    /// game turning to colour and back.
+    @State private var hover: CardHoverState = .init()
+
     /// Installed games by when they were last played, most recent first, minus the one
     /// already filling the hero.
     private var jumpBackIn: [Game] {
@@ -47,7 +55,7 @@ struct HomeView: View {
     private var favourites: [Game] {
         gameDataStore.library
             .filter { $0.isFavourited && $0 != recent }
-            .sorted { $0.title < $1.title }
+            .sorted { Game.nameOrder($0, $1) == .orderedAscending }
     }
 
     /// Installed and never launched from here — the pile you meant to get to.
@@ -57,7 +65,7 @@ struct HomeView: View {
                 guard case .installed = game.installationState else { return false }
                 return game.lastLaunched == nil && !game.isFavourited && game != recent
             }
-            .sorted { $0.title < $1.title }
+            .sorted { Game.nameOrder($0, $1) == .orderedAscending }
             .prefix(14)
             .map(\.self)
     }
@@ -74,20 +82,24 @@ struct HomeView: View {
                 VStack(alignment: .leading, spacing: Theme.Spacing.section) {
                     GameShelf(title: String(localized: "Jump back in"),
                               systemImage: "clock.arrow.circlepath",
-                              games: jumpBackIn)
+                              games: jumpBackIn,
+                              hover: hover)
 
                     GameShelf(title: String(localized: "Your favourites"),
                               systemImage: "star",
                               games: favourites,
-                              emptyMessage: recent == nil ? nil : String(localized: "Games you favourite show up here. Right-click any game to favourite it."))
+                              emptyMessage: recent == nil ? nil : String(localized: "Games you favourite show up here. Right-click any game to favourite it."),
+                              hover: hover)
 
                     GameShelf(title: String(localized: "Ready to play"),
                               systemImage: "arrow.down.circle",
-                              games: readyToPlay)
+                              games: readyToPlay,
+                              hover: hover)
                 }
                 .padding(.bottom, Theme.Spacing.section)
             }
         }
+        .modifier(ScrollPhaseReporter(hover: hover))
         .artworkUnderTitleBar()
         .navigationTitle("Home")
         .task(priority: .background) {
@@ -191,14 +203,13 @@ private struct HomeHero: View {
                         NavigationLink(value: GameRoute(gameID: game.id)) {
                             Label("Details", systemImage: "info.circle")
                                 .font(.system(.body, weight: .medium))
-                                .foregroundStyle(.white)
+                                // A word needs room at its ends that an icon doesn't; the
+                                // style makes it as tall as the circles either side.
                                 .padding(.horizontal, Theme.Spacing.large)
-                                .padding(.vertical, Theme.Spacing.small)
                         }
-                        .buttonStyle(.plain)
-                        .floatingCapsule(interactive: true)
+                        .buttonStyle(.portalFloating)
 
-                        GameCard.FavouriteToggle(game: $game)
+                        GameCard.FavouriteToggle(game: $game, isOnHero: true)
                     }
                     .padding(.top, Theme.Spacing.xsmall)
                 }
@@ -226,7 +237,8 @@ struct GameShelf: View {
     /// which is the right answer for a shelf the user hasn't earned yet.
     var emptyMessage: String?
 
-    @State private var hover: CardHoverState = .init()
+    /// The page's, not the shelf's own — see `HomeView.hover`.
+    let hover: CardHoverState
     @AppStorage(GameCardSize.storageKey) private var cardSize: GameCardSize = .regular
     @AppStorage("gameImageCardBlur") private var glowRadius: Double = 0
 
@@ -264,7 +276,7 @@ struct GameShelf: View {
                     }
                     .scrollIndicators(.hidden)
                     .modifier(ScrollPhaseReporter(hover: hover))
-                    .onHover { if !$0 { hover.gameID = nil } }
+                    .onHover { if !$0 { hover.clear() } }
                 }
             }
         }

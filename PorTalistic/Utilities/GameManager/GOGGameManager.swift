@@ -163,7 +163,24 @@ class GOGGameManager {
                     throw CocoaError(.serviceApplicationLaunchFailed)
                 }
 
+                // `openApplication` can't be interrupted, and it waits for the application to
+                // finish launching — seconds, for a game. A Force Quit already pressed is heard
+                // here rather than after it.
+                try Task.checkCancellation()
+
                 let application = try await NSWorkspace.shared.openApplication(at: location, configuration: configuration)
+
+                // And one pressed while it was opening lands here, with the game up: ended now,
+                // rather than by the wait below — whose handler runs as it is entered, before
+                // there is anything listening for the game to go.
+                guard !Task.isCancelled else {
+                    application.forceTerminate()
+                    return
+                }
+
+                // A native game is up the moment its application is: no Wine, nothing to
+                // identify by arrival, and `openApplication` has already waited for it.
+                await MainActor.run { Game.operationManager.noteGameAppeared(forGameID: game.id) }
 
                 await withTaskCancellationHandler {
                     await withCheckedContinuation { continuation in
@@ -179,7 +196,9 @@ class GOGGameManager {
                         }
                     }
                 } onCancel: {
-                    application.terminate()
+                    // Force Quit, not a request: `terminate()` asks, and a game that is still
+                    // starting — or that puts up "are you sure?" — simply carries on.
+                    application.forceTerminate()
                 }
 
             case .windows:
@@ -230,7 +249,9 @@ class GOGGameManager {
                 // under it inherit the write end, so a pipe's reader waits for the last of
                 // them rather than for the game. See ``Process/runBounded(timeout:)``.
                 let logURL = Wine.logURL(forGameTitled: game.title, inContainerAtURL: containerURL)
-                let logHandle = Wine.beginLogging(to: logURL, describing: target.executable)
+                let logHandle = Wine.beginLogging(to: logURL,
+                                                  describing: target.executable,
+                                                  environment: environment)
 
                 if let logHandle {
                     process.standardOutput = logHandle
@@ -239,21 +260,71 @@ class GOGGameManager {
 
                 defer { try? logHandle?.close() }
 
-                try process.run()
+                // How Force Quit reaches this launch, whenever it is pressed. The process used to be
+                // started with nothing watching for a stop, so a Force Quit pressed while the
+                // container was being set up found nothing to stop and the game started anyway.
+                // Killed rather than asked: see the same launch on the Epic path.
+                let launch: StoppableLaunch = .init(halting: { $0.stopIfRunning(SIGKILL) })
+
+                // And what reaches the prefix: begun the moment Force Quit is pressed, finished
+                // below. Not begun by the handler around the launch itself. A stop that lands
+                // there either came first, so Wine was never started and the launch ends by
+                // throwing — with nobody left to wait for passes it had begun — or came as Wine
+                // started, which kills it on the spot and carries on into the handler that does.
+                let forceQuit: Wine.ForceQuit = .init(containerAt: containerURL)
+
+                try await withTaskCancellationHandler {
+                    try launch.launch(process)
+                } onCancel: {
+                    launch.stop()
+                }
 
                 // Not a courtesy: Wine's Mac driver won't change the display mode until its
                 // process is the active application, so a game left behind the launcher comes
                 // up windowed no matter what its settings say.
-                await Wine.handOverForeground(toGameNamed: target.executable.lastPathComponent,
-                                              startedAs: process.processIdentifier,
-                                              hidingLauncher: shouldHideLauncher)
+                //
+                // Its own task, and deliberately not awaited — see the same call on the Epic
+                // path. It watches for up to a minute, and a launch that waits for it is a
+                // launch that reports itself as still starting long after the game is up.
+                let executableName = target.executable.lastPathComponent
+                let winePID = process.processIdentifier
+                let launchedGameID = game.id
 
-                process.waitUntilExit()
+                // The plan and the transcript, hoisted for the same reason as the pid: the
+                // post-mortem runs after the game exits, and it has to read *this* launch's
+                // log against *this* launch's settings.
+                let launchedPlan = plan
+                let launchedTranscriptURL = logURL
 
-                // Put the container back. Shared per runtime, so leaving this game's settings
-                // behind would change the next game's launch — see `LaunchPlan.revert()` for
-                // why losing it to a crash is survivable rather than corrupting.
-                await Provisioner.shared.revert(plan)
+                await withTaskCancellationHandler {
+                    // Followed until the game exits, not until this process does: a two-stage
+                    // engine hands its window to a second process and the first one returns
+                    // straight away. `async let`, so cancelling the launch cancels this too.
+                    async let supervised: Void = Wine.superviseGame(named: executableName,
+                                                                    startedAs: winePID,
+                                                                    hidingLauncher: shouldHideLauncher,
+                                                                    forGameWithID: launchedGameID,
+                                                                    plan: launchedPlan,
+                                                                    transcriptAt: launchedTranscriptURL)
+
+                    await process.waitUntilExitOrCancellation()
+                    await supervised
+                } onCancel: {
+                    // Stopping a game means stopping the prefix it runs in. This process *is*
+                    // Wine, but the game is a descendant of it, so killing this one on its own
+                    // leaves the game running and the launch looking stuck. Through the launch,
+                    // never `terminate()`, which raises on a process that is not running — and
+                    // the crash would take the kill below with it.
+                    launch.stop()
+                    forceQuit.begin()
+                }
+
+                // Made certain before the launch is over — see `Wine.forceQuit(containerAt:)`.
+                if launch.hasBeenStopped {
+                    await forceQuit.finish()
+                }
+
+                try? logHandle?.close()
 
                 if shouldHideLauncher {
                     await MainActor.run { NSApp.unhide(nil) }

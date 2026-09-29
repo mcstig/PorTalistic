@@ -61,7 +61,7 @@ extension Wine {
             let temporaryDirectory = containerURL.appending(path: "drive_c/windows/temp")
             try FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
 
-            let fileName = "mythic-root-certificates.reg"
+            let fileName = "\(Branding.name.lowercased())-root-certificates.reg"
             try registryFile(for: certificates).write(
                 to: temporaryDirectory.appending(path: fileName), atomically: true, encoding: .utf8
             )
@@ -84,7 +84,7 @@ extension Wine {
                 certificates: \(certificates.count)
                 """
             try? transcript.write(
-                to: containerURL.appending(path: "mythic-certificate-import.log"),
+                to: containerURL.appending(path: "\(Branding.name.lowercased())-certificate-import.log"),
                 atomically: true, encoding: .utf8
             )
 

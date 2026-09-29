@@ -49,6 +49,22 @@ struct RuntimeRelease: Identifiable, Hashable {
     /// Shown to the user when choosing between runtimes.
     let summary: String
 
+    /// The lineage this build belongs to, for retention and for ordering.
+    ///
+    /// "Keep the latest three builds" has to mean the latest three *of the same thing*. A new
+    /// Wine version arrives as a new id — `CompatibilityManifest`'s second rule forbids
+    /// repointing an existing one at different bytes — so three DXMT releases landing must not
+    /// evict Wine Stable, which is a different build kept for a different reason. The version
+    /// is in the id; the family is what the ids of one lineage share.
+    ///
+    /// `nil` means the build is its own family: never pruned, and never prunes anything. That
+    /// is the safe answer for an entry added without anyone thinking about lineage, which is
+    /// how most of them will be added.
+    var family: String?
+
+    /// ``family``, or the id when it has none.
+    var resolvedFamily: String { family ?? id }
+
     /// Whether this Wine exposes `winemac.drv`'s Metal escape interface, which is what DXMT
     /// needs to provide Direct3D 11 on Metal.
     ///
@@ -62,6 +78,14 @@ struct RuntimeRelease: Identifiable, Hashable {
     /// everything looks right, and every swap chain fails with `EGL_BAD_ALLOC`. So it
     /// defaults to false and is set only for builds known to have them.
     var exposesMetalEscapes: Bool = false
+
+    /// Whether this build was configured with a real i386 architecture, rather than relying on
+    /// CrossOver's 32-on-64.
+    ///
+    /// A claim about how the build was configured — `--enable-archs=i386,x86_64` — and it has
+    /// to be set by hand for that reason: nothing about a tarball says it. See
+    /// ``RuntimeProfile/Requirements/nativeThirtyTwoBit`` for why a game would need it.
+    var hasNativeThirtyTwoBit: Bool = false
 
     /// A second archive carrying the Unix libraries the engine links against, if it doesn't
     /// carry its own.
@@ -157,7 +181,11 @@ extension RuntimeRelease {
                 installation gets no TLS — which games do not use, because the store client \
                 and the launcher both live outside it.
                 """,
-            exposesMetalEscapes: true
+            family: "wine-dxmt",
+            exposesMetalEscapes: true,
+            // `--enable-archs=i386,x86_64` in `Compatibility/build-dxmt-wine.sh`: a real
+            // i386 architecture rather than 32-on-64. The only build here with one.
+            hasNativeThirtyTwoBit: true
         )
         ]
 #else
@@ -181,7 +209,8 @@ extension RuntimeRelease {
                 Mainline Wine, four major versions newer than the bundled engine. No D3DMetal, \
                 so it isn't the right choice for demanding games — but it's the current \
                 reference point for anything the older engine can't run, the Steam client above all.
-                """
+                """,
+            family: "wine-stable"
         ),
         .init(
             id: "wine-sikarugir-11.0",
@@ -198,6 +227,7 @@ extension RuntimeRelease {
                 is killed by macOS the moment Wine hands control to Windows code. Try it, and \
                 keep Wine Stable if it can't boot.
                 """,
+            family: "wine-sikarugir",
             exposesMetalEscapes: true,
             supportLibraries: .init(
                 downloadURL: .init(string: "https://github.com/Sikarugir-App/Wrapper/releases/download/v1.0/Template-1.0.14.tar.xz")!,

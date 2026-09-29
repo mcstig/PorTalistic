@@ -56,7 +56,7 @@ enum RuntimeInstaller {
     struct PayloadMissingError: LocalizedError {
         let expectedPath: String
         var errorDescription: String? {
-            String(localized: "The downloaded runtime didn't contain the files Mythic expected.")
+            String(localized: "The downloaded runtime didn't contain the files \(Branding.name) expected.")
         }
         var failureReason: String? { "missing \(expectedPath)" }
     }
@@ -91,7 +91,7 @@ enum RuntimeInstaller {
         }
 
         let scratch = FileManager.default.temporaryDirectory
-            .appending(path: "MythicRuntime-\(UUID().uuidString)")
+            .appending(path: "\(Branding.name)Runtime-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: scratch) }
 
@@ -151,6 +151,12 @@ enum RuntimeInstaller {
         runtime.version = runtime.resolvedVersion()
         Runtime.invalidateDiscoveryCache()
         log.notice("Installed \(runtime.description, privacy: .public) at \(destination.path, privacy: .public)")
+
+        // Here rather than at either call site, because "install" is the only moment the set
+        // of builds on disk grows and there are two places that do it — the launch path and
+        // the runtime list in Settings. A sweep hung off one of them is a sweep that doesn't
+        // happen for the other.
+        RuntimeRetention.sweep()
 
         return runtime
     }
@@ -302,7 +308,7 @@ enum RuntimeInstaller {
             .deletingLastPathComponent()
 
         let scratch = FileManager.default.temporaryDirectory
-            .appending(path: "MythicRuntimeRepair-\(UUID().uuidString)")
+            .appending(path: "\(Branding.name)RuntimeRepair-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: scratch) }
 

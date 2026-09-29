@@ -626,10 +626,14 @@ enum GOGDL {
     ///   ``update(game:qualityOfService:)`` and ``repair(game:qualityOfService:)`` are handed
     ///   the game's directory. Getting that backwards nests a second copy of the folder.
     @discardableResult
+    /// - Parameter isAutomatic: whether the app asked for this rather than a person — an
+    ///   install picked back up at startup. Known before the operation is queued, because by the
+    ///   time this returns the download is already running.
     @MainActor static func install(game: GOGGame,
                                    platform: Game.Platform,
                                    qualityOfService: QualityOfService = .default,
-                                   baseDirectoryURL: URL? = UserDefaults.standard.url(forKey: "installBaseURL")) async throws -> GameOperation {
+                                   baseDirectoryURL: URL? = UserDefaults.standard.url(forKey: "installBaseURL"),
+                                   isAutomatic: Bool = false) async throws -> GameOperation {
         if let supported = game.getSupportedPlatforms(), !supported.contains(platform) {
             throw UnsupportedPlatformError(title: game.title, platform: platform)
         }
@@ -644,8 +648,17 @@ enum GOGDL {
         // game with DLC — every depot manifest has to be fetched and decompressed to answer —
         // and a sheet that sits on a spinner for that long reads as broken, while a queued
         // operation that says "Installing" reads as exactly what it is.
+        // Noted before it starts, so an install interrupted by quitting is picked up on the
+        // next launch instead of silently carrying on somewhere the interface can't see it.
+        // See `PendingInstalls`.
+        PendingInstalls.remember(.init(gameID: game.id,
+                                       storefront: .gog,
+                                       platform: platform,
+                                       baseDirectory: baseDirectoryURL))
+
         let operation = makeInstallOperation(game: game, platform: platform, baseDirectoryURL: baseDirectoryURL)
 
+        operation.isAutomatic = isAutomatic
         operation.qualityOfService = qualityOfService
         Game.operationManager.queueOperation(operation)
         return operation
@@ -654,12 +667,17 @@ enum GOGDL {
     private nonisolated static func makeInstallOperation(game: GOGGame,
                                                          platform: Game.Platform,
                                                          baseDirectoryURL: URL) -> GameOperation {
-        makeOperation(game: game, type: .install) { progress in
+        // Noted so that stopping the install can take the partial download with it — see
+        // `GameOperation.discardsDownloadWhenStopped`.
+        let noted: DownloadDestination = .init(under: baseDirectoryURL)
+
+        let operation = makeOperation(game: game, type: .install) { progress in
             let gameMetadata = try await metadata(for: game, platform: platform)
 
             // gogdl appends the game's own folder name to `--path` for `download` (and only
             // for `download`), so it is handed the base directory and this is where it lands.
             let destination = baseDirectoryURL.appending(path: gameMetadata.folderName)
+            noted.set(destination)
 
             try await runGOGDL(arguments: [
                 "download", game.id,
@@ -685,6 +703,9 @@ enum GOGDL {
                 GameDataStore.shared.library.update(with: game)
             }
         }
+
+        operation.downloadDestination = noted
+        return operation
     }
 
     /// Brings an installed game up to the latest build.
@@ -767,8 +788,22 @@ enum GOGDL {
     private nonisolated static func runGOGDL(arguments: [String], reporting progress: Progress) async throws {
         let process = try makeProcess(arguments: arguments)
 
+        // Set, not inherited — the same fault as legendary's. Spawned from a `.utility` task,
+        // the download ran at utility quality of service, and utility disk writes are
+        // throttled.
+        process.qualityOfService = .userInitiated
+
+        // Known about for as long as it runs, so quitting can be sure it is gone — see
+        // `ChildProcesses`.
+        ChildProcesses.register(process)
+        defer { ChildProcesses.forget(process) }
+
+        // How a stop reaches gogdl — including one that arrives before it has started. See
+        // `StoppableLaunch`.
+        let launch: StoppableLaunch = .init()
+
         try await withTaskCancellationHandler {
-            try await process.runStreamed(throwsOnChunkError: false) { chunk in
+            try await process.runStreamed(throwsOnChunkError: false, launchingWith: launch) { chunk in
                 if case .standardError = chunk.stream {
                     updateProgress(progress, from: chunk.output)
                 }
@@ -777,8 +812,10 @@ enum GOGDL {
             }
         } onCancel: {
             // Interrupt rather than terminate: gogdl writes out what it has finished, and a
-            // download killed outright starts again from nothing.
-            process.interrupt()
+            // download killed outright starts again from nothing. Through the launch, because
+            // this runs at once, before gogdl exists, when Stop lands while the body is still
+            // awaiting something earlier — and then the right answer is that it never starts.
+            launch.stop()
         }
 
         try Task.checkCancellation()

@@ -127,9 +127,18 @@ extension CodableAppStorage where Value: ExpressibleByNilLiteral {
     
     private let log: Logger = .custom(category: "CodableUserDefaultsObserver")
     
-    @MainActor deinit {
-        _ = withExtendedLifetime(cancellable, { $0?.cancel() })
-    }
+    // No `deinit`. There was one — `withExtendedLifetime(cancellable) { $0?.cancel() }` — and
+    // it did nothing this class doesn't already do: `AnyCancellable` cancels its subscription
+    // when it is released, and releasing this observer releases the one it holds.
+    //
+    // It also crashed the compiler. `swift-frontend` 6.3.3 recursed until it ran out of stack
+    // in `isCallerAndCalleeLayoutConstraintsCompatible` during `EarlyPerfInliner`, inlining
+    // that `withExtendedLifetime` closure into the `deinit` of a generic `@usableFromInline`
+    // class. Only in Release, because `-Onone` never runs that pass, so a Debug build and the
+    // whole test suite were perfectly green while `xcodebuild archive` could not finish at all.
+    //
+    // Deleted rather than worked around with `@inline(never)`: the code was redundant, and a
+    // redundant line that crashes the optimiser is not a line worth keeping.
     
     convenience init(key: String, defaultValue: T, store: UserDefaults = .standard) {
         self.init(key: key,
