@@ -34,6 +34,7 @@ struct ContentView: View {
 
     @ObservedObject private var updateController: SparkleUpdateController = .shared
     @Bindable private var operationManager: GameOperationManager = .shared
+    @Bindable private var provisioner: Provisioner = .shared
     @Bindable private var gameDataStore: GameDataStore = .shared
 
     @State private var selection: SidebarItem = .home
@@ -310,9 +311,17 @@ struct ContentView: View {
                             buttonText: String(localized: "Relaunch")) {
                     acknowledgement(.update)
                 }
+            case .idle where updateController.postponedVersion != nil:
+                // "Later" at launch. The offer that was answered is spent, so this asks afresh.
+                updateBlock(String(localized: "Update Available"),
+                            buttonText: String(localized: "Show More")) {
+                    updateController.checkForUpdates(userInitiated: true)
+                }
             default:
                 EmptyView()
             }
+
+            provisioningBlock
 
             // Above the version text, and deliberately not inside the `#if DEBUG` below it:
             // that text only exists in Debug builds, and a support button only the developer
@@ -348,6 +357,46 @@ struct ContentView: View {
         }
         .padding(.horizontal, Theme.Spacing.small)
         .padding(.bottom, Theme.Spacing.small)
+    }
+
+    /// What the app is fetching by itself — a Wine build, the engine, DXMT — or the last
+    /// thing that failed to arrive.
+    ///
+    /// This used to be nowhere. A few hundred megabytes of Wine downloading in the background
+    /// looked exactly like nothing happening, and a download that failed looked the same.
+    @ViewBuilder
+    private var provisioningBlock: some View {
+        if let status = provisioner.activity.localizedDescription {
+            VStack(alignment: .leading, spacing: Theme.Spacing.small) {
+                Label(status, systemImage: "arrow.down.circle")
+                    .font(.footnote.weight(.medium))
+                    .lineLimit(2)
+
+                // `nil` draws an indeterminate bar: verifying and unpacking report no measure.
+                ProgressView(value: provisioner.activity.fractionCompleted)
+            }
+            .padding(Theme.Spacing.medium)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .cardSurface(cornerRadius: Theme.Radius.tile, elevated: false)
+        } else if let failure = provisioner.lastFailure {
+            VStack(alignment: .leading, spacing: Theme.Spacing.small) {
+                Label(failure, systemImage: "exclamationmark.triangle.fill")
+                    .font(.footnote)
+                    .lineLimit(3)
+                    .help(failure)
+
+                Button {
+                    provisioner.retryAfterFailure()
+                } label: {
+                    Text("Try Again")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.portalProminentCompact)
+            }
+            .padding(Theme.Spacing.medium)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .cardSurface(cornerRadius: Theme.Radius.tile, elevated: false)
+        }
     }
 
     @ViewBuilder

@@ -97,6 +97,22 @@ extension EngineInstallationView {
                     viewModel.stepStage(); return
                 }
 
+                // A provisioning pass may already be fetching it — on a first run it starts at
+                // launch, well before onboarding gets here. A second `Engine.install()` would
+                // clear the directory that one is extracting into, so follow it instead.
+                while Provisioner.shared.isInstallingEngine, !Task.isCancelled {
+                    if case .installingEngine(let fraction?) = Provisioner.shared.activity {
+                        downloadFractionCompleted = fraction
+                    }
+                    try? await Task.sleep(for: .milliseconds(200))
+                }
+
+                if Engine.isInstalled {
+                    downloadFractionCompleted = 1.0
+                    installFractionCompleted = 1.0 // moves the stage on, below
+                    return
+                }
+
                 do {
                     guard NSWorkspace.shared.isARM else {
                         throw NSWorkspace.UnsupportedArchitectureError()

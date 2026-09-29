@@ -12,6 +12,13 @@
 	<true/>
 	<key>NSApplicationCrashOnExceptions</key>
 	<true/>
+	<!-- Where updates come from: appcast.xml in this project's repository, written by
+	     Scripts/release.sh. Upstream's feed used to be here, which would have replaced this app
+	     with Mythic on the first update check. Kept equal to Branding.appcastURL by
+	     Scripts/check-invariants.sh. SUPublicEDKey, the key every update is checked against,
+	     is added by Scripts/set-update-key.sh. -->
+	<key>SUFeedURL</key>
+	<string>https://raw.githubusercontent.com/mcstig/PorTalistic/main/appcast.xml</string>
 	<key>GCSupportedGameControllers</key>
 	<array>
 		<dict>
@@ -19,5 +26,7 @@
 			<string>ExtendedGamepad</string>
 		</dict>
 	</array>
+	<key>SUPublicEDKey</key>
+	<string>0+qijPcAxgEyw3KWHUPPr75EpLgGc2Cjy0G2mXPw6K4=</string>
 </dict>
 </plist>

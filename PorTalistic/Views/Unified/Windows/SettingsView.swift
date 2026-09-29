@@ -628,7 +628,9 @@ extension SettingsView {
                 }
 
                 do {
-                    try await RuntimeInstaller.install(release) { stage in
+                    // Through the Provisioner, which may already be downloading this build for
+                    // an installed game — see `Provisioner.installRuntime(_:onStage:)`.
+                    try await Provisioner.shared.installRuntime(release) { stage in
                         Task { @MainActor in installStage = stage }
                     }
                 } catch {
@@ -689,7 +691,7 @@ extension SettingsView {
                             successful: $isDXMTInstallSuccessful
                         ) {
                             do {
-                                try await Wine.DXMT.install(into: dxmtTarget)
+                                try await Provisioner.shared.installDirect3DLayer(into: dxmtTarget)
                                 isDXMTInstallSuccessful = true
                             } catch {
                                 isDXMTInstallSuccessful = false

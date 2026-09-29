@@ -45,7 +45,7 @@ extension SparkleUpdater {
                             }
                         }
                         
-                        Text("You are running \(appVersion?.description ?? "Unknown"). Would you like to download the update?")
+                        Text("You have \(appVersion?.description ?? "an older version"). PorTalistic restarts to finish updating.")
                             .font(.callout)
                             .multilineTextAlignment(.center)
                             .opacity(0.6)
@@ -55,7 +55,7 @@ extension SparkleUpdater {
                         Button {
                             choice(.update)
                         } label: {
-                            Text("Update")
+                            Text("Update and Restart")
                                 .padding(.vertical)
                                 .multilineTextAlignment(.center)
                                 .frame(maxWidth: .infinity)
@@ -64,10 +64,11 @@ extension SparkleUpdater {
                         .clipShape(.capsule)
                         
                         if !appcast.isCriticalUpdate {
+                            // Asked again at the next launch, and meanwhile from the sidebar.
                             Button {
                                 choice(.dismiss)
                             } label: {
-                                Text("Dismiss")
+                                Text("Later")
                                     .padding(.vertical)
                                     .multilineTextAlignment(.center)
                                     .frame(maxWidth: .infinity)

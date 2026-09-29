@@ -60,14 +60,16 @@ enum Branding {
     static var discussionsURL: URL { repositoryURL.appending(path: "discussions") }
     static var readmeURL: URL { repositoryURL }
 
-    /// Where Sparkle would look for updates, once there is something to look at.
+    /// Where Sparkle looks for updates: `appcast.xml` in this project's own repository,
+    /// written by `Scripts/release.sh` and served the same way as the compatibility manifest.
     ///
-    /// `nil`, and the update checker is a no-op while it is. `SUFeedURL` used to point at
-    /// upstream's appcast, which would have quietly updated every user of this fork *to
-    /// upstream Mythic* — replacing the application they installed with a different one. That
-    /// is not a rough edge, it is the most damaging single line in a fork, so it is gone and
-    /// this is the switch that turns updates back on.
-    static let appcastURL: URL? = nil
+    /// `SUFeedURL` used to point at upstream's appcast, which would have quietly updated every
+    /// user of this fork *to upstream Mythic* — replacing the application they installed with a
+    /// different one. That is the most damaging single line a fork can carry, so the feed is
+    /// named twice — here, as the switch the updater checks, and as `SUFeedURL` in Info.plist,
+    /// which is what Sparkle reads — and `Scripts/check-invariants.sh` holds both to this
+    /// repository. `nil` turns updates off.
+    static let appcastURL: URL? = .init(string: "https://raw.githubusercontent.com/mcstig/PorTalistic/main/appcast.xml")
 
     /// Whether the bundled Firebase configuration belongs to this application.
     ///

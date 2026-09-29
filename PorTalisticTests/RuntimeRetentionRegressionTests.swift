@@ -392,3 +392,190 @@ struct RuntimeRetentionRegressionTests {
         #expect(error.recoverySuggestion == nil, "there is nothing useful to suggest without a named cause")
     }
 }
+
+// MARK: - Looking again, and downloading once
+
+/// Something a test holds shut and then opens, so work can be caught part-way through.
+@MainActor private final class ProvisioningGate {
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+    private var isOpen = false
+
+    func wait() async {
+        guard !isOpen else { return }
+        await withCheckedContinuation { waiting.append($0) }
+    }
+
+    func open() {
+        isOpen = true
+        waiting.forEach { $0.resume() }
+        waiting.removeAll()
+    }
+}
+
+@MainActor private final class ProvisioningCounter {
+    var value = 0
+}
+
+/**
+ When the app looks again at what installed games need, and that each build downloads once.
+
+ A provisioning pass used to run exactly once per launch, before the manifest fetched at launch
+ had arrived — so a newly published Wine build was never installed on a machine whose only copy
+ of the manifest was the fresh one, and nothing on screen said a thing either way. A launch that
+ needed a build the pass was already fetching started a second download of it and then failed
+ moving it into place.
+
+ The triggers themselves — the manifest landing, the operation queue emptying, a refresh that
+ changed which games are installed — are held in place by `Scripts/check-invariants.sh`. What is
+ tested here is the scheduling they feed, which is where "asked for, and silently never done"
+ lives.
+ */
+@Suite("Provisioning: looking again, downloading once")
+@MainActor
+struct ProvisioningSchedulingRegressionTests {
+    /// Lets queued main-actor work run up to its next suspension.
+    private func settle() async {
+        for _ in 0..<20 { await Task.yield() }
+    }
+
+    @Test("A pass asked for while one is running happens afterwards — once")
+    func requestsDuringAPassCoalesceIntoOneMore() async throws {
+        let runs = ProvisioningCounter()
+        let gate = ProvisioningGate()
+        let runner = CoalescingRunner {
+            runs.value += 1
+            if runs.value == 1 { await gate.wait() }
+        }
+
+        runner.run()
+        await settle()
+        try #require(runs.value == 1, "the first pass should have started and be held at the gate")
+
+        // The manifest lands, a game finishes installing, the queue empties — all mid-pass.
+        runner.run()
+        runner.run()
+        runner.run()
+        #expect(runs.value == 1, "two passes never run at once")
+
+        gate.open()
+        await runner.waitUntilIdle()
+
+        #expect(runs.value == 2, "three requests during a pass need exactly one more pass — this used to be zero")
+        #expect(!runner.isRunning)
+    }
+
+    @Test("A pass nobody asks for again runs once")
+    func aSingleRequestRunsOnce() async {
+        let runs = ProvisioningCounter()
+        let runner = CoalescingRunner { runs.value += 1 }
+
+        runner.run()
+        await runner.waitUntilIdle()
+
+        #expect(runs.value == 1)
+        #expect(!runner.isRunning)
+    }
+
+    @Test("A launch that needs a build already downloading waits for that download")
+    func concurrentRequestsForOneBuildShareOneDownload() async throws {
+        let downloads = ProvisioningCounter()
+        let gate = ProvisioningGate()
+        let flights = SingleFlight<Int>()
+
+        // The background pass starts fetching the build…
+        let pass = Task {
+            try await flights.value(for: "wine-dxmt-11.16") {
+                downloads.value += 1
+                await gate.wait()
+                return 42
+            }
+        }
+        await settle()
+        try #require(flights.isRunning("wine-dxmt-11.16"))
+
+        // …and somebody presses Play on the game that needs it.
+        let launch = Task {
+            try await flights.value(for: "wine-dxmt-11.16") {
+                downloads.value += 1
+                return 7
+            }
+        }
+        await settle()
+
+        gate.open()
+        let fromPass = try await pass.value
+        let fromLaunch = try await launch.value
+
+        #expect(downloads.value == 1, "the launch started a second download of a build the pass was already fetching")
+        #expect(fromPass == 42 && fromLaunch == 42, "both get the one installed build")
+        #expect(flights.isEmpty, "nothing is held once the download is over")
+    }
+
+    @Test("A failed download fails everyone waiting on it, and can be tried again")
+    func aFailureIsSharedAndThenForgotten() async throws {
+        struct DownloadFailed: Error {}
+
+        let gate = ProvisioningGate()
+        let flights = SingleFlight<Int>()
+
+        let first = Task {
+            try await flights.value(for: "wine-dxmt-11.16") {
+                await gate.wait()
+                throw DownloadFailed()
+            }
+        }
+        await settle()
+
+        let second = Task {
+            try await flights.value(for: "wine-dxmt-11.16") { 1 }
+        }
+        await settle()
+
+        gate.open()
+
+        await #expect(throws: DownloadFailed.self) { try await first.value }
+        await #expect(throws: DownloadFailed.self) { try await second.value }
+        #expect(flights.isEmpty, "a failure mustn't leave the build marked as downloading forever")
+
+        let retried = try await flights.value(for: "wine-dxmt-11.16") { 3 }
+        #expect(retried == 3, "the next request starts a fresh attempt")
+    }
+
+    @Test("A different build doesn't wait for one that is downloading")
+    func differentBuildsDownloadSideBySide() async throws {
+        let gate = ProvisioningGate()
+        let flights = SingleFlight<Int>()
+
+        let slow = Task {
+            try await flights.value(for: "wine-dxmt-11.16") {
+                await gate.wait()
+                return 1
+            }
+        }
+        await settle()
+
+        let other = try await flights.value(for: "wine-stable-11.0") { 2 }
+
+        #expect(other == 2)
+        #expect(flights.isRunning("wine-dxmt-11.16"), "the first download is still going")
+        #expect(!flights.isEmpty)
+
+        gate.open()
+        _ = try await slow.value
+        #expect(flights.isEmpty)
+    }
+
+    @Test("The sidebar's bar measures only what reports a measure")
+    func progressIsDeterminateOnlyWhenMeasured() {
+        typealias Activity = Provisioner.Activity
+
+        #expect(Activity.installingRuntime(name: "Wine 11.16 (DXMT)", stage: .downloading(0.4)).fractionCompleted == 0.4)
+        #expect(Activity.installingRuntime(name: "Wine 11.16 (DXMT)", stage: .downloading(nil)).fractionCompleted == nil)
+        #expect(Activity.installingRuntime(name: "Wine 11.16 (DXMT)", stage: .extracting).fractionCompleted == nil,
+                "unpacking has no measure, and a bar frozen at 100% reads as stuck")
+        #expect(Activity.installingEngine(0.25).fractionCompleted == 0.25)
+        #expect(Activity.idle.localizedDescription == nil, "idle puts nothing in the sidebar")
+        #expect(Activity.installingRuntime(name: "Wine 11.16 (DXMT)", stage: .downloading(0.1)).localizedDescription?
+            .contains("Wine 11.16 (DXMT)") == true, "the line names the build")
+    }
+}

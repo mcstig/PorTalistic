@@ -19,6 +19,8 @@
 #  The signing team comes from the Xcode project. Set PORTALISTIC_TEAM_ID only to override it.
 #
 #  Requirements, none of which this script can create for you:
+#      - Sparkle's signing key in the login keychain, with its public half in Info.plist. Once:
+#            Scripts/set-update-key.sh
 #      - An Apple Developer membership (the free tier cannot notarise).
 #      - A "Developer ID Application" certificate in the login keychain.
 #      - A notarytool keychain profile. Create it once, interactively, with your own credentials:
@@ -291,7 +293,55 @@ RELEASE_ZIP="$BUILD_DIR/PorTalistic-$VERSION.zip"
 
 ditto -c -k --keepParent "$APP" "$RELEASE_ZIP"
 
+# ── Sparkle ────────────────────────────────────────────────────────────────
+
+step "Signing the update and adding it to appcast.xml"
+
+# What Sparkle compares is the build number, not the version people read. A release whose
+# CFBundleVersion isn't higher than the last one's is offered to nobody — update-appcast.py
+# refuses it rather than let that happen quietly.
+BUILD_NUMBER=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$APP/Contents/Info.plist")
+MINIMUM_SYSTEM=$(/usr/libexec/PlistBuddy -c "Print :LSMinimumSystemVersion" "$APP/Contents/Info.plist" 2>/dev/null || echo "14.0")
+
+# Without the public key in the app, every copy of this release would refuse every update
+# after it. Better to find that out now than from the next release.
+/usr/libexec/PlistBuddy -c "Print :SUPublicEDKey" "$APP/Contents/Info.plist" > /dev/null 2>&1 \
+    || die "This build has no SUPublicEDKey, so it could never accept an update. Run Scripts/set-update-key.sh, then release again."
+
+SPARKLE_BIN="${PORTALISTIC_SPARKLE_BIN:-}"
+if [ -z "$SPARKLE_BIN" ]; then
+    SPARKLE_BIN=$(find "$HOME/Library/Developer/Xcode/DerivedData" -type d -path '*/artifacts/sparkle/Sparkle/bin' 2>/dev/null | head -1)
+fi
+
+[ -n "$SPARKLE_BIN" ] && [ -x "$SPARKLE_BIN/sign_update" ] \
+    || die "Can't find Sparkle's sign_update. Build the project in Xcode once, or set PORTALISTIC_SPARKLE_BIN to Sparkle's bin folder."
+
+# Signed with the private key in the login keychain, the one set-update-key.sh made. It never
+# leaves the keychain; this only reads back the signature and the length.
+SIGNATURE=$("$SPARKLE_BIN/sign_update" "$RELEASE_ZIP") \
+    || die "sign_update failed. Is PorTalistic's Sparkle key in this Mac's login keychain?"
+
+# The tag and the asset name are what the URL is built from — publish with exactly these.
+TAG="v$VERSION"
+DOWNLOAD_URL="https://github.com/mcstig/PorTalistic/releases/download/$TAG/$(basename "$RELEASE_ZIP")"
+
+python3 Scripts/update-appcast.py \
+    --appcast appcast.xml \
+    --version "$VERSION" \
+    --build "$BUILD_NUMBER" \
+    --minimum-system "$MINIMUM_SYSTEM" \
+    --url "$DOWNLOAD_URL" \
+    --signature "$SIGNATURE" \
+    --notes "ReleaseNotes/$VERSION.md" \
+    || die "Couldn't add this release to appcast.xml (see above)."
+
+ok "appcast.xml offers $VERSION (build $BUILD_NUMBER)"
+
 printf '\n'
 ok "Ready: $RELEASE_ZIP"
 printf '  sha256: %s\n' "$(shasum -a 256 "$RELEASE_ZIP" | cut -d' ' -f1)"
-printf '\n  Sparkle needs this file signed with the EdDSA key as well — see blocker 6 in\n  claude/ship-readiness.md. Until the appcast exists, this zip is the only way a user\n  gets an update.\n\n'
+printf '\nPublish it in this order — the other way round, every copy of the app is offered a download\nthat 404s:\n\n'
+printf '  1. On GitHub, draft a new release with the tag %s, attach %s,\n' "$TAG" "$RELEASE_ZIP"
+printf '     and publish it as a normal release (not a pre-release).\n'
+printf '  2. Scripts/verify-appcast.sh\n'
+printf '  3. git add appcast.xml && git commit -m "Offer %s" && git push\n\n' "$VERSION"

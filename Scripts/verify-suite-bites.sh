@@ -239,6 +239,24 @@ check "clearing a hover that is already clear redraws every card again" \
     '        if gameID != nil { gameID = nil }' \
     '        gameID = nil'
 
+check "a provisioning pass asked for during a pass is dropped, the way every request after launch used to be" \
+    PorTalistic/Utilities/Compatibility/Provisioner.swift \
+    '            askedAgain = true
+            return' \
+    '            return'
+
+check "a launch starts a second download of a build the pass is already fetching" \
+    PorTalistic/Utilities/Compatibility/Provisioner.swift \
+    '        if let inFlight = running[key] {
+            return try await inFlight.value
+        }' \
+    ''
+
+check "a failed download leaves its build marked as downloading for good" \
+    PorTalistic/Utilities/Compatibility/Provisioner.swift \
+    '        defer { running[key] = nil }' \
+    ''
+
 # ── Nothing may be left changed ────────────────────────────────────────────
 echo
 if git diff --quiet -- PorTalistic 2>/dev/null; then

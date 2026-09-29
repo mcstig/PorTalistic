@@ -1803,6 +1803,104 @@ check_present "PorTalistic.xcodeproj/project.pbxproj" \
     "the PorTalisticTests target is gone from the project, so nothing runs the regression suite" \
     'PorTalisticTests'
 
+# ── Provisioning looks again, and downloads each build once ────────────────
+# A pass used to run once per launch, before the manifest fetched at launch arrived, so a newly
+# published Wine build was never installed from it — and nothing else ever asked for a pass. These
+# are the three things that ask now; losing any one brings back a silent case.
+PROVISIONER="PorTalistic/Utilities/Compatibility/Provisioner.swift"
+
+check_present "PorTalistic/Utilities/Compatibility/CompatibilityManifest.swift" \
+    "a refreshed manifest no longer asks for a provisioning pass, so a newly published Wine build is never installed until the app is opened again" \
+    '^[[:space:]]*Provisioner\.shared\.requestPass\(because:'
+
+check_present "PorTalistic/Utilities/GameOperation/GameOperationManager.swift" \
+    "the operation queue emptying no longer asks for a provisioning pass: a pass skipped for a running download never runs, and a game that just installed waits for Play to fetch its Wine" \
+    '^[[:space:]]*Provisioner\.shared\.requestPass\(because:'
+
+check_present "PorTalistic/Utilities/GameDataStore.swift" \
+    "a library refresh that changes which games are installed no longer asks for a provisioning pass" \
+    '^[[:space:]]*Provisioner\.shared\.requestPass\(because:'
+
+check_present "$PROVISIONER" \
+    "schedulePass no longer stands aside under the test suite, which is hosted by the app — a test that empties the operation queue would start a real provisioning pass: the engine, runtime downloads, the real library" \
+    '^[[:space:]]*guard !AppDelegate\.isRunningTests else \{ return \}'
+
+check_present "$PROVISIONER" \
+    "planLaunch no longer waits for the manifest fetched at launch, so Play in the app's first seconds plans without newly published builds and curated game entries" \
+    '^[[:space:]]*await CompatibilityManifest\.waitForPendingRefresh\(atMost:'
+
+# One download per build: every runtime install goes through the single-flight registry, so a
+# launch joins the pass's download instead of starting a second one that fails at the move.
+check_count "$PROVISIONER" 1 \
+    "RuntimeInstaller.install is called from more than one place in the Provisioner — every install must go through runtimeInstalls, or a launch and a pass download the same build twice" \
+    'RuntimeInstaller\.install\('
+check_present "$PROVISIONER" \
+    "runtime installs no longer go through the single-flight registry" \
+    '^[[:space:]]*return try await runtimeInstalls\.value\(for: release\.id\)'
+check_count "$PROVISIONER" 1 \
+    "Wine.DXMT.install is called from more than one place in the Provisioner — it must go through direct3DLayerInstalls" \
+    'Wine\.DXMT\.install\(into:'
+check_present "$PROVISIONER" \
+    "DXMT installs no longer go through the single-flight registry" \
+    '^[[:space:]]*_ = try await direct3DLayerInstalls\.value\(for: runtime\.id\)'
+
+# The same goes for installs asked for by hand: Settings' Install and DXMT buttons, and the engine
+# sheet onboarding shows while a pass is already fetching the engine.
+check_absent "a view installs a runtime itself, bypassing the Provisioner's one-download-per-build registry — use Provisioner.shared.installRuntime" \
+    'RuntimeInstaller\.install\(' \
+    PorTalistic/Views/
+check_absent "a view installs DXMT itself, bypassing the Provisioner — use Provisioner.shared.installDirect3DLayer(into:)" \
+    'Wine\.DXMT\.install\(into:' \
+    PorTalistic/Views/
+check_present "PorTalistic/Views/Unified/Sheets/EngineInstallationView.swift" \
+    "the engine sheet no longer follows a pass's engine install, so a first run starts two engine installs into one directory" \
+    'while Provisioner\.shared\.isInstallingEngine'
+
+# And it is visible: a background download of a few hundred megabytes used to look exactly like
+# nothing happening.
+check_present "PorTalistic/Views/Navigation/ContentView.swift" \
+    "the sidebar no longer shows what the app is downloading by itself" \
+    '^[[:space:]]*provisioningBlock$'
+check_present "PorTalistic/Views/Navigation/ContentView.swift" \
+    "the sidebar's provisioning card no longer reads the Provisioner's activity" \
+    'if let status = provisioner\.activity\.localizedDescription'
+
+# ── Updates come from this project, and are asked about ────────────────────
+# A fork that reads upstream's feed replaces itself with upstream on the first update check. And
+# the check at launch installs nothing: it asks "Update and Restart" or "Later".
+check_present "PorTalistic/Info.plist" \
+    "SUFeedURL no longer points at this project's appcast — a fork that reads another project's feed replaces itself with that project on the first update check" \
+    '<string>https://raw\.githubusercontent\.com/mcstig/PorTalistic/main/appcast\.xml</string>'
+check_present "PorTalistic/Info.plist" \
+    "Info.plist has no SUPublicEDKey — every update is checked against it, so without one this app can never update. Run Scripts/set-update-key.sh" \
+    '<key>SUPublicEDKey</key>'
+check_count "PorTalistic/Info.plist" 0 \
+    "Info.plist names upstream Mythic — its feed or its key would hand this app's updates to upstream" \
+    'getmythic|MythicApp'
+check_present "PorTalistic/Utilities/Branding.swift" \
+    "Branding.appcastURL isn't this project's appcast; it is the updater's switch and has to match SUFeedURL" \
+    '^[[:space:]]*static let appcastURL: URL\? = \.init\(string: "https://raw\.githubusercontent\.com/mcstig/PorTalistic/main/appcast\.xml"\)'
+check_absent "updates install without asking again — the check at launch must ask, Update and Restart or Later" \
+    'sparkleUpdateAction|AutoUpdateAction|automaticallyDownloadsUpdates = true|automaticallyChecksForUpdates = true' \
+    PorTalistic/
+check_present "PorTalistic/Utilities/SparkleUpdateController.swift" \
+    "nothing checks for updates when the app opens any more" \
+    '^[[:space:]]*SparkleUpdateController\.shared\.checkForUpdates\(userInitiated: false\)'
+check_present "PorTalistic/Utilities/SparkleUpdateController.swift" \
+    "Update and Restart no longer restarts by itself — it asks a second time" \
+    '^[[:space:]]*if restartWhenReady \{'
+check_present "PorTalistic/Views/SparkleUpdater/SparkleUpdaterPreviewView.swift" \
+    "the update prompt no longer offers Later" \
+    'Text\("Later"\)'
+
+# And a release reaches people only through appcast.xml, which only ever offers a higher build.
+check_present "Scripts/release.sh" \
+    "release.sh no longer adds the release to appcast.xml, so no installed copy is ever offered it" \
+    'python3 Scripts/update-appcast\.py'
+check_present "Scripts/update-appcast.py" \
+    "update-appcast.py no longer refuses a build number that isn't higher — Sparkle would never offer that release, and nothing would say so" \
+    'int\(existing\) >= int\(args\.build\)'
+
 # ── Every runtime compiled in is a published one ───────────────────────────
 # A runtime moves from `unreleased` into `shipped` only once its release is cut, and cutting
 # it is when it gets its entry in the signed manifest. So each compiled-in id, URL and digest

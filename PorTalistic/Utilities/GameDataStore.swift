@@ -86,6 +86,14 @@ import OSLog
         }
     }
 
+    /// Which games are on disk, for noticing when a refresh changed that.
+    private var installedGameIDs: Set<String> {
+        Set(library.compactMap { game -> String? in
+            guard case .installed = game.installationState else { return nil }
+            return game.id
+        })
+    }
+
     @MainActor private init() {
         // initialise observer
         gamesObserver = .init(key: "games",
@@ -140,6 +148,17 @@ import OSLog
         GameListViewModel.shared.isUpdatingLibrary = true
         defer {
             GameListViewModel.shared.isUpdatingLibrary = false
+        }
+
+        // A game can arrive on disk without an operation — imported, or found by legendary —
+        // and the queue emptying is what asks for a provisioning pass otherwise. Only when
+        // the installed set actually moved: this runs on a timer, and a pass reads every
+        // installed game's executable.
+        let installedBefore = installedGameIDs
+        defer {
+            if installedGameIDs != installedBefore {
+                Provisioner.shared.requestPass(because: "a library refresh changed which games are installed")
+            }
         }
         
         // if variadics are empty, default to all cases

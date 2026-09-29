@@ -46,7 +46,18 @@ import DockProgress
 
     // necessitated by deprecation of `OperationQueue.operations`
     internal private(set) var queue: [GameOperation] = .init() {
-        didSet { updateDockProgress() }
+        didSet {
+            updateDockProgress()
+
+            // A provisioning pass stands aside while anything is queued, a running game
+            // included — so the queue emptying is the moment one can run. It is also the only
+            // moment an install that just finished gets its Wine build fetched before somebody
+            // presses Play on it, and the only second chance a pass skipped at launch gets.
+            // Requests are debounced, so an empty queue being written again costs nothing.
+            if queue.isEmpty {
+                Provisioner.shared.requestPass(because: "the operation queue emptied")
+            }
+        }
     }
 
     /// Tells the Dock when a download starts running — see ``updateDockProgress()``.

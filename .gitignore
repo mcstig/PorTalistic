@@ -107,3 +107,6 @@ manifest-signing-key
 # Logs and prefix state captured while debugging. These have held live
 # bearer tokens — see redactSecrets(inLogAt:).
 _debug/
+
+# Python bytecode, from the release scripts
+__pycache__/

@@ -22,9 +22,14 @@ final class SparkleUpdateController: NSObject, SPUUserDriver, ObservableObject {
     @Published private(set) var state: UpdateState = .idle
     @Published private(set) var userInitiatedCheck: Bool = false
 
-    private var updateSettingsCancellables: Set<AnyCancellable> = []
-    private var backgroundTask: AnyCancellable?
-    private let backgroundQueue: DispatchQueue = .init(label: "BackgroudEventService", qos: .background)
+    /// The version somebody answered "Later" to, for the sidebar's reminder.
+    ///
+    /// Not the `updateAvailable` state itself: the Sparkle session that offered it ended when
+    /// they answered, and its reply can't be given twice. The reminder starts a fresh check.
+    @Published private(set) var postponedVersion: String?
+
+    /// "Update and Restart" was chosen, so the restart it promised needs no second question.
+    private var restartWhenReady: Bool = false
 
     override init() {
         super.init()
@@ -34,49 +39,72 @@ final class SparkleUpdateController: NSObject, SPUUserDriver, ObservableObject {
         // `SUFeedURL` pointed at upstream Mythic's appcast, and `SUPublicEDKey` at upstream's
         // update-signing key. Shipping either would have meant this application quietly
         // replacing itself with a different one, signed by someone else, on the first update
-        // check. Both are gone from `Info.plist`, and ``Branding/appcastURL`` is where updates
-        // come back on once there is an appcast of this project's own to point at.
+        // check. Both are this project's own now — the feed is `appcast.xml` in its repository
+        // — and ``Branding/appcastURL`` is still the switch.
         guard Branding.appcastURL != nil else {
             log.notice("No appcast configured; automatic updates are off.")
             return
         }
 
-        let updaterController: SPUUpdater = .init(
+        // And no key, no updater. Sparkle checks every update against `SUPublicEDKey` before
+        // it will install anything, so without one an update can only fail — in front of
+        // somebody, after they agreed to it.
+        guard Bundle.main.object(forInfoDictionaryKey: "SUPublicEDKey") != nil else {
+            log.notice("No update-signing key (SUPublicEDKey) in Info.plist; automatic updates are off.")
+            return
+        }
+
+        let updater: SPUUpdater = .init(
             hostBundle: Bundle.main,
             applicationBundle: Bundle.main,
             userDriver: self,
             delegate: nil
         )
-        self.sparkleUpdater = updaterController
+        self.sparkleUpdater = updater
 
-        updaterController.automaticallyChecksForUpdates = false
-        updaterController.automaticallyDownloadsUpdates = false
-        do { try updaterController.start() } catch {
+        // Sparkle's own schedule stays off, and nothing downloads until somebody says so: the
+        // check is the one below, and what it finds is a question, not an install.
+        updater.automaticallyChecksForUpdates = false
+        updater.automaticallyDownloadsUpdates = false
+
+        do {
+            try updater.start()
+        } catch {
             log.error("Sparkle failed to start: \(error.localizedDescription).")
+            return
         }
 
-        self.manageBackgroundTask(sparkleUpdateAction != .off)
+#if !DEBUG
+        // Once, at launch, and never on a timer: a question that arrives in the middle of a game
+        // is a question in the wrong place. A few seconds in, so there is a window to ask it
+        // over. Release builds only — a Debug build offered a release would replace itself
+        // with it, in DerivedData, under the developer's feet.
+        Task { @MainActor in
+            guard !AppDelegate.isRunningTests else { return }
+
+            try? await Task.sleep(for: .seconds(3))
+            SparkleUpdateController.shared.checkForUpdates(userInitiated: false)
+        }
+#endif
     }
 
-    private func manageBackgroundTask(_ enabled: Bool) {
-        if enabled {
-            backgroundTask = AnyCancellable(
-                backgroundQueue.schedule(
-                    after: .init(.now()),
-                    interval: .seconds(60 * 60 * 6)
-                ) { @Sendable in
-                    // @Sendable stops this closure inheriting the isolation of the
-                    // (main-actor) context that installs it. Combine's `schedule` takes a
-                    // non-Sendable closure, so without this it is treated as main-actor
-                    // isolated and then run on `backgroundQueue` — which trips Swift's
-                    // runtime isolation check and kills the app on launch.
-                    Task { @MainActor in
-                        SparkleUpdateController.shared.checkForUpdates(userInitiated: false)
-                    }
-                }
-            )
-        } else {
-            backgroundTask?.cancel()
+    /// Onboarding is on screen — the one time an update waits in the sidebar instead of asking.
+    ///
+    /// Read the way `@AppStorage` reads it: the key is only written once onboarding ends, and
+    /// `bool(forKey:)` answers `false` for a missing key — "finished" — on the one launch it is
+    /// certainly showing.
+    private var isOnboardingOnScreen: Bool {
+        UserDefaults.standard.object(forKey: "isOnboardingPresented") as? Bool ?? true
+    }
+
+    /// This build can't update itself: no feed, or no key to check an update against.
+    struct UpdatesUnavailableError: LocalizedError {
+        var errorDescription: String? {
+            String(localized: "This copy of PorTalistic can't update itself.")
+        }
+
+        var recoverySuggestion: String? {
+            String(localized: "Download the latest version from PorTalistic's releases on GitHub.")
         }
     }
 
@@ -108,7 +136,17 @@ final class SparkleUpdateController: NSObject, SPUUserDriver, ObservableObject {
     }
 
     func checkForUpdates(userInitiated: Bool = false) {
-        guard let updater = sparkleUpdater, !updater.sessionInProgress else {
+        guard let updater = sparkleUpdater else {
+            // "Check for Updates…" used to do nothing at all here, which reads as broken.
+            log.notice("Update check asked for, but this build has no updater.")
+            if userInitiated {
+                userInitiatedCheck = true
+                state = .error(acknowledge: { self.state = .idle }, error: UpdatesUnavailableError())
+            }
+            return
+        }
+
+        guard !updater.sessionInProgress else {
             log.info("\(userInitiated ? "User-initiated" : "Automatic") update check ignored due to in-progress update session.")
             if userInitiated {
                 userInitiatedCheck = true
@@ -118,38 +156,12 @@ final class SparkleUpdateController: NSObject, SPUUserDriver, ObservableObject {
 
         log.info("\(userInitiated ? "User-initiated" : "Automatic") update check initiated...")
         _ = clearState()
+
+        // After `clearState()`, which answers an open offer with "Later" and so sets this.
+        postponedVersion = nil
+        restartWhenReady = false
         userInitiatedCheck = userInitiated
         updater.checkForUpdates()
-    }
-
-    private var sparkleUpdateAction: AutoUpdateAction {
-        if Thread.isMainThread {
-            var action: AutoUpdateAction = .off
-            MainActor.assumeIsolated {
-                action = (try? UserDefaults.standard.decodeAndGet(AutoUpdateAction.self, forKey: "sparkleUpdateAction")) ?? .install
-            }
-            return action
-        }
-        var action: AutoUpdateAction = .off
-        DispatchQueue.main.sync {
-            action = (try? UserDefaults.standard.decodeAndGet(AutoUpdateAction.self, forKey: "sparkleUpdateAction")) ?? .install
-        }
-        return action
-    }
-
-    private func preferSilent() -> Bool {
-        if Thread.isMainThread {
-            var action: Bool = false
-            MainActor.assumeIsolated {
-                action = !UserDefaults.standard.bool(forKey: "isOnboardingPresented")
-            }
-            return action
-        }
-        var action: Bool = false
-        DispatchQueue.main.sync {
-            action = !UserDefaults.standard.bool(forKey: "isOnboardingPresented")
-        }
-        return action
     }
 
     func show(_ request: SPUUpdatePermissionRequest) async -> SUUpdatePermissionResponse {
@@ -170,26 +182,30 @@ final class SparkleUpdateController: NSObject, SPUUserDriver, ObservableObject {
     func showUpdateFound(with appcastItem: SUAppcastItem,
                          state: SPUUserUpdateState,
                          reply: @escaping (SPUUserUpdateChoice) -> Void) {
-        log.debug("Update found: \(appcastItem.displayVersionString.isEmpty ? "unknown" : appcastItem.displayVersionString).")
+        log.notice("Update found: \(appcastItem.displayVersionString.isEmpty ? "unknown" : appcastItem.displayVersionString, privacy: .public).")
 
-        if !userInitiatedCheck && sparkleUpdateAction == .install {
-            reply(.install)
-            self.state = .initializingUpdate
-            return
-        } else if sparkleUpdateAction == .check && !preferSilent() {
-            userInitiatedCheck = true
-        }
+        postponedVersion = nil
 
         self.state = .updateAvailable(choice: { choice in
             switch choice {
             case .update:
+                self.restartWhenReady = true
                 reply(.install)
                 self.state = .initializingUpdate
             case .dismiss:
                 reply(.dismiss)
+                self.postponedVersion = appcastItem.displayVersionString
                 self.state = .idle
             }
         }, appcast: appcastItem)
+
+        // Always a question — at launch just as from the menu. This used to install without
+        // asking whenever the check was the automatic one, which is exactly the check nobody
+        // is watching. Onboarding is the one time it waits: the offer stays in the sidebar for
+        // when the app is properly open. After the state, so the sheet opens on the offer.
+        if !isOnboardingOnScreen {
+            userInitiatedCheck = true
+        }
     }
 
     func showUpdateReleaseNotes(with downloadData: SPUDownloadData) {
@@ -273,10 +289,15 @@ final class SparkleUpdateController: NSObject, SPUUserDriver, ObservableObject {
     }
 
     func showReady(toInstallAndRelaunch reply: @escaping (SPUUserUpdateChoice) -> Void) {
-        log.debug("Update ready to install.")
+        log.notice("Update ready to install.")
 
-        if !userInitiatedCheck && !preferSilent() {
-            userInitiatedCheck = true
+        // "Update and Restart" has already answered this. Asking "Relaunch now?" after it is a
+        // second question with one sensible answer, put to somebody who has just given it.
+        if restartWhenReady {
+            restartWhenReady = false
+            state = .installingUpdate
+            reply(.install)
+            return
         }
 
         state = .readyToRelaunch { choice in
@@ -288,6 +309,12 @@ final class SparkleUpdateController: NSObject, SPUUserDriver, ObservableObject {
                 reply(.dismiss)
                 self.state = .idle
             }
+        }
+
+        // Reached without that answer only for an update Sparkle had already downloaded — one
+        // left waiting by "Update on Close" in a session that never closed properly.
+        if !isOnboardingOnScreen {
+            userInitiatedCheck = true
         }
     }
 
@@ -363,11 +390,5 @@ extension SparkleUpdateController {
         case readyToRelaunch(acknowledge: (UpdateChoice) -> Void)
         case installingUpdate
         case error(acknowledge: () -> Void, error: Error)
-    }
-
-    enum AutoUpdateAction: String, Sendable, Codable, Hashable {
-        case off
-        case check
-        case install
     }
 }

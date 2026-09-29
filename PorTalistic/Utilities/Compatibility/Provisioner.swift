@@ -70,6 +70,17 @@ final class Provisioner {
                 String(localized: "Adding Direct3D support to \(name)…")
             }
         }
+
+        /// How far along, where anything reports it — for a progress bar, not for a percentage
+        /// in words: the stages after downloading have no measure, and `nil` draws them as
+        /// working rather than as stuck at a number.
+        var fractionCompleted: Double? {
+            switch self {
+            case .installingEngine(let fraction):                        fraction
+            case .installingRuntime(_, .downloading(let fraction)):      fraction
+            default:                                                     nil
+            }
+        }
     }
 
     private(set) var activity: Activity = .idle
@@ -91,7 +102,34 @@ final class Provisioner {
         #endif
     }
 
-    private var currentPass: Task<Void, Never>?
+    /// Passes, one at a time.
+    ///
+    /// A request that arrives while one is running is kept rather than dropped: it used to be
+    /// a plain "is one running?" check, which is fine for a pass that only ever started at
+    /// launch — and nothing else ever did start one. See ``requestPass(because:)``.
+    @ObservationIgnored private var passes: CoalescingRunner?
+
+    /// A request waiting out ``requestDebounce`` before it becomes a pass.
+    @ObservationIgnored private var pendingRequest: Task<Void, Never>?
+
+    /// How long ``requestPass(because:)`` waits for the rest of a burst.
+    nonisolated static let requestDebounce: Duration = .seconds(2)
+
+    /// A pass is installing the engine.
+    ///
+    /// For the engine install sheet, which follows this one rather than starting its own: two
+    /// `Engine.install()`s at once can't both survive, because the second clears the engine
+    /// directory the first is still extracting into. On a first run that was the likely case —
+    /// the pass starts the engine at launch, and onboarding reaches its engine step while the
+    /// download is still going. Its own flag rather than a reading of ``activity``, which a
+    /// runtime download can overwrite while the engine is still installing.
+    private(set) var isInstallingEngine = false
+
+    /// Downloads under way, one per build — see ``install(_:)``.
+    private let runtimeInstalls: SingleFlight<Runtime> = .init()
+
+    /// DXMT going into a runtime, one per runtime — see ``ensureDirect3DLayer(in:)``.
+    private let direct3DLayerInstalls: SingleFlight<Bool> = .init()
 
     // MARK: - Passes
 
@@ -100,31 +138,78 @@ final class Provisioner {
         schedulePass()
     }
 
-    /// Run a pass unless one is already running.
-    ///
-    /// Worth calling whenever the library changes: a newly installed game may want a runtime
-    /// nothing else needed.
+    /// Run a pass now, or straight after the one that is running.
     func schedulePass() {
-        guard currentPass == nil else { return }
+        // The test suite is hosted by the app, and a pass is exactly the side effect
+        // `AppDelegate.isRunningTests` keeps out of it: the engine, runtime downloads, the real
+        // library. Now that queue changes and refreshes ask for passes, a test that finishes an
+        // operation would otherwise start one two seconds later.
+        guard !AppDelegate.isRunningTests else { return }
 
-        currentPass = Task { [weak self] in
-            await self?.runPass()
-            self?.currentPass = nil
+        let passes = self.passes ?? CoalescingRunner { [weak self] in await self?.runPass() }
+        self.passes = passes
+        passes.run()
+    }
+
+    /// Something changed that can change what the installed games need.
+    ///
+    /// Until this existed a pass ran exactly once per launch, which made three ordinary
+    /// situations silent failures:
+    ///
+    /// - **A new Wine build was published.** The pass at launch works from the cached
+    ///   manifest, the fetch lands a second later, and nothing looked again — so a machine
+    ///   whose only copy of the manifest was the fresh one never installed anything from it.
+    ///   That was the whole of "the app doesn't download the new build".
+    /// - **A game finished installing.** Its runtime waited for the next launch of the app,
+    ///   or for the first press of Play to fetch it with the person watching.
+    /// - **Something was downloading at launch.** The pass stands aside for any operation in
+    ///   flight, and then never ran that session.
+    ///
+    /// Debounced: these arrive in bursts, and one pass answers all of them.
+    func requestPass(because reason: String) {
+        Self.log.notice("Provisioning pass requested: \(reason, privacy: .public)")
+
+        pendingRequest?.cancel()
+        pendingRequest = Task { [weak self] in
+            // Cancelled means a later request replaced this one, and that one will ask.
+            do { try await Task.sleep(for: Self.requestDebounce) } catch { return }
+            self?.schedulePass()
         }
+    }
+
+    /// The sidebar's Try Again.
+    func retryAfterFailure() {
+        lastFailure = nil
+        schedulePass()
     }
 
     private func runPass() async {
         // Never while there is work outstanding. An engine swapped underneath a running game,
-        // or a runtime download competing with a game download, is worse than waiting.
+        // or a runtime download competing with a game download, is worse than waiting. Not
+        // lost, though: the queue emptying asks for another pass.
         guard GameOperationManager.shared.queue.isEmpty else {
-            Self.log.debug("Skipping provisioning pass: operations in flight")
+            Self.log.notice("Skipping provisioning pass: operations in flight")
             return
         }
+
+        // Each pass is the retry for the last one's failure, so its message is only true
+        // until this one says otherwise.
+        lastFailure = nil
 
         await ensureEngine()
         await repairInstalledRuntimes()
         await ensureRuntimesForInstalledGames()
 
+        settleActivity()
+    }
+
+    /// Back to idle — unless a runtime is still downloading for someone else.
+    ///
+    /// A launch can be fetching a build while a pass finishes something unrelated; clearing
+    /// `activity` then hid a download that was very much still happening until its next
+    /// progress report, and the stages after downloading don't report any.
+    private func settleActivity() {
+        guard runtimeInstalls.isEmpty else { return }
         activity = .idle
     }
 
@@ -136,6 +221,9 @@ final class Provisioner {
         Self.log.notice("Installing the engine")
         activity = .installingEngine(nil)
 
+        isInstallingEngine = true
+        defer { isInstallingEngine = false }
+
         do {
             for try await progress in Engine.install() {
                 activity = .installingEngine(progress.progress.fractionCompleted)
@@ -146,7 +234,7 @@ final class Provisioner {
             fail("Couldn't set up the engine", error)
         }
 
-        activity = .idle
+        settleActivity()
     }
 
     /// Runtimes that installed but can't start.
@@ -177,7 +265,7 @@ final class Provisioner {
             }
         }
 
-        activity = .idle
+        settleActivity()
     }
 
     /// Install whatever the installed games need and don't have.
@@ -251,7 +339,7 @@ final class Provisioner {
             }
         }
 
-        activity = .idle
+        settleActivity()
     }
 
     // MARK: - Launching
@@ -434,6 +522,13 @@ final class Provisioner {
     /// `@unchecked Sendable` to get past it, which would have been a shortcut rather than an
     /// answer.
     func planLaunch(for game: Game) async throws -> LaunchPlan {
+        // The manifest fetched at launch may still be on its way, and it is what knows about
+        // newly published builds *and* about games that need them — a curated entry is how a
+        // game gets "native 32-bit" at all. Planning without it in the app's first seconds sent
+        // such a game to a build it can't run on, or refused it outright. Bounded, so a network
+        // that hangs costs a few seconds rather than the launch.
+        await CompatibilityManifest.waitForPendingRefresh(atMost: .seconds(5))
+
         // What the recovery loop decided after the *last* launch: this is the one that puts it
         // in place. Said on the game's page while it happens, because applying it is the slow
         // part of pressing Play and "Starting" on its own doesn't say what is being waited for.
@@ -854,19 +949,39 @@ final class Provisioner {
 
     // MARK: - Steps
 
-    private func install(_ release: RuntimeRelease) async throws -> Runtime {
-        activity = .installingRuntime(name: release.name, stage: .downloading(nil))
-
-        let runtime = try await RuntimeInstaller.install(release) { [weak self] stage in
-            Task { @MainActor in
-                self?.activity = .installingRuntime(name: release.name, stage: stage)
-            }
+    /// Install a build, or wait for the download of it that is already running.
+    ///
+    /// The background pass and a launch can want the same build at the same moment: the pass
+    /// starts fetching it for an installed game, and somebody presses Play on that game before
+    /// it finishes. Each used to start its own download of the same few hundred megabytes into
+    /// its own scratch directory, and whichever finished second failed to move into the
+    /// directory the first had just filled — taking the launch down with an error about a
+    /// file that already exists, over a runtime that was by then installed and fine.
+    private func install(_ release: RuntimeRelease,
+                         reportingTo report: @escaping @Sendable (RuntimeInstaller.Stage) -> Void = { _ in }) async throws -> Runtime {
+        if runtimeInstalls.isRunning(release.id) {
+            Self.log.notice("\(release.id, privacy: .public) is already downloading; waiting for that download rather than starting another")
         }
 
-        Runtime.invalidateDiscoveryCache()
-        activity = .idle
+        defer { settleActivity() }
 
-        return runtime
+        return try await runtimeInstalls.value(for: release.id) { [weak self] in
+            self?.activity = .installingRuntime(name: release.name, stage: .downloading(nil))
+
+            let runtime = try await RuntimeInstaller.install(release) { [weak self] stage in
+                report(stage)
+
+                Task { @MainActor in
+                    // A report that arrives after the install has ended would put a finished
+                    // download back on screen, with nothing left to take it off again.
+                    guard let self, self.runtimeInstalls.isRunning(release.id) else { return }
+                    self.activity = .installingRuntime(name: release.name, stage: stage)
+                }
+            }
+
+            Runtime.invalidateDiscoveryCache()
+            return runtime
+        }
     }
 
     /// Puts DXMT into the best installed build that can host it and hasn't got it.
@@ -907,15 +1022,113 @@ final class Provisioner {
               !Wine.DXMT.isShippedByRuntime(runtime),
               !Wine.DXMT.isInstalled(in: runtime) else { return }
 
-        activity = .installingDirect3DLayer(name: runtime.name)
-        defer { activity = .idle }
+        try await installDirect3DLayer(into: runtime)
+    }
 
-        try await Wine.DXMT.install(into: runtime)
-        Runtime.invalidateDiscoveryCache()
+    // MARK: - Installs asked for by hand
+
+    /// Settings' Install button for a catalogue build.
+    ///
+    /// Through the same one-download-per-build registry as the passes and the launch path, so
+    /// pressing Install on a build a pass is already fetching waits for that download instead of
+    /// racing it to the same directory. `onStage` hears the stages of a download this call
+    /// starts; one it joined shows its progress in the sidebar.
+    @discardableResult
+    func installRuntime(_ release: RuntimeRelease,
+                        onStage: @escaping @Sendable (RuntimeInstaller.Stage) -> Void = { _ in }) async throws -> Runtime {
+        try await install(release, reportingTo: onStage)
+    }
+
+    /// Put DXMT into a runtime — or put it in again, from Settings — one install per runtime at
+    /// a time.
+    ///
+    /// A launch, a pass and the Settings button can each decide a runtime needs DXMT, and each
+    /// used to download it and copy it into the same directories at once.
+    func installDirect3DLayer(into runtime: Runtime) async throws {
+        defer { settleActivity() }
+
+        _ = try await direct3DLayerInstalls.value(for: runtime.id) { [weak self] in
+            self?.activity = .installingDirect3DLayer(name: runtime.name)
+
+            try await Wine.DXMT.install(into: runtime)
+            Runtime.invalidateDiscoveryCache()
+            return true
+        }
     }
 
     private func fail(_ what: String, _ error: Error) {
         Self.log.error("\(what, privacy: .public): \(error.localizedDescription)")
         lastFailure = "\(what): \(error.localizedDescription)"
+    }
+}
+
+// MARK: - Scheduling helpers
+
+/// Runs one piece of work at a time, and once more afterwards if it was asked for while
+/// running — once, however many times it was asked.
+///
+/// For work whose every run answers every question asked of it so far, like a provisioning
+/// pass: ten requests during a pass need one more pass, not ten, and not zero.
+@MainActor final class CoalescingRunner {
+    private let work: @MainActor () async -> Void
+    private var current: Task<Void, Never>?
+    private var askedAgain = false
+
+    init(_ work: @escaping @MainActor () async -> Void) {
+        self.work = work
+    }
+
+    var isRunning: Bool { current != nil }
+
+    func run() {
+        guard current == nil else {
+            askedAgain = true
+            return
+        }
+
+        current = Task { [self] in
+            await work()
+            current = nil
+
+            if askedAgain {
+                askedAgain = false
+                run()
+            }
+        }
+    }
+
+    /// Returns once nothing is running and nothing is waiting to.
+    func waitUntilIdle() async {
+        while let current {
+            await current.value
+        }
+    }
+}
+
+/// At most one of something per key at a time; anybody else asking for it waits for that one.
+///
+/// The value is shared, and so is a failure: whoever was waiting gets the same error the
+/// work ended with. Nothing is remembered afterwards — the next request for a key that has
+/// finished starts the work again.
+@MainActor final class SingleFlight<Value: Sendable> {
+    private var running: [String: Task<Value, Error>] = [:]
+
+    var isEmpty: Bool { running.isEmpty }
+
+    func isRunning(_ key: String) -> Bool {
+        running[key] != nil
+    }
+
+    func value(for key: String,
+               startingWith work: @escaping @Sendable @MainActor () async throws -> Value) async throws -> Value {
+        if let inFlight = running[key] {
+            return try await inFlight.value
+        }
+
+        let task = Task { try await work() }
+        running[key] = task
+        defer { running[key] = nil }
+
+        return try await task.value
     }
 }

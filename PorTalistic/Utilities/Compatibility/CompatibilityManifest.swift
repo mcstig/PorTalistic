@@ -174,13 +174,32 @@ struct CompatibilityManifest: Decodable {
     ///
     /// Cache first and synchronously: a game can be launched seconds after the app opens, and
     /// it should not matter whether a network round-trip finished first.
-    static func bootstrap() {
+    @MainActor static func bootstrap() {
         if let cached = loadCached() {
             apply(cached)
         }
 
-        Task.detached(priority: .utility) {
+        pendingRefresh = Task.detached(priority: .utility) {
             await refresh()
+            await MainActor.run { pendingRefresh = nil }
+        }
+    }
+
+    /// The refresh ``bootstrap()`` started, until it has finished.
+    ///
+    /// Kept so a launch in the app's first seconds can wait for it — see
+    /// ``waitForPendingRefresh(atMost:)``.
+    @MainActor private static var pendingRefresh: Task<Void, Never>?
+
+    /// Wait for the refresh started at launch, if it is still running — but not for long.
+    ///
+    /// Polled rather than awaited: awaiting a task's value can't be abandoned part-way, and
+    /// a fetch that hangs would then hold a launch for both of its 20-second timeouts.
+    @MainActor static func waitForPendingRefresh(atMost limit: Duration) async {
+        let deadline = ContinuousClock.now.advanced(by: limit)
+
+        while pendingRefresh != nil, ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(100))
         }
     }
 
@@ -207,6 +226,13 @@ struct CompatibilityManifest: Decodable {
 
             apply(manifest)
             cache(data, signature: signatureFile)
+
+            // The pass at launch worked from the cached copy — on a first run, from what the
+            // app shipped with. A build or a game entry this fetch just brought is one it
+            // could not have acted on, and nothing else was going to look again.
+            await MainActor.run {
+                Provisioner.shared.requestPass(because: "the compatibility manifest was refreshed")
+            }
         } catch {
             log.warning("Couldn't refresh the compatibility manifest: \(error.localizedDescription)")
         }
