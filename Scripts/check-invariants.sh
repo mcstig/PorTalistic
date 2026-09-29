@@ -1250,6 +1250,40 @@ if grep -q "disable-library-validation" PorTalistic/PorTalistic.entitlements 2>/
         "the app itself disables library validation. That belongs on the bundled Python helpers, not on PorTalistic"
 fi
 
+# ── Patreon ────────────────────────────────────────────────────────────────
+#
+# PorTalistic is free and patron-supported. The link appears in three places and exists once.
+# A literal written out in a view is how one of them ends up pointing somewhere else — and
+# this codebase already shipped one fork-era URL that went through a find-and-replace into a
+# GitHub Sponsors page that did not exist.
+CHECKS=$((CHECKS + 1))
+PATREON_LITERALS=$(grep -rln --include='*.swift' 'patreon\.com' PorTalistic 2>/dev/null | grep -v 'Utilities/Branding\.swift$')
+if [ -n "$PATREON_LITERALS" ]; then
+    while IFS= read -r file; do
+        report "$file" "a patreon.com URL is written out here — use Branding.patreonURL, the one place it is defined"
+    done <<< "$PATREON_LITERALS"
+fi
+
+for path in PorTalistic/Views/Navigation/ContentView.swift PorTalistic/PorTalisticApp.swift PorTalistic/WhatsNewCollection.swift; do
+    check_present "$path" \
+        "the Patreon link is missing from here — the sidebar, the Help menu and What's New are the three places people are asked to support the project" \
+        'Branding\.patreonURL'
+done
+
+# The sidebar button has to sit *above* the footer's `#if DEBUG`, not inside it. Everything
+# under that line only exists in Debug builds, and a support button only the developer can see
+# supports nobody.
+CHECKS=$((CHECKS + 1))
+PATREON_LINE=$(grep -n 'Link(destination: Branding\.patreonURL)' PorTalistic/Views/Navigation/ContentView.swift | head -1 | cut -d: -f1)
+FOOTER_LINE=$(grep -n 'private var footer: some View' PorTalistic/Views/Navigation/ContentView.swift | head -1 | cut -d: -f1)
+if [ -n "$PATREON_LINE" ] && [ -n "$FOOTER_LINE" ]; then
+    DEBUG_LINE=$(awk -v start="$FOOTER_LINE" 'NR > start && /^#if DEBUG/ { print NR; exit }' PorTalistic/Views/Navigation/ContentView.swift)
+    if [ -n "$DEBUG_LINE" ] && [ "$PATREON_LINE" -gt "$DEBUG_LINE" ]; then
+        report_at "PorTalistic/Views/Navigation/ContentView.swift" "$PATREON_LINE" \
+            "the Patreon button is inside the footer's #if DEBUG, so no release build shows it"
+    fi
+fi
+
 # ── Target membership ──────────────────────────────────────────────────────
 #
 # A test file added to the app target is resolved against that group's folder, so the build

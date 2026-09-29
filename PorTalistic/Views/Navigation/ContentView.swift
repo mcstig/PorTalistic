@@ -314,6 +314,16 @@ struct ContentView: View {
                 EmptyView()
             }
 
+            // Above the version text, and deliberately not inside the `#if DEBUG` below it:
+            // that text only exists in Debug builds, and a support button only the developer
+            // can see supports nobody. PorTalistic is free, and this is how it keeps going.
+            Link(destination: Branding.patreonURL) {
+                Label(String(localized: "Become a Patron"), systemImage: "heart.fill")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.portalProminent)
+            .help(String(localized: "Support PorTalistic on Patreon"))
+
 #if DEBUG
             // Debug-only, and out of the corner it used to sit in — two lines of grey text
             // hard against the sidebar's bottom-left edge, with no padding and no separator.

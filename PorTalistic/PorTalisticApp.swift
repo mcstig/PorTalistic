@@ -96,6 +96,10 @@ struct PorTalisticApp: App {
                 Link("Discussions", destination: Branding.discussionsURL)
                 Link("Report an Issue", destination: Branding.issuesURL)
 
+                Divider()
+
+                Link("Support PorTalistic on Patreon…", destination: Branding.patreonURL)
+
                 // Mythic's, and labelled as Mythic's. This used to be a "Support the
                 // project" section holding upstream's Ko-Fi and a GitHub Sponsors page for
                 // "PorTalisticApp", which does not exist — the rebrand's find-and-replace

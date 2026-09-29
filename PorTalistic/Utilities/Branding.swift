@@ -41,6 +41,14 @@ enum Branding {
 
     static var issuesURL: URL { repositoryURL.appending(path: "issues") }
 
+    /// Where people support this project.
+    ///
+    /// PorTalistic is free — no paywall, no gated features — and this is how it keeps going.
+    /// Defined once because it appears in the sidebar, the Help menu and What's New, and a link
+    /// written out three times is a link that ends up pointing somewhere different in one of
+    /// them. Upstream's Ko-fi stays below under upstream's own name; it is not this.
+    static let patreonURL: URL = .init(string: "https://www.patreon.com/PorTalistic")!
+
     /// Where this fork came from.
     ///
     /// Linked in the Help menu, under upstream's own name rather than this one. GPLv3 asks

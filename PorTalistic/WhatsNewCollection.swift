@@ -38,7 +38,7 @@ extension PorTalisticApp: @MainActor WhatsNewCollectionProvider {
                     subtitle: """
                         PorTalistic reads a game's own files to work out how it renders, then \
                         picks the Wine build and graphics layer that suit it. Each game's \
-                        settings are applied when it launches and put back afterwards.
+                        settings are applied every time it launches.
                         """
                 ),
                 .init(
@@ -76,6 +76,17 @@ extension PorTalisticApp: @MainActor WhatsNewCollectionProvider {
                 ),
                 .init(
                     image: .init(
+                        systemName: "heart.fill",
+                        foregroundColor: .pink
+                    ),
+                    title: "Free, and supported by patrons",
+                    subtitle: """
+                        PorTalistic has no paywall and no locked features. If it runs your \
+                        games, supporting it on Patreon is what keeps it going.
+                        """
+                ),
+                .init(
+                    image: .init(
                         systemName: "arrow.triangle.branch",
                         foregroundColor: .secondary
                     ),
@@ -89,7 +100,12 @@ extension PorTalisticApp: @MainActor WhatsNewCollectionProvider {
             // WhatsNewKit defaults this to `Color.accentColor`, which is a static resolved
             // against the *system* accent rather than the scene's tint — so this one button
             // came out salmon in a violet app however the app itself was tinted.
-            primaryAction: .init(backgroundColor: Theme.Palette.brand)
+            primaryAction: .init(backgroundColor: Theme.Palette.brand),
+            secondaryAction: .init(
+                title: "Support PorTalistic on Patreon",
+                foregroundColor: Theme.Palette.brand,
+                action: .openURL(Branding.patreonURL)
+            )
         )
     }
 }
