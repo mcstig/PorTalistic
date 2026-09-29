@@ -153,7 +153,8 @@ extension RuntimeRelease {
     /// Also the offline answer: the whole catalogue being fetched would mean a first launch
     /// with no network had no runtimes at all to offer.
     ///
-    /// Built in DEBUG-only additions first, because catalogue order is preference order.
+    /// Unpublished additions first, because catalogue order is preference order. In practice
+    /// `unreleased` is empty in a release build and usually empty in a Debug one too.
     static let compiledIn: [RuntimeRelease] = unreleased + shipped
 
     /// Runtimes built locally that have no published release yet.
@@ -163,8 +164,14 @@ extension RuntimeRelease {
     /// than as a tarball being unpublished. Each one moves into
     /// `Compatibility/manifest.json` — and out of here — once its release is cut.
     private static var unreleased: [RuntimeRelease] {
-#if DEBUG
-        [
+        // Nothing waiting. `wine-dxmt-11.16` lived here until its release was cut on
+        // 29/9/2026 and its download verified against the digest below; the next locally
+        // built runtime goes here first, inside `#if DEBUG`, and moves to `shipped` the same
+        // way once its tarball is published.
+        []
+    }
+
+    private static let shipped: [RuntimeRelease] = [
         .init(
             id: "wine-dxmt-11.16",
             name: "Wine 11.16 (DXMT)",
@@ -177,23 +184,18 @@ extension RuntimeRelease {
                 Wine 11.16 from winehq source with CodeWeavers' winemac.drv patch, so a \
                 Direct3D 11 swap chain has a CAMetalLayer to present into. Built rather than \
                 downloaded because no published build has both that and a prefix that boots \
-                here. Compiled without gnutls, so Windows code running inside the \
-                installation gets no TLS — which games do not use, because the store client \
-                and the launcher both live outside it.
+                here. Also the only build with a real i386 architecture \
+                (--enable-archs=i386,x86_64) rather than 32-on-64, which is what 32-bit games \
+                with deep call stacks need. Compiled without gnutls, so Windows code running \
+                inside the installation gets no TLS — which games do not use, because the \
+                store client and the launcher both live outside it.
                 """,
             family: "wine-dxmt",
             exposesMetalEscapes: true,
             // `--enable-archs=i386,x86_64` in `Compatibility/build-dxmt-wine.sh`: a real
             // i386 architecture rather than 32-on-64. The only build here with one.
             hasNativeThirtyTwoBit: true
-        )
-        ]
-#else
-        []
-#endif
-    }
-
-    private static let shipped: [RuntimeRelease] = [
+        ),
         .init(
             id: "wine-stable-11.0",
             name: "Wine Stable 11.0",

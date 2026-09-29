@@ -1803,6 +1803,40 @@ check_present "PorTalistic.xcodeproj/project.pbxproj" \
     "the PorTalisticTests target is gone from the project, so nothing runs the regression suite" \
     'PorTalisticTests'
 
+# ── Every runtime compiled in is a published one ───────────────────────────
+# A runtime moves from `unreleased` into `shipped` only once its release is cut, and cutting
+# it is when it gets its entry in the signed manifest. So each compiled-in id, URL and digest
+# has to be in the manifest as well: one that isn't was never published — every user gets a
+# 404 on first launch — or the two disagree, which the manifest merge only logs.
+RUNTIME_CATALOGUE="PorTalistic/Utilities/Engine/RuntimeRelease.swift"
+RUNTIME_MANIFEST="Compatibility/manifest.json"
+
+# "<id> <url> <digest>" for each runtime's own download; support libraries come after the
+# digest and have no id, so they are skipped.
+SHIPPED_RUNTIMES=$(sed -n '/private static let shipped: \[RuntimeRelease\]/,/^    \]/p' "$RUNTIME_CATALOGUE" | awk '
+    /^ *id: "/ { v = $0; sub(/.*id: "/, "", v); sub(/".*/, "", v); id = v; url = ""; next }
+    id != "" && url == "" && /downloadURL: \.init\(string: "/ { v = $0; sub(/.*string: "/, "", v); sub(/".*/, "", v); url = v; next }
+    id != "" && url != "" && /^ *sha256: "/ { v = $0; sub(/.*sha256: "/, "", v); sub(/".*/, "", v); print id, url, tolower(v); id = ""; url = "" }
+')
+MANIFEST_RUNTIMES=$(awk '
+    /"id": "/ { v = $0; sub(/.*"id": "/, "", v); sub(/".*/, "", v); id = v; url = ""; next }
+    id != "" && url == "" && /"downloadURL": "/ { v = $0; sub(/.*"downloadURL": "/, "", v); sub(/".*/, "", v); url = v; next }
+    id != "" && url != "" && /"sha256": "/ { v = $0; sub(/.*"sha256": "/, "", v); sub(/".*/, "", v); print id, url, tolower(v); id = ""; url = "" }
+' "$RUNTIME_MANIFEST")
+
+if [ -z "$SHIPPED_RUNTIMES" ]; then
+    CHECKS=$((CHECKS + 1))
+    report "$RUNTIME_CATALOGUE" "found no runtimes in \`shipped\` — the catalogue changed shape and the published-runtime check inspected nothing"
+else
+    while IFS= read -r SHIPPED_RUNTIME; do
+        [ -z "$SHIPPED_RUNTIME" ] && continue
+        CHECKS=$((CHECKS + 1))
+        if ! grep -qxF "$SHIPPED_RUNTIME" <<< "$MANIFEST_RUNTIMES"; then
+            report "$RUNTIME_CATALOGUE" "${SHIPPED_RUNTIME%% *} is compiled in, but $RUNTIME_MANIFEST has no entry with the same URL and digest — publish the release and add it to the manifest first"
+        fi
+    done <<< "$SHIPPED_RUNTIMES"
+fi
+
 # ── Result ─────────────────────────────────────────────────────────────────
 if [ "$FAILURES" -eq 0 ]; then
     echo "✓ $CHECKS invariants hold"
