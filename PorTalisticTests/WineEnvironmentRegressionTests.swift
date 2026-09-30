@@ -48,6 +48,34 @@ struct WineEnvironmentRegressionTests {
         }
     }
 
+    @Test("The boot that creates a container can't ask for wine-mono either")
+    func theCreatingBootDisablesMonoToo() throws {
+        // A container that doesn't exist yet: no `drive_c`, no settings. This is what
+        // `Wine.boot(at:parameters: .prefixInit)` hands to `transformProcess`, and it never
+        // went near `assembleEnvironmentVariables` — which is why the test above passed while
+        // every new container still put up the Wine Mono Installer and waited on it.
+        let fresh: URL = .temporaryDirectory.appending(path: "PorTalisticTests-\(UUID().uuidString)")
+
+        let process: Process = .init()
+        process.environment = ["WINEDEBUG": "+environ"]
+        Wine.transformProcess(process, containerURL: fresh)
+
+        let overrides = try #require(process.environment?["WINEDLLOVERRIDES"],
+                                     "a wineboot without overrides is a wineboot that can ask for wine-mono")
+        #expect(overrides.contains("mscoree=d"))
+        #expect(overrides.contains("mshtml=d"))
+        #expect(process.environment?["WINEDEBUG"] == "+environ", "the caller's own variables survive")
+    }
+
+    @Test("A caller's own DLL overrides keep the base ones in front, once")
+    func baseOverridesAreAddedOnce() {
+        #expect(Wine.withBaseDLLOverrides(nil) == Wine.baseDLLOverrides)
+        #expect(Wine.withBaseDLLOverrides("d3d11=n,b") == Wine.baseDLLOverrides + ";d3d11=n,b")
+
+        let assembled = Wine.baseDLLOverrides + ";d3d11,dxgi=n,b"
+        #expect(Wine.withBaseDLLOverrides(assembled) == assembled, "an assembled environment already has them")
+    }
+
     @Test("Turning DXVK on does not drop the overrides that keep boot unattended")
     func dxvkDoesNotClobberBaseOverrides() throws {
         // `WINEDLLOVERRIDES` is one string, so the DXVK line has to extend it rather than

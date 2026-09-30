@@ -257,6 +257,11 @@ check "a failed download leaves its build marked as downloading for good" \
     '        defer { running[key] = nil }' \
     ''
 
+check "the wineboot that creates a container can ask for wine-mono again" \
+    PorTalistic/Utilities/Wine/WineInterface.swift \
+    '        capturedEnvironment["WINEDLLOVERRIDES"] = withBaseDLLOverrides(capturedEnvironment["WINEDLLOVERRIDES"])' \
+    ''
+
 # ── Nothing may be left changed ────────────────────────────────────────────
 echo
 if git diff --quiet -- PorTalistic 2>/dev/null; then

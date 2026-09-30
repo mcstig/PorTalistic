@@ -1865,6 +1865,20 @@ check_present "PorTalistic/Views/Navigation/ContentView.swift" \
     "the sidebar's provisioning card no longer reads the Provisioner's activity" \
     'if let status = provisioner\.activity\.localizedDescription'
 
+# ── A view's plain helpers are callable off the main thread ────────────────
+# A View's members are main-actor isolated by inference, SwiftUI's isolation is @preconcurrency,
+# and so a nonisolated test calling one compiles — and traps in _dispatch_assert_queue_fail.
+check_present "PorTalistic/Views/Navigation/GameDetailView.swift" \
+    "RuntimeProfilePanel.rows(of:) is main-actor isolated again; the crash-recovery suite calls it off the main thread and traps" \
+    '^[[:space:]]*nonisolated static func rows\(of reasons: \[String\]\) -> \[String\]'
+
+# ── No Wine this app starts can ask for wine-mono ──────────────────────────
+# The overrides lived only in assembleEnvironmentVariables, which the boot that creates a container
+# never calls — so every new container put up the Wine Mono Installer and waited on it.
+check_present "PorTalistic/Utilities/Wine/WineInterface.swift" \
+    "transformProcess no longer adds the base DLL overrides, so the wineboot that creates a container can ask for wine-mono again and wait five minutes on a dialog" \
+    '^[[:space:]]*capturedEnvironment\["WINEDLLOVERRIDES"\] = withBaseDLLOverrides\('
+
 # ── Updates come from this project, and are asked about ────────────────────
 # A fork that reads upstream's feed replaces itself with upstream on the first update check. And
 # the check at launch installs nothing: it asks "Update and Restart" or "Later".

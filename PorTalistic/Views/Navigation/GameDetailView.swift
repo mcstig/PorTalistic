@@ -397,14 +397,18 @@ struct RuntimeProfilePanel: View {
     /// paragraphs — and a multi-line `Text` gets the row's checkmark against its first line and
     /// nothing against the rest, which reads as though some of them are switched off. They are
     /// all equally true; they were one string.
-    static func rows(of reasons: [String]) -> [String] {
+    ///
+    /// `nonisolated` because it is plain text work, and a `View`'s members are main-actor
+    /// isolated by inference. Called from anywhere else — the regression suite, off the main
+    /// thread — that compiled, and then died in `_dispatch_assert_queue_fail` at run time.
+    nonisolated static func rows(of reasons: [String]) -> [String] {
         reasons
             .flatMap { $0.components(separatedBy: .newlines) }
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
     }
 
-    static func sourceDescription(_ source: RuntimeProfile.Source) -> String {
+    nonisolated static func sourceDescription(_ source: RuntimeProfile.Source) -> String {
         switch source {
         case .userOverride: String(localized: "Your choice")
         case .database:     String(localized: "Known-good settings")

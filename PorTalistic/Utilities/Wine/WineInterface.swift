@@ -208,7 +208,26 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
         var capturedEnvironment = process.environment ?? [:]
         capturedEnvironment.merge(invocation.environment, uniquingKeysWith: { $1 })
 
+        // Every Wine this app starts gets the overrides that keep it from asking for wine-mono
+        // — not only the ones built from an assembled environment. The boot that *creates* a
+        // container comes through here with nothing but `WINEDEBUG`, and that is the boot the
+        // question is asked on: the "Wine Mono Installer" dialog came back on every new
+        // container, with `wineboot` waiting behind it for its five minutes and then failing.
+        // See ``baseDLLOverrides``.
+        capturedEnvironment["WINEDLLOVERRIDES"] = withBaseDLLOverrides(capturedEnvironment["WINEDLLOVERRIDES"])
+
         process.environment = constructEnvironment(with: containerURL, additionalVariables: capturedEnvironment)
+    }
+
+    /// `overrides` with ``baseDLLOverrides`` in front, unless they are already there.
+    ///
+    /// In front because an assembled environment starts with them too, and because a caller's
+    /// own overrides are extra DLLs to add, not a reason to let the wine-mono dialog back in.
+    static func withBaseDLLOverrides(_ overrides: String?) -> String {
+        guard let overrides, !overrides.isEmpty else { return baseDLLOverrides }
+        guard !overrides.contains(baseDLLOverrides) else { return overrides }
+
+        return baseDLLOverrides + ";" + overrides
     }
 
     /// The variables a runtime needs regardless of which of its binaries is being run.
@@ -523,18 +542,22 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
             let direct: Process = .init()
             direct.executableURL = loader
             direct.arguments = ["wineboot", "--init"]
+            // The same overrides as every other boot, and a bound: a diagnosis that gets further
+            // than the failure it is diagnosing reaches the wine-mono question too, and without
+            // either this waited on that dialog forever — after the launch had already failed.
             direct.environment = constructEnvironment(
                 with: containerURL,
                 additionalVariables: supportLibraryEnvironment(forRuntimeAt: root)
-                    .merging(["WINEDEBUG": "+server,+seh,+process"], uniquingKeysWith: { $1 })
+                    .merging(["WINEDEBUG": "+server,+seh,+process",
+                              "WINEDLLOVERRIDES": baseDLLOverrides], uniquingKeysWith: { $1 })
             )
 
-            if let output = try? await direct.runWrapped() {
+            if let output = await direct.runWrapped(timeout: .seconds(60)) {
                 lines.append("derived loader, wineboot --init: exit=\(direct.terminationStatus)")
                 lines.append("  stdout: \(String((output.standardOutput ?? "").suffix(4_000)))")
                 lines.append("  stderr: \(String((output.standardError ?? "").suffix(40_000)))")
             } else {
-                lines.append("derived loader, wineboot --init: couldn't be run at all")
+                lines.append("derived loader, wineboot --init: couldn't be run, or didn't finish within a minute")
             }
         }
 

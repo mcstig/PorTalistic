@@ -1,15 +1,9 @@
 name: Build PorTalistic
+
+# By hand only, for now. The suite and the invariants run locally — ⌘U, and the Invariants
+# build phase on every build — and running them again on every push was noise. To run this:
+# GitHub → Actions → Build PorTalistic → Run workflow. Put `push:` back to turn it on again.
 on:
-  push:
-    paths: &workflow_paths
-      - '.github/workflows/build.yml'
-      - 'PorTalistic.xcodeproj/**'
-      - 'PorTalistic/**'
-      - 'PorTalisticTests/**'
-      - 'Compatibility/**'
-      - 'Scripts/**'
-  pull_request:
-    paths: *workflow_paths
   workflow_dispatch:
 
 # cancel previous runs w/ same ref, save CI minutes
