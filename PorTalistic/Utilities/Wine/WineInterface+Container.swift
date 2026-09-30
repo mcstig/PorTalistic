@@ -273,6 +273,12 @@ extension Wine.Container {
         /// Wine couldn't be started at all, and what macOS said about it.
         var couldNotStart: String?
 
+        /// Wine exited, but left the prefix unfinished — and what was missing.
+        var unfinished: String?
+
+        /// Where Wine's output was kept, for the alert's Show Log.
+        var transcriptURL: URL?
+
         var errorDescription: String? {
             let name = containerName.map { "“\($0)”" } ?? String(localized: "The container")
 
@@ -280,6 +286,13 @@ extension Wine.Container {
                 return String(localized: """
                     \(name) couldn't be set up: its Wine couldn't be started (\(couldNotStart)). \
                     Details are saved beside your containers, in a file ending “failed wineboot.log”.
+                    """)
+            }
+
+            if let unfinished {
+                return String(localized: """
+                    \(name) couldn't be set up: \(unfinished). What Wine said is saved beside \
+                    your containers, in a file ending “failed wineboot.log”.
                     """)
             }
 

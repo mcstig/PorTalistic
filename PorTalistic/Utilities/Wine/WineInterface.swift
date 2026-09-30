@@ -18,6 +18,12 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
         return "(\(containerURL.prettyPath)) \(description)" + (error != nil ? ": \(error!.localizedDescription)" : (description.hasSuffix(".") ? "" : "."))
     }
     
+    /// The Wine version of a container's runtime — or, without a container, of the bundled engine.
+    ///
+    /// Without a container this is the *engine's* version, which is not the Wine most containers
+    /// run. It was once used to guess where Wine prints `winecfg -v`'s answer, and it guessed 7.7
+    /// for every container. Anything about how a container's Wine behaves asks with the
+    /// container — or, better, doesn't depend on the version at all.
     internal static func retrieveVersion(forContainerAtURL containerURL: URL? = nil) -> SemanticVersion? {
         let process: Process = .init()
         process.arguments = ["--version"]
@@ -437,9 +443,12 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
         // errors are all about how the engine was built and where it looks for things — a
         // missing unix library, a loader that can't find the builtin it needs to start. Wine
         // will say which, but only if asked, so ask on this boot alone: it happens once per
-        // container and the answer goes in the transcript below.
+        // container and the answer goes in the transcript below. `+wineboot` as well: since
+        // Wine 9.14, the line saying the prefix was set up to the end is a trace on that
+        // channel, and the transcript is where it helps. Nothing decides on it — see
+        // ``prefixSetupShortfall(at:exitStatus:standardError:)``.
         if parameters.contains(.prefixInit) {
-            process.environment = ["WINEDEBUG": "+environ,+process,+loaddll"]
+            process.environment = ["WINEDEBUG": "+environ,+process,+loaddll,+wineboot"]
         }
 
         transformProcess(process, containerURL: containerURL)
@@ -475,11 +484,21 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
         case .couldNotStart(let reason):  ending = "never started: \(reason)"
         }
 
+        // A boot that creates a prefix is judged by the prefix it leaves, and the verdict goes
+        // in the transcript beside the exit status — "exit: 0" over an alert saying the boot
+        // failed, with nothing in between, is a transcript that points at the wrong culprit.
+        let judged = parameters.contains(.prefixInit) && run.outcome == .exited
+        let shortfall: String? = judged
+            ? prefixSetupShortfall(at: containerURL, exitStatus: process.terminationStatus,
+                                   standardError: result.standardError)
+            : nil
+        let verdict: String = judged ? "\nprefix: " + (shortfall.map { "not finished — \($0)" } ?? "finished") : ""
+
         let transcript = """
             wine: \(process.executableURL?.path ?? "?")
             arguments: \(process.arguments ?? [])
             environment: \(process.environment?.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" } ?? [])
-            exit: \(ending)
+            exit: \(ending)\(verdict)
 
             stdout:
             \(tail(result.standardOutput))
@@ -488,7 +507,7 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
             \(tail(result.standardError))
             """
         var report = transcript
-        if run.outcome != .exited || process.terminationStatus != 0 {
+        if run.outcome != .exited || process.terminationStatus != 0 || shortfall != nil {
             let diagnostics = await runtimeDiagnostics(for: containerURL)
             report += "\n\n" + diagnostics
         }
@@ -498,18 +517,61 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
 
         switch run.outcome {
         case .exited:
+            if let shortfall {
+                log.error("wineboot in \(containerURL.lastPathComponent, privacy: .public) exited with the prefix unfinished: \(shortfall, privacy: .public)")
+                let kept = preserveBootFailureLog(from: containerURL, named: containerURL.lastPathComponent)
+                throw Container.UnableToBootError(containerName: containerURL.lastPathComponent, unfinished: shortfall,
+                                                  transcriptURL: kept)
+            }
             return result
 
         case .killed:
             log.error("wineboot in \(containerURL.lastPathComponent, privacy: .public) did not finish within five minutes and was stopped")
-            preserveBootFailureLog(from: containerURL, named: containerURL.lastPathComponent)
-            throw Container.UnableToBootError(containerName: containerURL.lastPathComponent, timedOut: true)
+            let kept = preserveBootFailureLog(from: containerURL, named: containerURL.lastPathComponent)
+            throw Container.UnableToBootError(containerName: containerURL.lastPathComponent, timedOut: true,
+                                              transcriptURL: kept)
 
         case .couldNotStart(let reason):
             log.error("wineboot in \(containerURL.lastPathComponent, privacy: .public) could not be started: \(reason, privacy: .public)")
-            preserveBootFailureLog(from: containerURL, named: containerURL.lastPathComponent)
-            throw Container.UnableToBootError(containerName: containerURL.lastPathComponent, couldNotStart: reason)
+            let kept = preserveBootFailureLog(from: containerURL, named: containerURL.lastPathComponent)
+            throw Container.UnableToBootError(containerName: containerURL.lastPathComponent, couldNotStart: reason,
+                                              transcriptURL: kept)
         }
+    }
+
+    /// What a `wineboot --init` that exited by itself left undone — `nil` when the prefix is finished.
+    ///
+    /// Judged by what the boot is for, not by what Wine says about it. Creating a container used
+    /// to wait for Wine to print `wine: configuration in … has been updated.`: a `MESSAGE` up to
+    /// Wine 9.13, and from 9.14 a `TRACE` on the `wineboot` channel, printed only if asked for.
+    /// So every newer Wine — 11.0, 11.16 — set the prefix up, exited 0 and was reported as having
+    /// failed, and the finished prefix was deleted: every new container, on every attempt.
+    ///
+    /// What a finished prefix reliably shows:
+    /// - `wineboot` exited 0. A crash, or a loader that couldn't start, doesn't.
+    /// - Wine didn't say it couldn't update the prefix. Those lines are still `MESSAGE`s, in
+    ///   every version from 7.7 to 11.
+    /// - Windows is installed: `kernel32.dll` is in `system32`. `wine.inf`'s `DefaultInstall`
+    ///   puts it there with every other builtin; the `PreInstall` step before it writes only
+    ///   `winedevice.exe` and `mountmgr.sys`, and `drive_c` — all `containerExists(at:)` looks
+    ///   for — is there from the moment the prefix is.
+    static func prefixSetupShortfall(at prefixURL: URL, exitStatus: Int32, standardError: String?) -> String? {
+        guard exitStatus == 0 else {
+            return "wineboot exited with status \(exitStatus)"
+        }
+
+        if let complaint = standardError?
+            .split(whereSeparator: \.isNewline)
+            .first(where: { $0.contains("wine: failed to update") }) {
+            return "Wine couldn't install Windows into it (\(complaint.trimmingCharacters(in: .whitespaces)))"
+        }
+
+        let kernel32 = prefixURL.appending(path: "drive_c/windows/system32/kernel32.dll")
+        guard FileManager.default.fileExists(atPath: kernel32.path) else {
+            return "wineboot finished, but Windows was never installed into it (no kernel32.dll in drive_c/windows/system32)"
+        }
+
+        return nil
     }
 
     /// What a failed boot needs to say about the engine that failed it.
@@ -672,34 +734,27 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
 
             let newContainer = Container(name: name, url: url, settings: settings)
 
-            // A boot that is stopped, or never starts, fails the same way as the one checked
-            // below and leaves the same half-built prefix — `drive_c` included, which is all
-            // `containerExists(at:)` looks for. Left here, the next call would hand it back as a
-            // finished container. `boot` has already kept its transcript beside the containers.
-            let result: Process.CommandResult
+            // `boot` judges the prefix a creating boot leaves — see
+            // ``prefixSetupShortfall(at:exitStatus:standardError:)`` — and throws for every way
+            // it can fall short: stopped, never started, or exited with the prefix unfinished,
+            // each with its transcript already kept beside the containers.
+            //
+            // `wineboot --init` gets far enough to create `drive_c`, `system.reg` and friends
+            // before it gives up, and `containerExists(at:)` looks for exactly `drive_c` — so a
+            // half-built prefix left here is handed back as a finished container by the *next*
+            // call, which takes the early return above, reports success, and launches the game
+            // into a Windows that was never finished being installed. Worse than the failure it
+            // followed, and invisible.
+            //
+            // So a failure cleans up after itself. Nothing in here is the user's: this call
+            // created the directory seconds ago, and a retry wants to start from nothing anyway.
+            // Which is also why the verdict has to be right — a finished prefix judged unfinished
+            // is deleted, every time.
             do {
-                result = try await boot(at: url, parameters: .prefixInit)
+                try await boot(at: url, parameters: .prefixInit)
             } catch {
                 try? FileManager.default.removeItem(at: url)
                 throw error
-            }
-
-            // swiftlint:disable:next force_try
-            guard result.standardError?.contains(try! Regex(#"wine: configuration in (.*?) has been updated\."#)) == true else {
-                // `wineboot --init` gets far enough to create `drive_c`, `system.reg` and
-                // friends before it gives up, and `containerExists(at:)` looks for exactly
-                // `drive_c` — so a half-built prefix left here is handed back as a finished
-                // container by the *next* call, which takes the early return above, reports
-                // success, and launches the game into a Windows that was never finished
-                // being installed. Worse than the failure it followed, and invisible.
-                //
-                // So the failure cleans up after itself. Nothing in here is the user's: this
-                // call created the directory seconds ago, and a retry wants to start from
-                // nothing anyway.
-                preserveBootFailureLog(from: url, named: name)
-                try? FileManager.default.removeItem(at: url)
-
-                throw Container.UnableToBootError(containerName: name)
             }
 
             containerURLs.insert(url)
@@ -738,17 +793,20 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
     /// The transcript is the only record of *why* a container couldn't be created, and it is
     /// written inside the container — which the failure path then deletes. Keeping it one
     /// level up, named after the attempt, is what makes the next question answerable.
-    private static func preserveBootFailureLog(from containerURL: URL, named name: String) {
+    /// - Returns: where the transcript now is, for an alert to point at.
+    @discardableResult
+    private static func preserveBootFailureLog(from containerURL: URL, named name: String) -> URL? {
         guard let destination = containersDirectory?
-            .appending(path: "\(name) — failed wineboot.log") else { return }
+            .appending(path: "\(name) — failed wineboot.log") else { return nil }
 
         let source = containerURL.appending(path: "wineboot.log")
-        guard FileManager.default.fileExists(atPath: source.path) else { return }
+        guard FileManager.default.fileExists(atPath: source.path) else { return nil }
 
         try? FileManager.default.removeItem(at: destination)
-        try? FileManager.default.moveItem(at: source, to: destination)
+        guard (try? FileManager.default.moveItem(at: source, to: destination)) != nil else { return nil }
 
         log.notice("Kept the failed wineboot transcript at \(destination.prettyPath, privacy: .public)")
+        return destination
     }
 
     /// Opens a file beside the containers to take a launch's Wine transcript.
@@ -1177,22 +1235,35 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
             
             let commandResult = try await process.runWrapped()
             
-            let currentVersion: String?
-            // wine above major version 7 sends the windows version to stderr
-            if self.retrieveVersion()?.major ?? 0 > 7 {
-                currentVersion = commandResult.standardError?
-                    .split(whereSeparator: \.isNewline)
-                    .last.map(String.init)
-            } else {
-                currentVersion = commandResult.standardOutput?
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-            }
-            
-            return WindowsVersion.allCases.first(where: { String(describing: $0) == currentVersion })
+            return windowsVersion(reportedIn: commandResult)
         } catch {
             log.error("\(formatLog(containerURL: containerURL, description: "Unable to get windows version", error: error))")
             throw error
         }
+    }
+
+    /// The Windows version `winecfg -v` reported, from whichever stream this Wine printed it on.
+    ///
+    /// Up to Wine 8, `winecfg` `wprintf`s it to stdout; from Wine 9 it is a `MESSAGE`, on stderr.
+    /// The stream used to be chosen by `retrieveVersion()` — the *bundled engine's* version, 7.7,
+    /// whichever Wine the container actually runs — so every Wine 11 container read an empty
+    /// stdout and came back `nil`, and the per-launch apply, comparing that `nil` with the
+    /// version it wanted, set the Windows version again before every launch. Both streams are
+    /// read, and the answer is the line that *is* a version name: stderr also carries whatever
+    /// the container's `WINEDEBUG` lets through, so its last line need not be the version.
+    static func windowsVersion(reportedIn output: Process.CommandResult) -> WindowsVersion? {
+        let lines = [output.standardOutput, output.standardError]
+            .compactMap { $0 }
+            .flatMap { $0.split(whereSeparator: \.isNewline) }
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+
+        for line in lines.reversed() {
+            if let version = WindowsVersion.allCases.first(where: { String(describing: $0) == line }) {
+                return version
+            }
+        }
+
+        return nil
     }
 
     static func setWindowsVersion(containerURL: URL, version: WindowsVersion) async throws {

@@ -190,6 +190,29 @@ check_present "PorTalistic/Utilities/Wine/WineInterface.swift" \
     "booting a container must stay bounded: wineboot does not return while a dialog is up, and an unbounded wait is two wine icons in the Dock and a game that never appears" \
     'runWrappedKeepingOutput\(timeout: \.seconds\(300\)\)'
 
+# Wine's words are not an API. Creating a container waited for Wine to announce a finished
+# prefix, and Wine 9.14 made that announcement a trace nobody asks for — so every Wine 11
+# container was reported as failed, and its finished prefix deleted. The Windows version was
+# read from the stream the *bundled engine's* version implied — 7.7, whatever the container
+# ran — so every Wine 11 container read nothing and had it set again before every launch.
+check_absent \
+    "a decision waits for a line of Wine's output again — Wine 9.14 made the one container creation waited for a trace nobody sees, and every Wine 11 container failed" \
+    '"[^"]*has been updated' \
+    PorTalistic
+
+check_present "PorTalistic/Utilities/Wine/WineInterface.swift" \
+    "the boot that creates a container no longer judges the prefix it leaves — an unfinished one is handed back as a container, or a finished one is deleted" \
+    'prefixSetupShortfall\(at: containerURL'
+
+check_absent \
+    "the bundled engine's version decides how a container's Wine behaves — every Wine 11 container was answered for as 7.7; ask with the container, or don't depend on the version" \
+    'retrieveVersion\(\)\?\.(major|minor)' \
+    PorTalistic
+
+check_present "PorTalistic/Utilities/Wine/WineInterface.swift" \
+    "the Windows version is read from one stream again — Wine 8 and earlier answer on stdout, Wine 9 and later on stderr" \
+    'let lines = \[output\.standardOutput, output\.standardError\]'
+
 # ── One control, one implementation ─────────────────────────────────────────
 # The install/play control was rebuilt as ActionIconButton and then left hardcoded a second
 # time on the Home hero, so the same button behaved two ways in one app.
@@ -1918,6 +1941,10 @@ check_present "Scripts/release.sh" \
 check_present "Scripts/release.sh" \
     "release.sh no longer settles the version before it builds — a release with an already-released build number is never offered to anybody" \
     'VERSIONING=\$\(python3 Scripts/bump-version\.py'
+
+check_present "Scripts/bump-version.py" \
+    "a new version can take an unpublished build number again — a build already copied onto a test Mac is then never offered the new one" \
+    'elif requested and requested != current_version:'
 check_present "Scripts/update-appcast.py" \
     "update-appcast.py no longer refuses a build number that isn't higher — Sparkle would never offer that release, and nothing would say so" \
     'int\(existing\) >= int\(args\.build\)'

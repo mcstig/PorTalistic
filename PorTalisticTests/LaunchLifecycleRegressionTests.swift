@@ -822,6 +822,17 @@ struct DownloadDestinationTests {
         #expect(destination.url?.path == "/Volumes/Games/Street Racing Syndicate")
     }
 
+    @Test("A chunk holding more than one line gives the path only as far as the end of its own")
+    func stopsAtTheEndOfItsLine() {
+        // The reader splits lines today, but which folder a stopped download may delete must not
+        // depend on that: whatever follows in the chunk is not part of the path.
+        let destination: DownloadDestination = .init(under: Self.base)
+        destination.note(.init(stream: .standardError,
+                               output: "[Core] INFO: Install path: /Volumes/Games/Control\r\n[Core] INFO: Starting download\n"))
+
+        #expect(destination.url?.path == "/Volumes/Games/Control")
+    }
+
     @Test("Everything else legendary says is not a path", arguments: [
         "[Core] INFO: Trying to re-use existing login session...",
         "[DLManager] INFO: = Progress: 47.28% (261/552), Running for 00:00:14, ETA: 00:00:15",
@@ -1212,5 +1223,24 @@ struct BoundedRunOutcomeTests {
         #expect(run.outcome == .killed)
         #expect(run.result.standardOutput?.contains("started") == true,
                 "a boot that ran out of time used to leave nothing behind")
+    }
+
+    @Test("A byte that isn't UTF-8 costs that byte, not everything that was said", arguments: [true, false])
+    func invalidUTF8KeepsTheRest(bounded: Bool) async throws {
+        // A Windows program writes in its own code page — "café" in 1252 ends in a lone 0xE9 —
+        // and a strict decode turned the whole stream into `nil`: a boot transcript with no
+        // stderr, a `winecfg -v` with no answer.
+        let process: Process = .init()
+        process.executableURL = URL(filePath: "/bin/sh")
+        process.arguments = ["-c", #"printf 'caf\351\nwin10\n' >&2"#]
+
+        let standardError: String?
+        if bounded {
+            standardError = try #require(await process.runWrappedKeepingOutput(timeout: .seconds(10))).result.standardError
+        } else {
+            standardError = try await process.runWrapped().standardError
+        }
+
+        #expect(standardError?.contains("win10") == true)
     }
 }

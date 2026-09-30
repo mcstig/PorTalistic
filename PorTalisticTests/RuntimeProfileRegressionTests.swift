@@ -233,9 +233,11 @@ struct RuntimeProfileRegressionTests {
         #expect(entry.settings.dllOverrides?["atiadlxx"] == "d")
 
         // Both versions: Wine logs every d3dcompiler under one channel, so the log never says
-        // which the game loads, and overriding only 47 left Wine's own compiler running.
+        // which the game loads, and overriding only 47 left Wine's own compiler running. And
+        // `n,b`, not a bare `n`: the rule the test above holds every entry to, because with a
+        // verb that failed to install, `n` alone is a game that doesn't start.
         for version in ["d3dcompiler_43", "d3dcompiler_47"] {
-            #expect(entry.settings.dllOverrides?[version] == "n")
+            #expect(entry.settings.dllOverrides?[version] == "n,b")
             #expect(entry.winetricks.contains(version))
         }
     }

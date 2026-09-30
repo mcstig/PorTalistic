@@ -13,6 +13,12 @@
 #  before anything was published, or the numbers were raised by hand — nothing changes, which
 #  is what makes running release.sh again after a failure safe.
 #
+#  Except when a different version is asked for: a build number belongs to one version. The
+#  unpublished build it was made for may already be on somebody's Mac — a build copied onto a
+#  test machine is exactly that — and Sparkle there never offers a build number it already has.
+#  0.6.2 went onto the test VM as build 70 without being published, and 0.6.20 reusing 70 would
+#  have been offered to it as nothing new. So a new version always takes a new build number.
+#
 #  Usage: Scripts/bump-version.py [version]
 #  Prints: "<version> <build> <bumped|unchanged>"
 
@@ -69,6 +75,10 @@ def main():
         else:
             major, minor, patch = (int(part) for part in current_version.split("."))
             version = "%d.%d.%d" % (major, minor, patch + 1)
+    elif requested and requested != current_version:
+        # A build number belongs to one version — see the note at the top.
+        build = max({current_build} | released) + 1
+        version = requested
     else:
         build = current_build
         version = requested or current_version

@@ -267,6 +267,36 @@ check "a Wine that can't be started is reported as a boot that ran out of time a
     '            return .couldNotStart(error.localizedDescription)' \
     '            return .killed'
 
+check "creating a container waits for Wine to announce it again (every Wine 11 container failed)" \
+    PorTalistic/Utilities/Wine/WineInterface.swift \
+    '        guard exitStatus == 0 else {' \
+    '        guard exitStatus == 0, standardError?.contains("has been updated") == true else {'
+
+check "a prefix Windows was never installed into is taken for a container" \
+    PorTalistic/Utilities/Wine/WineInterface.swift \
+    '        guard FileManager.default.fileExists(atPath: kernel32.path) else {' \
+    '        guard true else {'
+
+check "the Windows version is read from one stream again (every Wine 11 container re-set it before each launch)" \
+    PorTalistic/Utilities/Wine/WineInterface.swift \
+    '        let lines = [output.standardOutput, output.standardError]' \
+    '        let lines = [output.standardOutput]'
+
+check "one byte that isn't UTF-8 throws a whole transcript away again" \
+    PorTalistic/Utilities/Extensions/Built-in/Process+Extensions.swift \
+    '            (try? Data(contentsOf: url)).map { String(decoding: $0, as: UTF8.self) }' \
+    '            try? String(contentsOf: url, encoding: .utf8)'
+
+check "BioShock's d3dcompiler goes back to native-only (a verb that failed to install is a game that won't start)" \
+    PorTalistic/Utilities/Compatibility/CompatibilityDatabase.swift \
+    '"d3dcompiler_43": "n,b",' \
+    '"d3dcompiler_43": "n",'
+
+check "legendary's install path runs on past the end of its line" \
+    PorTalistic/Utilities/GameOperation/GameOperation.swift \
+    '        let line = chunk.output[marker.upperBound...].prefix(while: { !$0.isNewline })' \
+    '        let line = chunk.output[marker.upperBound...]'
+
 # ── Nothing may be left changed ────────────────────────────────────────────
 echo
 if git diff --quiet -- PorTalistic 2>/dev/null; then

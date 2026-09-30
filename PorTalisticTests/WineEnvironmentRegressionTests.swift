@@ -229,3 +229,121 @@ struct WineEnvironmentRegressionTests {
         }
     }
 }
+
+/**
+ Whether the `wineboot` that creates a container finished it.
+
+ Every Wine 11.16 container failed to be created, on every Mac that didn't already have one:
+ `wineboot` exited 0 into a finished prefix, the app waited for a line Wine 9.14 made a trace
+ nobody asks for, said "Wine stopped before its Windows environment was ready", and deleted the
+ prefix — on every attempt, for every game. The verdict is the prefix now, and these prefixes
+ are laid out the way `wineboot` leaves them.
+ */
+@Suite("Creating a container")
+struct ContainerCreationRegressionTests {
+    /// A prefix as `wineboot` leaves it. `installed` is whether `wine.inf`'s `DefaultInstall`
+    /// ran; `PreInstall` has written its file into `system32` either way.
+    private func withPrefix<T>(installed: Bool, _ body: (URL) throws -> T) throws -> T {
+        let url: URL = .temporaryDirectory.appending(path: "PorTalisticTests-\(UUID().uuidString)")
+        let system32 = url.appending(path: "drive_c/windows/system32")
+        try FileManager.default.createDirectory(at: system32, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        FileManager.default.createFile(atPath: system32.appending(path: "winedevice.exe").path, contents: nil)
+        if installed {
+            FileManager.default.createFile(atPath: system32.appending(path: "kernel32.dll").path, contents: nil)
+        }
+
+        return try body(url)
+    }
+
+    /// Lines from the end of what Wine 11.16 printed creating a container on a clean Mac,
+    /// 30/9/2026 — errors included, because a finished boot prints those too — and nowhere a
+    /// line saying the configuration was updated.
+    private let wine11Output = """
+        0104:err:ntoskrnl:ZwLoadDriver failed to create driver L"winebth": c00000e5
+        002c:err:setupapi:SetupDiInstallDevice Failed to start service L"winebth" for device L"ROOT", error 1359.
+        012c:err:setupapi:do_file_copyW Unsupported style(s) 0x10
+        0024:trace:process:NtQueryInformationProcess (0x64,0x00000000,0x31fd80,0x00000030,0x0)
+        0158:trace:loaddll:build_module Loaded L"imm32.dll" at 00006FFFFD7B0000: builtin
+
+        """
+
+    @Test("A clean exit into a finished prefix is a container, whatever Wine printed about it")
+    func aFinishedPrefixIsAContainer() throws {
+        try withPrefix(installed: true) { prefix in
+            #expect(Wine.prefixSetupShortfall(at: prefix, exitStatus: 0, standardError: wine11Output) == nil,
+                    "Wine 9.14 and later don't announce a finished prefix unless asked — every Wine 11 container failed on this")
+            #expect(Wine.prefixSetupShortfall(at: prefix, exitStatus: 0, standardError: nil) == nil,
+                    "output that couldn't be read says nothing about the prefix")
+            #expect(Wine.prefixSetupShortfall(at: prefix, exitStatus: 0,
+                                              standardError: "wine: configuration in '/tmp/prefix' has been updated.\n") == nil,
+                    "the engines that still announce it are unaffected")
+        }
+    }
+
+    @Test("A clean exit into a prefix Windows was never installed into is not a container")
+    func anUninstalledPrefixIsNotAContainer() throws {
+        try withPrefix(installed: false) { prefix in
+            let shortfall = Wine.prefixSetupShortfall(at: prefix, exitStatus: 0, standardError: wine11Output)
+            #expect(shortfall?.contains("kernel32.dll") == true,
+                    "drive_c exists from the first moment; only a finished install puts kernel32.dll in system32")
+        }
+    }
+
+    @Test("A boot that exits with a failure is not a container, even over a finished prefix")
+    func aFailedExitIsNotAContainer() throws {
+        try withPrefix(installed: true) { prefix in
+            let shortfall = Wine.prefixSetupShortfall(at: prefix, exitStatus: 1, standardError: wine11Output)
+            #expect(shortfall?.contains("status 1") == true)
+        }
+    }
+
+    @Test("Wine saying it couldn't update the prefix is a failure, even on a clean exit")
+    func aFailedUpdateIsNotAContainer() throws {
+        try withPrefix(installed: true) { prefix in
+            let complaint = #"wine: failed to update L"/tmp/prefix", wine.inf not found"#
+            let shortfall = Wine.prefixSetupShortfall(at: prefix, exitStatus: 0,
+                                                      standardError: wine11Output + complaint + "\n")
+            #expect(shortfall?.contains("wine.inf not found") == true)
+        }
+    }
+
+    @Test("The alert says what the boot left undone")
+    func theErrorSaysWhatWasMissing() {
+        let error = Wine.Container.UnableToBootError(containerName: "Wine 11.16 (DXMT)",
+                                                     unfinished: "wineboot exited with status 1")
+
+        #expect(error.errorDescription?.contains("wineboot exited with status 1") == true)
+        #expect(error.errorDescription?.contains("Wine 11.16 (DXMT)") == true)
+    }
+}
+
+/**
+ Reading back the Windows version a container reports.
+
+ `winecfg -v` answers on stdout up to Wine 8 and on stderr from Wine 9. Which one to read was
+ decided by the *bundled engine's* version — 7.7, whatever the container ran — so every Wine 11
+ container answered `nil`, and the per-launch apply set its Windows version again every time.
+ */
+@Suite("A container's Windows version")
+struct WindowsVersionRegressionTests {
+    @Test("The answer is found on whichever stream this Wine printed it", arguments: [true, false])
+    func eitherStream(onStandardError: Bool) {
+        // Whatever the container's WINEDEBUG lets through comes before and after it.
+        let noise = "0120:fixme:ntdll:NtQuerySystemInformation info_class SYSTEM_PERFORMANCE_INFORMATION\n"
+        let output: Process.CommandResult = onStandardError
+            ? .init(standardOutput: "", standardError: noise + "win10\n" + noise)
+            : .init(standardOutput: "win10\n", standardError: noise)
+
+        #expect(Wine.windowsVersion(reportedIn: output) == .win10)
+    }
+
+    @Test("Nothing that isn't a version name is taken for one")
+    func noAnswerIsNil() {
+        let output: Process.CommandResult = .init(standardOutput: nil,
+                                                  standardError: "0120:err:winecfg:main something\n")
+
+        #expect(Wine.windowsVersion(reportedIn: output) == nil)
+    }
+}

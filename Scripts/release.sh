@@ -14,12 +14,13 @@
 #  as a signing mistake. So each step is verified here rather than assumed.
 #
 #  Usage:
-#      Scripts/release.sh            the next version: 0.6.1 becomes 0.6.2, build 69 becomes 70
-#      Scripts/release.sh 0.7.0      a version of your choosing, and the next build
+#      Scripts/release.sh            the next version: 0.6.20 becomes 0.6.21, build 71 becomes 72
+#      Scripts/release.sh 0.7.0      a version of your choosing, and a new build number
 #
 #  The version is only raised when the project's build number has already been released (it is
 #  in the committed appcast.xml). Running this again after a failed attempt keeps the number it
-#  chose the first time. Release notes, if you want them in the update prompt, go in
+#  chose the first time. Asking for a different version always takes a new build number, even
+#  over one that was never published — that build may already be on a test Mac. Release notes, if you want them in the update prompt, go in
 #  ReleaseNotes/<version>.md — they are read at the very end, so writing them while Apple
 #  notarises is fine.
 #

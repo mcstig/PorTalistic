@@ -35,14 +35,17 @@ extension Process {
         
         try self.run()
         
+        // Lossy rather than failable, here and in the two readers below: one byte that isn't
+        // UTF-8 — a Windows program writing in its own code page — turned the whole stream into
+        // `nil`, and with it a boot transcript's evidence or a query's answer.
         var decodedStandardOutput: String? = nil
         if let data = try stdout.fileHandleForReading.readToEnd() {
-            decodedStandardOutput = .init(data: data, encoding: .utf8)
+            decodedStandardOutput = String(decoding: data, as: UTF8.self)
         }
-        
+
         var decodedStandardError: String? = nil
         if let data = try stderr.fileHandleForReading.readToEnd() {
-            decodedStandardError = .init(data: data, encoding: .utf8)
+            decodedStandardError = String(decoding: data, as: UTF8.self)
         }
         
         return .init(standardOutput: decodedStandardOutput,
@@ -63,12 +66,12 @@ extension Process {
         func spawnReadTask(for handle: FileHandle, for stream: Process.Stream) -> Task<String?, Error> {
             Task.detached(priority: .utility) {
                 guard let data = try handle.readToEnd() else { return nil }
-                let text: String? = .init(data: data, encoding: .utf8)
-                
-                if let text, !text.isEmpty {
+                let text = String(decoding: data, as: UTF8.self)
+
+                if !text.isEmpty {
                     log.debug("[\(stream.rawValue)] \(text, privacy: .public)")
                 }
-                
+
                 return text
             }
         }
@@ -365,9 +368,12 @@ extension Process {
         try? outputHandle.close()
         try? errorHandle.close()
 
-        return (.init(standardOutput: try? String(contentsOf: outputURL, encoding: .utf8),
-                      standardError: try? String(contentsOf: errorURL, encoding: .utf8)),
-                outcome)
+        // Lossy: a transcript is evidence, and one byte that isn't UTF-8 used to throw all of it away.
+        func text(at url: URL) -> String? {
+            (try? Data(contentsOf: url)).map { String(decoding: $0, as: UTF8.self) }
+        }
+
+        return (.init(standardOutput: text(at: outputURL), standardError: text(at: errorURL)), outcome)
     }
     
     func runStreamed(throwsOnChunkError: Bool = true) -> AsyncThrowingStream<OutputChunk, Error> {

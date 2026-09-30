@@ -230,10 +230,17 @@ final class DownloadDestination: @unchecked Sendable {
     /// `[Core] INFO: Install path: /Volumes/Mac Extended/Games/GOG/BioshockInfiniteCompleteEdition`
     func note(_ chunk: Process.OutputChunk) {
         guard case .standardError = chunk.stream,
-              let match = try? Regex(#"Install path: (.+)$"#).firstMatch(in: chunk.output),
-              let path = match[1].substring else { return }
+              let marker = chunk.output.range(of: "Install path: ") else { return }
 
-        let trimmed = String(path).trimmingCharacters(in: .whitespacesAndNewlines)
+        // The path runs to the end of its line, by `Character.isNewline` — the rule the stream
+        // reader splits lines by, so `\r` and `\r\n` end it as well as `\n`. This was a regex,
+        // `Install path: (.+)$`, which matched nothing on a line still carrying its `\r`: `.`
+        // stops short of the `\r`, and `$` doesn't match in front of it. The reader splits lines
+        // before they get here, so only a test feeding a raw line could find it — but which folder
+        // a stopped download may delete shouldn't depend on the caller having done that.
+        let line = chunk.output[marker.upperBound...].prefix(while: { !$0.isNewline })
+
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
         // Through `set`, so legendary's answer is held to the same rule as GOG's.

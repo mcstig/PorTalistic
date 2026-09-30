@@ -318,6 +318,14 @@ import DockProgress
                 alert.alertStyle = .critical
                 alert.addButton(withTitle: String(localized: "OK"))
 
+                // A container that couldn't be set up kept Wine's own account of why, in a
+                // folder macOS hides. Saying where was not enough: on a clean Mac it took four
+                // rounds to find it. So the alert goes there.
+                let transcript = (error as? Wine.Container.UnableToBootError)?.transcriptURL
+                if transcript != nil {
+                    alert.addButton(withTitle: String(localized: "Show Log"))
+                }
+
                 // This used to be `NSApp.windows.first`, and that is how a failed launch
                 // became "nothing happens". `windows.first` is whatever window happens to be
                 // first — the About panel, or a Settings window the user had dragged onto
@@ -329,11 +337,16 @@ import DockProgress
                 // Otherwise a plain modal, which cannot be hidden behind anything.
                 let candidate = NSApp.keyWindow ?? NSApp.mainWindow
 
+                let response: NSApplication.ModalResponse
                 if let window = candidate, window.attachedSheet == nil, window.isVisible {
-                    alert.beginSheetModal(for: window)
+                    response = await alert.beginSheetModal(for: window)
                 } else {
                     NSApp.activate()
-                    alert.runModal()
+                    response = alert.runModal()
+                }
+
+                if response == .alertSecondButtonReturn, let transcript {
+                    NSWorkspace.shared.activateFileViewerSelecting([transcript])
                 }
             }
 
