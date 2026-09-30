@@ -14,7 +14,14 @@
 #  as a signing mistake. So each step is verified here rather than assumed.
 #
 #  Usage:
-#      Scripts/release.sh
+#      Scripts/release.sh            the next version: 0.6.1 becomes 0.6.2, build 69 becomes 70
+#      Scripts/release.sh 0.7.0      a version of your choosing, and the next build
+#
+#  The version is only raised when the project's build number has already been released (it is
+#  in the committed appcast.xml). Running this again after a failed attempt keeps the number it
+#  chose the first time. Release notes, if you want them in the update prompt, go in
+#  ReleaseNotes/<version>.md — they are read at the very end, so writing them while Apple
+#  notarises is fine.
 #
 #  The signing team comes from the Xcode project. Set PORTALISTIC_TEAM_ID only to override it.
 #
@@ -68,6 +75,30 @@ xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" >/dev/null 2>&1 \
 
 step "Checking source invariants"
 bash Scripts/check-invariants.sh || die "Invariants are violated. Fix them before cutting a release — several of them are things that fail silently for users."
+
+# ── Version ────────────────────────────────────────────────────────────────
+
+step "Setting the version"
+
+# An entry an earlier run added to appcast.xml, never published, belongs to this run to write
+# again — and would otherwise be refused as a build that is already there.
+if ! git diff --quiet -- appcast.xml 2>/dev/null; then
+    git checkout -- appcast.xml
+    printf '  appcast.xml had an entry that was never published; put back to the last commit.\n'
+fi
+
+VERSIONING=$(python3 Scripts/bump-version.py "${1:-}") || die "Couldn't settle the version (see above)."
+read -r NEXT_VERSION NEXT_BUILD BUMPED <<< "$VERSIONING"
+
+if [ "$BUMPED" = "bumped" ]; then
+    ok "Releasing $NEXT_VERSION (build $NEXT_BUILD), raised from the last release"
+else
+    ok "Releasing $NEXT_VERSION (build $NEXT_BUILD), which hasn't been released yet"
+fi
+
+if [ ! -f "ReleaseNotes/$NEXT_VERSION.md" ]; then
+    printf '  No ReleaseNotes/%s.md, so the update prompt will show no notes. Write it now if you\n  want some: it is read at the end, after notarising.\n' "$NEXT_VERSION"
+fi
 
 # ── Build ──────────────────────────────────────────────────────────────────
 
@@ -341,7 +372,16 @@ printf '\n'
 ok "Ready: $RELEASE_ZIP"
 printf '  sha256: %s\n' "$(shasum -a 256 "$RELEASE_ZIP" | cut -d' ' -f1)"
 printf '\nPublish it in this order — the other way round, every copy of the app is offered a download\nthat 404s:\n\n'
-printf '  1. On GitHub, draft a new release with the tag %s, attach %s,\n' "$TAG" "$RELEASE_ZIP"
+
+STEP=1
+
+# The version change first, so the tag GitHub makes points at the code that was built.
+if ! git diff --quiet -- PorTalistic.xcodeproj/project.pbxproj || [ -n "$(git status --porcelain -- ReleaseNotes)" ]; then
+    printf '  %d. git add PorTalistic.xcodeproj/project.pbxproj ReleaseNotes && git commit -m "Version %s" && git push origin HEAD\n' "$STEP" "$VERSION"
+    STEP=$((STEP + 1))
+fi
+
+printf '  %d. On GitHub, draft a new release with the tag %s, attach %s,\n' "$STEP" "$TAG" "$RELEASE_ZIP"
 printf '     and publish it as a normal release (not a pre-release).\n'
-printf '  2. Scripts/verify-appcast.sh\n'
-printf '  3. git add appcast.xml && git commit -m "Offer %s" && git push origin HEAD\n\n' "$VERSION"
+printf '  %d. Scripts/verify-appcast.sh\n' "$((STEP + 1))"
+printf '  %d. git add appcast.xml && git commit -m "Offer %s" && git push origin HEAD\n\n' "$((STEP + 2))" "$VERSION"

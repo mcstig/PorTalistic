@@ -1915,6 +1915,9 @@ check_count "PorTalistic/Views/Unified/Windows/SettingsView.swift" 2 \
 check_present "Scripts/release.sh" \
     "release.sh no longer adds the release to appcast.xml, so no installed copy is ever offered it" \
     'python3 Scripts/update-appcast\.py'
+check_present "Scripts/release.sh" \
+    "release.sh no longer settles the version before it builds — a release with an already-released build number is never offered to anybody" \
+    'VERSIONING=\$\(python3 Scripts/bump-version\.py'
 check_present "Scripts/update-appcast.py" \
     "update-appcast.py no longer refuses a build number that isn't higher — Sparkle would never offer that release, and nothing would say so" \
     'int\(existing\) >= int\(args\.build\)'
