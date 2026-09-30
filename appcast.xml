@@ -6,6 +6,21 @@
         <description>Updates to PorTalistic. Read by the app when it opens; written by Scripts/release.sh, newest first.</description>
         <language>en</language>
         <item>
+            <title>PorTalistic 0.6.20</title>
+            <pubDate>Wed, 30 Sep 2026 18:01:55 GMT</pubDate>
+            <sparkle:version>74</sparkle:version>
+            <sparkle:shortVersionString>0.6.20</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown">## What's new in 0.6.20
+
+- **Games that need Wine 11.16 start on any Mac.** Setting up its container failed with "Wine stopped before its Windows environment was ready" even though Wine had finished: PorTalistic waited for a message newer Wine no longer prints, then removed the container.
+- **When a container can't be set up, you're told why**, and **Show Log** opens the details in Finder.
+- **Check for Updates…** is in Settings ▸ General.
+- **Wine 11 games start a little faster:** their Windows version is no longer set again before every launch.
+- The Home page shows the PorTalistic banner until you've played something.</description>
+            <enclosure url="https://github.com/mcstig/PorTalistic/releases/download/v0.6.20/PorTalistic-0.6.20.zip" length="58323418" type="application/octet-stream" sparkle:edSignature="Pn6VlwYL1bFHpY2YOACGChkjrcusrGBq29Xo9byWWYq0NyqbuMo0JOgegmIVdwjdQF5G9JCzzBo0Ut8sQVZNDg==" />
+        </item>
+        <item>
             <title>PorTalistic 0.6.1</title>
             <pubDate>Wed, 30 Sep 2026 07:21:09 GMT</pubDate>
             <sparkle:version>69</sparkle:version>
