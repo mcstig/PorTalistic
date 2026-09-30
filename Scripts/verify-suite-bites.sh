@@ -262,6 +262,11 @@ check "the wineboot that creates a container can ask for wine-mono again" \
     '        capturedEnvironment["WINEDLLOVERRIDES"] = withBaseDLLOverrides(capturedEnvironment["WINEDLLOVERRIDES"])' \
     ''
 
+check "a Wine that can't be started is reported as a boot that ran out of time again" \
+    PorTalistic/Utilities/Extensions/Built-in/Process+Extensions.swift \
+    '            return .couldNotStart(error.localizedDescription)' \
+    '            return .killed'
+
 # ── Nothing may be left changed ────────────────────────────────────────────
 echo
 if git diff --quiet -- PorTalistic 2>/dev/null; then

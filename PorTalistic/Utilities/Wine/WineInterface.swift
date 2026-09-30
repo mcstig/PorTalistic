@@ -449,15 +449,11 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
         // show two wine icons in the Dock and then nothing at all. Five minutes is far more
         // than a prefix needs and far less than forever; a boot that overruns it is reported
         // as a failure, which at least says something.
-        guard let result = await process.runWrapped(timeout: .seconds(300)) else {
-            log.error("""
-                wineboot in \(containerURL.lastPathComponent, privacy: .public) did not finish                 within five minutes and was stopped
-                """)
-
-            preserveBootFailureLog(from: containerURL,
-                                   named: runtime(forContainerAtURL: containerURL).name)
-            throw Container.UnableToBootError()
+        guard let run = await process.runWrappedKeepingOutput(timeout: .seconds(300)) else {
+            throw Container.UnableToBootError(containerName: containerURL.lastPathComponent)
         }
+
+        let result = run.result
 
         // Kept next to the container, because a prefix that fails to boot is the one case
         // where there's no prefix to look inside afterwards, and the reason only ever appears
@@ -470,11 +466,20 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
                 + String(output.suffix(limit))
         }
 
+        // `terminationStatus` only once the process has exited: on one that was killed, or never
+        // started, reading it raises rather than returns.
+        let ending: String
+        switch run.outcome {
+        case .exited:                     ending = "\(process.terminationStatus)"
+        case .killed:                     ending = "stopped: still running after five minutes"
+        case .couldNotStart(let reason):  ending = "never started: \(reason)"
+        }
+
         let transcript = """
             wine: \(process.executableURL?.path ?? "?")
             arguments: \(process.arguments ?? [])
             environment: \(process.environment?.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" } ?? [])
-            exit: \(process.terminationStatus)
+            exit: \(ending)
 
             stdout:
             \(tail(result.standardOutput))
@@ -483,7 +488,7 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
             \(tail(result.standardError))
             """
         var report = transcript
-        if process.terminationStatus != 0 {
+        if run.outcome != .exited || process.terminationStatus != 0 {
             let diagnostics = await runtimeDiagnostics(for: containerURL)
             report += "\n\n" + diagnostics
         }
@@ -491,7 +496,20 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
         try? report.write(to: containerURL.appending(path: "wineboot.log"),
                           atomically: true, encoding: .utf8)
 
-        return result
+        switch run.outcome {
+        case .exited:
+            return result
+
+        case .killed:
+            log.error("wineboot in \(containerURL.lastPathComponent, privacy: .public) did not finish within five minutes and was stopped")
+            preserveBootFailureLog(from: containerURL, named: containerURL.lastPathComponent)
+            throw Container.UnableToBootError(containerName: containerURL.lastPathComponent, timedOut: true)
+
+        case .couldNotStart(let reason):
+            log.error("wineboot in \(containerURL.lastPathComponent, privacy: .public) could not be started: \(reason, privacy: .public)")
+            preserveBootFailureLog(from: containerURL, named: containerURL.lastPathComponent)
+            throw Container.UnableToBootError(containerName: containerURL.lastPathComponent, couldNotStart: reason)
+        }
     }
 
     /// What a failed boot needs to say about the engine that failed it.
@@ -653,7 +671,18 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
             }
 
             let newContainer = Container(name: name, url: url, settings: settings)
-            let result = try await boot(at: url, parameters: .prefixInit)
+
+            // A boot that is stopped, or never starts, fails the same way as the one checked
+            // below and leaves the same half-built prefix — `drive_c` included, which is all
+            // `containerExists(at:)` looks for. Left here, the next call would hand it back as a
+            // finished container. `boot` has already kept its transcript beside the containers.
+            let result: Process.CommandResult
+            do {
+                result = try await boot(at: url, parameters: .prefixInit)
+            } catch {
+                try? FileManager.default.removeItem(at: url)
+                throw error
+            }
 
             // swiftlint:disable:next force_try
             guard result.standardError?.contains(try! Regex(#"wine: configuration in (.*?) has been updated\."#)) == true else {
@@ -670,7 +699,7 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
                 preserveBootFailureLog(from: url, named: name)
                 try? FileManager.default.removeItem(at: url)
 
-                throw Container.UnableToBootError()
+                throw Container.UnableToBootError(containerName: name)
             }
 
             containerURLs.insert(url)

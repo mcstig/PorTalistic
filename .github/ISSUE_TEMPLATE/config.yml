@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
-  - name: View documentation
-    url: https://docs.getmythic.app/
-    about: If you're looking for documentation on how to use Mythic, check out our documentation.
-  - name: Get Help on Discord
-    url: https://discord.gg/qbc32gtZDt
-    about: If you can't get something to work or just want to chat, join our Discord server.
+  - name: Read the README
+    url: https://github.com/mcstig/PorTalistic#readme
+    about: What PorTalistic does, what it needs from your Mac, and where to download it.
+  - name: Ask in Discussions
+    url: https://github.com/mcstig/PorTalistic/discussions
+    about: Questions, and anything that isn't a bug.

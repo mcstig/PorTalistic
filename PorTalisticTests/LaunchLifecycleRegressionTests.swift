@@ -1165,3 +1165,52 @@ struct LegendaryErrorLineTests {
         }
     }
 }
+
+/**
+ How a bounded run ended — exited, stopped, or never started.
+
+ The last two used to be one `false`, so a Wine that failed to launch in its first millisecond
+ was reported as a first boot that had been working for five minutes, and nothing it said was
+ kept either way. That is how "Container unable to boot" arrived on a virtual Mac with no log
+ anywhere to explain it.
+ */
+@Suite("A bounded run says how it ended")
+struct BoundedRunOutcomeTests {
+    @Test("A process that can't be started is not reported as one that ran out of time")
+    func couldNotStartIsNotATimeout() async throws {
+        let process: Process = .init()
+        process.executableURL = URL(filePath: "/nonexistent/PorTalisticTests-\(UUID().uuidString)")
+
+        let run = try #require(await process.runWrappedKeepingOutput(timeout: .seconds(5)))
+
+        guard case .couldNotStart = run.outcome else {
+            Issue.record("expected couldNotStart, got \(run.outcome)")
+            return
+        }
+    }
+
+    @Test("A process that finishes keeps its output")
+    func exitedKeepsOutput() async throws {
+        let process: Process = .init()
+        process.executableURL = URL(filePath: "/bin/echo")
+        process.arguments = ["portalistic"]
+
+        let run = try #require(await process.runWrappedKeepingOutput(timeout: .seconds(10)))
+
+        #expect(run.outcome == .exited)
+        #expect(run.result.standardOutput?.contains("portalistic") == true)
+    }
+
+    @Test("A process that runs past its budget is stopped, and what it said by then is kept")
+    func killedKeepsWhatItSaid() async throws {
+        let process: Process = .init()
+        process.executableURL = URL(filePath: "/bin/sh")
+        process.arguments = ["-c", "echo started; sleep 30"]
+
+        let run = try #require(await process.runWrappedKeepingOutput(timeout: .seconds(1)))
+
+        #expect(run.outcome == .killed)
+        #expect(run.result.standardOutput?.contains("started") == true,
+                "a boot that ran out of time used to leave nothing behind")
+    }
+}

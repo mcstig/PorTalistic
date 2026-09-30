@@ -1,5 +1,5 @@
 name: "Bug report"
-description: Report an issue regarding Mythic.
+description: Report an issue with PorTalistic.
 title: "[bug]: "
 labels: ["bug"]
 body:

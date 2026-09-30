@@ -117,16 +117,16 @@ struct HomeView: View {
 
     private var welcome: some View {
         VStack(spacing: Theme.Spacing.large) {
-            ZStack {
-                Circle()
-                    .fill(Theme.Palette.portal)
-                    .frame(width: 78, height: 78)
-                    .blur(radius: 26)
-
-                Image(systemName: "circle.hexagonpath")
-                    .font(.system(size: 46, weight: .light))
-                    .foregroundStyle(Theme.Palette.portal)
-            }
+            // The banner, sized by the window: half its width, from a mark that stays legible
+            // in a narrow window up to the width the artwork still holds sharply — the largest
+            // copy in the asset catalogue is 508 pixels wide, so past this it only gets softer.
+            // It carries its own glow, so nothing is drawn behind it.
+            Image("PortalisticLogo")
+                .resizable()
+                .interpolation(.high)
+                .scaledToFit()
+                .containerRelativeFrame(.horizontal) { width, _ in min(max(width * 0.5, 220), 480) }
+                .accessibilityLabel(Text(Branding.name))
 
             VStack(spacing: Theme.Spacing.small) {
                 Text("Welcome to \(Branding.name)")

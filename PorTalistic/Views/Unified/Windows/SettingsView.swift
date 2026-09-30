@@ -7,6 +7,7 @@
 
 // Copyright © 2023-2025 vapidinfinity
 
+import AppKit
 import Foundation
 import SwiftUI
 import SwordRPC
@@ -103,6 +104,8 @@ extension SettingsView {
         @State private var isResetSettingsAlertPresented = false
 
         var body: some View {
+            AppUpdateRow()
+
             Button("Reset \(Branding.name)", systemImage: "power.dotted") {
                 isResetAlertPresented = true
             }
@@ -150,6 +153,34 @@ extension SettingsView {
                     Text("This will erase every persistent setting.")
                 }
             )
+        }
+    }
+
+    /// "Check for Updates…", beside the version it would replace.
+    ///
+    /// One view, used in General and in Updates, because those are the two places people
+    /// look — and the app menu's copy is the one nobody finds.
+    struct AppUpdateRow: View {
+        var body: some View {
+            LabeledContent {
+                Button("Check for Updates…", systemImage: "arrow.triangle.2.circlepath") {
+                    SparkleUpdateController.shared.checkForUpdates(userInitiated: true)
+
+                    // What the check finds is shown over the main window, and Settings is
+                    // usually in front of it.
+                    NSApp.windows
+                        .first { $0 !== NSApp.keyWindow && $0.isVisible && $0.canBecomeMain }?
+                        .makeKeyAndOrderFront(nil)
+                }
+            } label: {
+                Text(verbatim: "\(Branding.name) \(Self.installedVersion)")
+            }
+        }
+
+        private static var installedVersion: String {
+            let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
+            let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
+            return "\(version) (\(build))"
         }
     }
 
@@ -264,24 +295,13 @@ extension SettingsView {
         @AppStorage("engineAutomaticallyChecksForUpdates") private var engineAutomaticallyChecksForUpdates: Bool = true
 
         var body: some View {
+            // This section was empty: two commented-out toggles for upstream's updater.
             Section(Branding.name, isExpanded: $isMythicUpdatesSectionExpanded) {
-//                Toggle(
-//                    "Automatically check for Mythic updates",
-//                    systemImage: "arrow.down.app.dashed",
-//                    isOn: Binding(
-//                        get: { sparkleController.updater.automaticallyChecksForUpdates },
-//                        set: { sparkleController.updater.automaticallyChecksForUpdates = $0 }
-//                    )
-//                )
-//
-//                Toggle(
-//                    "Automatically download Mythic updates",
-//                    systemImage: "arrow.down.app",
-//                    isOn: Binding(
-//                        get: { sparkleController.updater.automaticallyDownloadsUpdates },
-//                        set: { sparkleController.updater.automaticallyDownloadsUpdates = $0 }
-//                    )
-//                )
+                AppUpdateRow()
+
+                Text("\(Branding.name) checks for updates when it opens, and asks before installing one.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Mythic Engine", isExpanded: $isEngineUpdatesSectionExpanded) {

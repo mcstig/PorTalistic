@@ -259,8 +259,44 @@ extension Wine.Container {
             """)
     }
 
+    /// A new container's Windows environment couldn't be set up.
+    ///
+    /// Used to say "Container unable to boot." and nothing else — not which container, not
+    /// whether Wine failed or merely took too long, and not that its output had been kept.
     struct UnableToBootError: LocalizedError {
-        var errorDescription: String? = String(localized: "Container unable to boot.") // TODO: add reason if possible
+        /// The container that couldn't be set up, where that is known.
+        var containerName: String?
+
+        /// Stopped for taking too long, rather than failing.
+        var timedOut: Bool = false
+
+        /// Wine couldn't be started at all, and what macOS said about it.
+        var couldNotStart: String?
+
+        var errorDescription: String? {
+            let name = containerName.map { "“\($0)”" } ?? String(localized: "The container")
+
+            if let couldNotStart {
+                return String(localized: """
+                    \(name) couldn't be set up: its Wine couldn't be started (\(couldNotStart)). \
+                    Details are saved beside your containers, in a file ending “failed wineboot.log”.
+                    """)
+            }
+
+            if timedOut {
+                return String(localized: """
+                    \(name) took more than five minutes to set up and was stopped. What Wine had \
+                    said by then is saved beside your containers, in a file ending \
+                    “failed wineboot.log”.
+                    """)
+            }
+
+            return String(localized: """
+                \(name) couldn't be set up: Wine stopped before its Windows environment was \
+                ready. What it said is saved beside your containers, in a file ending \
+                “failed wineboot.log”.
+                """)
+        }
     }
 
     struct AlreadyExistsError: LocalizedError {

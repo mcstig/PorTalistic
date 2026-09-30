@@ -188,7 +188,7 @@ check_present "PorTalistic/Utilities/Migrator.swift" \
 
 check_present "PorTalistic/Utilities/Wine/WineInterface.swift" \
     "booting a container must stay bounded: wineboot does not return while a dialog is up, and an unbounded wait is two wine icons in the Dock and a game that never appears" \
-    'runWrapped\(timeout: \.seconds\(300\)\)'
+    'runWrappedKeepingOutput\(timeout: \.seconds\(300\)\)'
 
 # ── One control, one implementation ─────────────────────────────────────────
 # The install/play control was rebuilt as ActionIconButton and then left hardcoded a second
@@ -1906,6 +1906,10 @@ check_present "PorTalistic/Utilities/SparkleUpdateController.swift" \
 check_present "PorTalistic/Views/SparkleUpdater/SparkleUpdaterPreviewView.swift" \
     "the update prompt no longer offers Later" \
     'Text\("Later"\)'
+
+check_count "PorTalistic/Views/Unified/Windows/SettingsView.swift" 2 \
+    "Check for Updates is no longer in both Settings ▸ General and Settings ▸ Updates" \
+    '^[[:space:]]*AppUpdateRow\(\)$'
 
 # And a release reaches people only through appcast.xml, which only ever offers a higher build.
 check_present "Scripts/release.sh" \

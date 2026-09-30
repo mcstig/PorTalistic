@@ -285,6 +285,22 @@ extension Process {
     /// - Returns: `true` if the process exited on its own, `false` if it had to be killed.
     @discardableResult
     func runBounded(timeout: Duration) async -> Bool {
+        await runBoundedReporting(timeout: timeout) == .exited
+    }
+
+    /// How a bounded run ended.
+    ///
+    /// Two of these used to be one `false`: a process that could not be started at all, and one
+    /// that ran out of time. Reported as the same thing, a Wine that failed to launch in the
+    /// first millisecond read as a first boot that had been working for five minutes.
+    enum BoundedRunOutcome: Equatable, Sendable {
+        case exited
+        case killed
+        case couldNotStart(String)
+    }
+
+    /// ``runBounded(timeout:)``, saying which way it ended.
+    func runBoundedReporting(timeout: Duration) async -> BoundedRunOutcome {
         standardInput = FileHandle.nullDevice
         if standardOutput == nil { standardOutput = FileHandle.nullDevice }
         if standardError == nil { standardError = FileHandle.nullDevice }
@@ -293,18 +309,18 @@ extension Process {
             try run()
         } catch {
             Logger.app.error("Couldn't start \(self.executableURL?.lastPathComponent ?? "process"): \(error.localizedDescription)")
-            return false
+            return .couldNotStart(error.localizedDescription)
         }
 
-        if await hasExited(by: .now.advanced(by: timeout)) { return true }
+        if await hasExited(by: .now.advanced(by: timeout)) { return .exited }
 
         Logger.app.notice("\(self.executableURL?.lastPathComponent ?? "process", privacy: .public) outlived its \(timeout, privacy: .public) budget; terminating it.")
         terminate()
 
-        if await hasExited(by: .now.advanced(by: .seconds(2))) { return false }
+        if await hasExited(by: .now.advanced(by: .seconds(2))) { return .killed }
         kill(processIdentifier, SIGKILL)
 
-        return false
+        return .killed
     }
 
     /// ``runBounded(timeout:)``, keeping the output.
@@ -315,6 +331,17 @@ extension Process {
     ///
     /// - Returns: `nil` if the process had to be killed.
     func runWrapped(timeout: Duration) async -> CommandResult? {
+        guard let run = await runWrappedKeepingOutput(timeout: timeout), run.outcome == .exited else { return nil }
+        return run.result
+    }
+
+    /// ``runWrapped(timeout:)``, keeping whatever was written before the end however it came.
+    ///
+    /// For the caller whose failure *is* the thing to explain: a first boot that ran out of time,
+    /// or never started, used to leave nothing behind, because its output went with it.
+    ///
+    /// - Returns: `nil` only if there was nowhere to put the output.
+    func runWrappedKeepingOutput(timeout: Duration) async -> (result: CommandResult, outcome: BoundedRunOutcome)? {
         let scratch = FileManager.default.temporaryDirectory
             .appending(path: "\(Branding.name)Process-\(UUID().uuidString)")
         try? FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
@@ -333,15 +360,14 @@ extension Process {
         standardOutput = outputHandle
         standardError = errorHandle
 
-        let exited = await runBounded(timeout: timeout)
+        let outcome = await runBoundedReporting(timeout: timeout)
 
         try? outputHandle.close()
         try? errorHandle.close()
 
-        guard exited else { return nil }
-
-        return .init(standardOutput: try? String(contentsOf: outputURL, encoding: .utf8),
-                     standardError: try? String(contentsOf: errorURL, encoding: .utf8))
+        return (.init(standardOutput: try? String(contentsOf: outputURL, encoding: .utf8),
+                      standardError: try? String(contentsOf: errorURL, encoding: .utf8)),
+                outcome)
     }
     
     func runStreamed(throwsOnChunkError: Bool = true) -> AsyncThrowingStream<OutputChunk, Error> {

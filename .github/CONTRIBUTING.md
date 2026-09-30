@@ -1,4 +1,4 @@
-# Contributing to Mythic
+# Contributing to PorTalistic
 
 Thank you for helping build a great macOS game launcher! Please read this guide before opening a PR.
 
@@ -17,8 +17,8 @@ Please read and understand our [Code of Conduct](CODE_OF_CONDUCT.md) before cont
 - Swift 6.0+
 
 **To build:**
-1. Open `Mythic.xcodeproj`
-2. Build the `Mythic` scheme
+1. Open `PorTalistic.xcodeproj`
+2. Build the `PorTalistic` scheme
 
 ---
 
@@ -71,7 +71,7 @@ All PRs must pass:
 ### General Principles
 
 - Follow the [Swift API Design Guidelines](https://www.swift.org/documentation/api-design-guidelines/)
-- Use **Model-View-ViewModel (MVVM)** architecture (see [example](Mythic/Views/Onboarding))
+- Use **Model-View-ViewModel (MVVM)** architecture (see [example](PorTalistic/Views/Onboarding))
 - Write **dynamic and reusable code** that adapts to different contexts
 - **Search existing code** before creating new methods to reduce duplication
 - Store structs, enums, and other similar data structures in **class extensions**
@@ -126,8 +126,8 @@ All PRs must pass:
 
 Follow the existing project structure:
 
-- **Utilities/Globals/Extensions** → `Mythic/Utilities`
-- **Views** → `Mythic/Views`
+- **Utilities/Globals/Extensions** → `PorTalistic/Utilities`
+- **Views** → `PorTalistic/Views`
   - Components/Navigation/Onboarding/Unified subdirectories
 
 ### Dependencies
@@ -140,12 +140,12 @@ Follow the existing project structure:
 ## Localization
 
 - **Source language:** English
-- **Translations:** Managed via [Crowdin](https://crowdin.getmythic.app)
-  - Strings are automatically added to [`Localizable.xcstrings`](Mythic/Localizable.xcstrings)
+- **Translations:** Not set up yet — upstream Mythic's Crowdin project is theirs, not ours
+  - Strings are automatically added to [`Localizable.xcstrings`](PorTalistic/Localizable.xcstrings)
 
 **For non-SwiftUI strings:** Wrap string literals in `String(localized:)`:
 ```swift
-let message = String(localized: "Welcome to Mythic")
+let message = String(localized: "Welcome to PorTalistic")
 ```
 
 ---
@@ -167,7 +167,7 @@ New Swift files should include this header:
 
 Have questions?
 - **GitHub Issues:** Open an issue for bugs or feature requests
-- **Discord:** Join our community (link in [README](README.md))
+- **Discussions:** Ask in [GitHub Discussions](https://github.com/mcstig/PorTalistic/discussions)
 
 ---
 

@@ -344,4 +344,4 @@ printf '\nPublish it in this order — the other way round, every copy of the ap
 printf '  1. On GitHub, draft a new release with the tag %s, attach %s,\n' "$TAG" "$RELEASE_ZIP"
 printf '     and publish it as a normal release (not a pre-release).\n'
 printf '  2. Scripts/verify-appcast.sh\n'
-printf '  3. git add appcast.xml && git commit -m "Offer %s" && git push\n\n' "$VERSION"
+printf '  3. git add appcast.xml && git commit -m "Offer %s" && git push origin HEAD\n\n' "$VERSION"
