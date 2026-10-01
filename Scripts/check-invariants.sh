@@ -1977,7 +1977,15 @@ check_present "PorTalistic/Utilities/SparkleUpdateController.swift" \
 
 check_present "Scripts/bump-version.py" \
     "a new version can take an unpublished build number again — a build already copied onto a test Mac is then never offered the new one" \
-    'elif requested and requested != current_version:'
+    'or version != current_version:'
+
+check_present "Scripts/bump-version.py" \
+    "release.sh accepts a version that is already released again — it built, signed and notarised a second 0.6.20 the day after the first" \
+    'if requested and requested in released_versions:'
+
+check_present "Scripts/bump-version.py" \
+    "release.sh no longer steps the version by itself once the project's is released, so a plain run re-releases the version that is out" \
+    'elif current_version in released_versions:'
 check_present "Scripts/update-appcast.py" \
     "update-appcast.py no longer refuses a build number that isn't higher — Sparkle would never offer that release, and nothing would say so" \
     'int\(existing\) >= int\(args\.build\)'
