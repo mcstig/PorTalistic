@@ -6,6 +6,20 @@
         <description>Updates to PorTalistic. Read by the app when it opens; written by Scripts/release.sh, newest first.</description>
         <language>en</language>
         <item>
+            <title>PorTalistic 0.6.21</title>
+            <pubDate>Thu, 01 Oct 2026 11:34:15 GMT</pubDate>
+            <sparkle:version>76</sparkle:version>
+            <sparkle:shortVersionString>0.6.21</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown">## What's new in 0.6.21
+
+- **PorTalistic offers to set up a Wine container when it opens**, if the Wine build your games run on doesn't have one yet — so the first Play doesn't spend a minute building it. Choose Not Now and it's made the first time you press Play, as before.
+- **The update check tries again** a minute later if the first attempt fails, for example when the app opens before the network is back.
+- **The update prompt fits on screen.** Release notes wrap instead of stretching the window to their longest line.
+- The version you have is shown in full — "0.6.20 (74)", not "0.6+74".</description>
+            <enclosure url="https://github.com/mcstig/PorTalistic/releases/download/v0.6.21/PorTalistic-0.6.21.zip" length="58364315" type="application/octet-stream" sparkle:edSignature="J6WTIdO5Et+ymzxZD7XSVFKknbTieTOUzwSkien7+V+T+xFTYvne+aD+HNW9MR2fmevImknXY6cX3osJS+RKBA==" />
+        </item>
+        <item>
             <title>PorTalistic 0.6.20</title>
             <pubDate>Wed, 30 Sep 2026 18:01:55 GMT</pubDate>
             <sparkle:version>74</sparkle:version>
