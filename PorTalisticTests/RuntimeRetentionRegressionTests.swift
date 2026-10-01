@@ -577,5 +577,35 @@ struct ProvisioningSchedulingRegressionTests {
         #expect(Activity.idle.localizedDescription == nil, "idle puts nothing in the sidebar")
         #expect(Activity.installingRuntime(name: "Wine 11.16 (DXMT)", stage: .downloading(0.1)).localizedDescription?
             .contains("Wine 11.16 (DXMT)") == true, "the line names the build")
+        #expect(Activity.settingUpContainer(name: "Wine 11.16 (DXMT)").localizedDescription?
+            .contains("Wine 11.16 (DXMT)") == true, "and so does setting up its container")
+        #expect(Activity.settingUpContainer(name: "Wine 11.16 (DXMT)").fractionCompleted == nil)
+    }
+
+    private func runtime(_ id: String, origin: Runtime.Origin = .managed) -> Runtime {
+        .init(id: id, name: id, executableURL: .init(filePath: "/tmp/\(id)/bin/wine"), origin: origin)
+    }
+
+    @Test("A runtime the games would run on, with no container, is the one offered at launch")
+    func missingContainersAreFound() {
+        let dxmt = runtime("managed:wine-dxmt-11.16")
+        let engine = runtime("engine", origin: .bundledEngine)
+        let gptk = runtime("gptk", origin: .external)
+
+        // One container, for the bundled engine — which a container names as `nil`.
+        let missing = Provisioner.runtimesWithoutContainers(among: [engine, dxmt, gptk], served: [nil])
+
+        #expect(missing == [dxmt, gptk], "the engine has its Default container; the other two have none")
+    }
+
+    @Test("A container that is there is not offered again")
+    func existingContainersAreNotOffered() {
+        let dxmt = runtime("managed:wine-dxmt-11.16")
+        let engine = runtime("engine", origin: .bundledEngine)
+
+        #expect(Provisioner.runtimesWithoutContainers(among: [engine, dxmt],
+                                                      served: [nil, "managed:wine-dxmt-11.16"]).isEmpty)
+        #expect(Provisioner.runtimesWithoutContainers(among: [engine], served: []) == [engine],
+                "and a deleted Default container is offered back")
     }
 }

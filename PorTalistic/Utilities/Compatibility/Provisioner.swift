@@ -54,6 +54,7 @@ final class Provisioner {
         case installingRuntime(name: String, stage: RuntimeInstaller.Stage)
         case repairingRuntime(name: String)
         case installingDirect3DLayer(name: String)
+        case settingUpContainer(name: String)
 
         /// What to show while this is happening, or `nil` when there is nothing to say.
         var localizedDescription: String? {
@@ -68,6 +69,8 @@ final class Provisioner {
                 String(localized: "Repairing \(name)…")
             case .installingDirect3DLayer(let name):
                 String(localized: "Adding Direct3D support to \(name)…")
+            case .settingUpContainer(let name):
+                String(localized: "Setting up a container for \(name)…")
             }
         }
 
@@ -130,6 +133,35 @@ final class Provisioner {
 
     /// DXMT going into a runtime, one per runtime — see ``ensureDirect3DLayer(in:)``.
     private let direct3DLayerInstalls: SingleFlight<Bool> = .init()
+
+    /// Containers being created, one per runtime — see ``container(for:)``.
+    ///
+    /// The container's URL rather than the container: `Wine.Container` is a class with no
+    /// `Sendable` to its name, and a `Task` can only carry what is.
+    private let containerCreations: SingleFlight<URL> = .init()
+
+    // MARK: - Containers at launch
+
+    /// A runtime the installed games would run on that has no container yet, for ContentView
+    /// to ask about. The answer comes back through ``answerContainerOffer(_:)``.
+    ///
+    /// A container is made the first time a game is played on its runtime, and that is the
+    /// worst moment for it: Play, then a minute of "Starting" while a Windows environment is
+    /// built, and when building it fails, the failure lands on the game. Offering it once a
+    /// pass has settled moves the minute, and the failure, to where they can be looked at.
+    private(set) var containerOffer: Runtime?
+
+    /// What went wrong setting one up at the person's request — for an alert, with the transcript.
+    private(set) var containerFailure: ContainerFailure?
+
+    /// Runtimes offered this session. "Not Now" means not this launch; the next asks again.
+    @ObservationIgnored private var offeredContainers: Set<String> = []
+
+    struct ContainerFailure: Equatable {
+        let runtimeName: String
+        let message: String
+        let transcriptURL: URL?
+    }
 
     // MARK: - Passes
 
@@ -201,6 +233,95 @@ final class Provisioner {
         await ensureRuntimesForInstalledGames()
 
         settleActivity()
+
+        await offerMissingContainer()
+    }
+
+    /// Offers a container for a runtime the installed games would run on, if it has none.
+    ///
+    /// After the pass, because the build the pass just installed is what the games will run
+    /// on. Not during onboarding, which has questions of its own; the next pass asks. And not
+    /// for a runtime that already failed to make one this session — that failure was reported.
+    private func offerMissingContainer() async {
+        guard containerOffer == nil, !AppDelegate.isOnboardingOnScreen else { return }
+
+        let missing = await runtimesWithoutContainers()
+        guard let runtime = missing.first(where: {
+            !offeredContainers.contains($0.id) && !Self.runtimesThatCannotBoot.contains($0.id)
+        }) else { return }
+
+        offeredContainers.insert(runtime.id)
+        Self.log.notice("Offering a container for \(runtime.id, privacy: .public)")
+        containerOffer = runtime
+    }
+
+    /// The runtimes the installed games would launch on today that have no container.
+    ///
+    /// The same reading as ``ensureRuntimesForInstalledGames()``, made after it. Games on
+    /// external volumes are left out for the reason given there: reading them is a prompt
+    /// about the drive.
+    func runtimesWithoutContainers() async -> [Runtime] {
+        let installed: [GameFacts] = GameDataStore.shared.library
+            .compactMap { GameFacts(game: $0) }
+            .filter { !$0.location.isOnAnExternalVolume }
+
+        let runtimes: [Runtime] = await Task.detached {
+            let candidates = Runtime.discoverAll()
+            var runtimes: [Runtime] = []
+
+            for facts in installed {
+                let requirements = Self.resolveProfile(for: facts).requirements
+
+                guard let runtime = Runtime.select(satisfying: requirements, from: candidates),
+                      !runtimes.contains(runtime) else { continue }
+
+                runtimes.append(runtime)
+            }
+
+            return runtimes
+        }.value
+
+        return Self.runtimesWithoutContainers(among: runtimes, served: Wine.containerObjects.map(\.settings.runtimeID))
+    }
+
+    /// Which of `runtimes` has no container, given the runtime ids the containers on disk serve.
+    ///
+    /// `nil` is how a container says "the bundled engine" — the way ``container(for:)`` reads it.
+    nonisolated static func runtimesWithoutContainers(among runtimes: [Runtime], served: [String?]) -> [Runtime] {
+        let served: Set<String?> = .init(served)
+        return runtimes.filter { !served.contains($0.origin == .bundledEngine ? nil : $0.id) }
+    }
+
+    /// The answer to ``containerOffer``.
+    func answerContainerOffer(_ setUp: Bool) {
+        guard let runtime = containerOffer else { return }
+        containerOffer = nil
+
+        guard setUp else {
+            Self.log.notice("A container for \(runtime.id, privacy: .public) was declined for now")
+            return
+        }
+
+        Task { await setUpContainer(for: runtime) }
+    }
+
+    func dismissContainerFailure() {
+        containerFailure = nil
+    }
+
+    private func setUpContainer(for runtime: Runtime) async {
+        activity = .settingUpContainer(name: runtime.name)
+        defer { settleActivity() }
+
+        do {
+            _ = try await container(for: runtime)
+            Self.log.notice("Set up a container for \(runtime.id, privacy: .public), as asked")
+        } catch {
+            Self.log.error("Couldn't set up a container for \(runtime.id, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            containerFailure = .init(runtimeName: runtime.name,
+                                     message: error.localizedDescription,
+                                     transcriptURL: (error as? Wine.Container.UnableToBootError)?.transcriptURL)
+        }
     }
 
     /// Back to idle — unless a runtime is still downloading for someone else.
@@ -704,13 +825,28 @@ final class Provisioner {
             return existing
         }
 
-        var settings: Wine.Container.Settings = .init()
-        settings.runtimeID = wanted
+        // One creation per runtime at a time. A second caller — Play on a game, a minute into
+        // the container being set up from the launch offer — found the same name free, since
+        // the prefix being built already carries this runtime's id, and `Wine.createContainer`
+        // then handed back the half-built prefix as a finished container: `drive_c` is there
+        // from the first moment, and `drive_c` is all it looks for.
+        let url = try await containerCreations.value(for: runtime.id) { [weak self] in
+            guard let self else { throw CancellationError() }
 
-        let name = availableContainerName(for: runtime, wanting: wanted)
-        Self.log.notice("Creating a container for \(runtime.id, privacy: .public) as '\(name, privacy: .public)'")
+            var settings: Wine.Container.Settings = .init()
+            settings.runtimeID = wanted
 
-        return try await Wine.createContainer(name: name, settings: settings)
+            let name = availableContainerName(for: runtime, wanting: wanted)
+            Self.log.notice("Creating a container for \(runtime.id, privacy: .public) as '\(name, privacy: .public)'")
+
+            return try await Wine.createContainer(name: name, settings: settings).url
+        }
+
+        if let created = Wine.containerObjects.first(where: { $0.url == url }) {
+            return created
+        }
+
+        return try Wine.Container(knownURL: url)
     }
 
     /// A container name not already taken by a container belonging to a different runtime.

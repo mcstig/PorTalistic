@@ -24,3 +24,14 @@ var appVersion: SemanticVersion? {
 
     return appVersion
 }
+
+/// The version this copy of the app carries, the way the update prompt names versions: `0.6.20 (74)`.
+///
+/// Not `appVersion?.description` — `SemanticVersion`'s description here prints only the first
+/// two parts, so 0.6.2 build 70 read "0.6+70" in the update prompt, and 0.6.20 would have read
+/// the same "0.6". Two versions that differ only where it matters, shown as one.
+var appVersionDescription: String {
+    let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
+    let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
+    return "\(version) (\(build))"
+}

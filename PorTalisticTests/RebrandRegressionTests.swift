@@ -167,6 +167,24 @@ struct InstallFolderRegressionTests {
     }
 }
 
+// MARK: - The version the app shows
+
+/**
+ The update prompt said "You have 0.6+70": `SemanticVersion`'s description prints two parts, so
+ 0.6.2 and 0.6.20 both read "0.6", and the one number that tells them apart was the one dropped.
+ */
+@Suite("The version the app shows")
+struct ShownVersionRegressionTests {
+    @Test("The shown version carries the whole version and the build, the way the prompt names updates")
+    func wholeVersionAndBuild() throws {
+        let version = try #require(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String)
+        let build = try #require(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String)
+
+        #expect(appVersionDescription == "\(version) (\(build))")
+        #expect(appVersionDescription.contains(version), "every part of the version, not the first two")
+    }
+}
+
 // MARK: - Storefront stores
 
 /**

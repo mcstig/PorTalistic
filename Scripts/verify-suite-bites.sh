@@ -297,6 +297,11 @@ check "legendary's install path runs on past the end of its line" \
     '        let line = chunk.output[marker.upperBound...].prefix(while: { !$0.isNewline })' \
     '        let line = chunk.output[marker.upperBound...]'
 
+check "a container the bundled engine already has is offered again (nil is how a container names the engine)" \
+    PorTalistic/Utilities/Compatibility/Provisioner.swift \
+    '        return runtimes.filter { !served.contains($0.origin == .bundledEngine ? nil : $0.id) }' \
+    '        return runtimes.filter { !served.contains($0.id) }'
+
 # ── Nothing may be left changed ────────────────────────────────────────────
 echo
 if git diff --quiet -- PorTalistic 2>/dev/null; then

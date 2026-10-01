@@ -58,7 +58,7 @@ struct SparkleUpdater: ViewModifier {
                     Button("OK", role: .cancel) {}
                 },
                 message: {
-                    Text("You are on the latest available version of \(Bundle.main.infoDictionary?["CFBundleName"] as? String ?? "Unknown"), \(appVersion?.description ?? "Unknown").")
+                    Text("You are on the latest available version of \(Bundle.main.infoDictionary?["CFBundleName"] as? String ?? "Unknown"), \(appVersionDescription).")
                 }
             )
             .sheet(isPresented: $updateAvailableSheetPresented) {

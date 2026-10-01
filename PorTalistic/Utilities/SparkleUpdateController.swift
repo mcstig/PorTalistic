@@ -89,13 +89,15 @@ final class SparkleUpdateController: NSObject, SPUUserDriver, ObservableObject {
     }
 
     /// Onboarding is on screen — the one time an update waits in the sidebar instead of asking.
+    private var isOnboardingOnScreen: Bool { AppDelegate.isOnboardingOnScreen }
+
+    /// The launch check has been tried a second time.
     ///
-    /// Read the way `@AppStorage` reads it: the key is only written once onboarding ends, and
-    /// `bool(forKey:)` answers `false` for a missing key — "finished" — on the one launch it is
-    /// certainly showing.
-    private var isOnboardingOnScreen: Bool {
-        UserDefaults.standard.object(forKey: "isOnboardingPresented") as? Bool ?? true
-    }
+    /// It runs three seconds after launch, which on a Mac that has just woken, or just joined a
+    /// network, is before there is one — and a check that fails then was a launch with no update
+    /// offered, until the next launch. So the automatic check, and only it, is tried once more a
+    /// minute later. Once: a feed that is really unreachable is not improved by asking again.
+    private var retriedLaunchCheck: Bool = false
 
     /// This build can't update itself: no feed, or no key to check an update against.
     struct UpdatesUnavailableError: LocalizedError {
@@ -246,6 +248,7 @@ final class SparkleUpdateController: NSObject, SPUUserDriver, ObservableObject {
         if !userInitiatedCheck {
             acknowledgement()
             self.state = .idle
+            retryLaunchCheckOnce()
             return
         }
 
@@ -253,6 +256,19 @@ final class SparkleUpdateController: NSObject, SPUUserDriver, ObservableObject {
             acknowledgement()
             self.state = .idle
         }, error: error)
+    }
+
+    /// See ``retriedLaunchCheck``.
+    private func retryLaunchCheckOnce() {
+        guard !retriedLaunchCheck else { return }
+        retriedLaunchCheck = true
+
+        log.notice("The launch update check failed; trying once more in a minute.")
+
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(60))
+            self.checkForUpdates(userInitiated: false)
+        }
     }
 
     func showDownloadInitiated(cancellation: @escaping () -> Void) {

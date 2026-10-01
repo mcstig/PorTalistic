@@ -12,6 +12,7 @@
 // Copyright © 2023-2025 vapidinfinity
 // Copyright © 2026 Michael Stoian
 
+import AppKit
 import Foundation
 import SwiftUI
 import SemanticVersion
@@ -76,6 +77,40 @@ struct ContentView: View {
         // Changing shelf while three pages deep in a game would otherwise leave the old
         // page on screen, since the stack belongs to the column rather than the selection.
         .onChange(of: selection) { path = .init() }
+        .alert(
+            Text("Set up \(provisioner.containerOffer?.name ?? "Wine") now?"),
+            isPresented: Binding(
+                get: { provisioner.containerOffer != nil },
+                set: { if !$0 { provisioner.answerContainerOffer(false) } }
+            ),
+            presenting: provisioner.containerOffer
+        ) { _ in
+            Button("Set Up") { provisioner.answerContainerOffer(true) }
+            Button("Not Now", role: .cancel) { provisioner.answerContainerOffer(false) }
+        } message: { runtime in
+            Text("""
+                Your games will run on \(runtime.name), which has no Windows environment yet. \
+                Setting one up takes about a minute; otherwise it happens the first time you press Play.
+                """)
+        }
+        .alert(
+            Text("Couldn't set up \(provisioner.containerFailure?.runtimeName ?? "the container")"),
+            isPresented: Binding(
+                get: { provisioner.containerFailure != nil },
+                set: { if !$0 { provisioner.dismissContainerFailure() } }
+            ),
+            presenting: provisioner.containerFailure
+        ) { failure in
+            Button("OK", role: .cancel) { provisioner.dismissContainerFailure() }
+            if let transcript = failure.transcriptURL {
+                Button("Show Log") {
+                    NSWorkspace.shared.activateFileViewerSelecting([transcript])
+                    provisioner.dismissContainerFailure()
+                }
+            }
+        } message: { failure in
+            Text(failure.message)
+        }
     }
 
     // MARK: Sidebar

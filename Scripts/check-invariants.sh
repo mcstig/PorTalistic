@@ -1942,6 +1942,39 @@ check_present "Scripts/release.sh" \
     "release.sh no longer settles the version before it builds — a release with an already-released build number is never offered to anybody" \
     'VERSIONING=\$\(python3 Scripts/bump-version\.py'
 
+# The update prompt sized itself to its ideal size — the width of the longest release note —
+# and named the installed version through a description that drops the version's last part.
+check_absent \
+    "the update sheet takes its ideal size again, which is the width of the longest release note: wider than the screen for a note of any length" \
+    '^[^/]*\.fixedSize\(\)' \
+    PorTalistic/Views/SparkleUpdater/SparkleUpdaterPreviewView.swift
+
+check_absent \
+    "the version the app shows goes through SemanticVersion's description again, which prints two parts: 0.6.2 and 0.6.20 both read 0.6" \
+    'appVersion\?\.description' \
+    PorTalistic/Views
+
+# A container is built the first time a game is played on its runtime — or, since 1/10/2026,
+# offered once a pass settles. Two things keep that honest: one creation per runtime at a time
+# (Play a minute into the launch offer found the half-built prefix and took it for finished),
+# and one copy of "is onboarding on screen" for every question that has to wait for it.
+check_present "PorTalistic/Utilities/Compatibility/Provisioner.swift" \
+    "creating a container is no longer single-flight per runtime: a second caller finds the half-built prefix, which has drive_c from its first moment, and launches into it" \
+    'containerCreations\.value\(for: runtime\.id\)'
+
+check_present "PorTalistic/Utilities/Compatibility/Provisioner.swift" \
+    "a pass no longer offers a container for the runtime the games would run on, so the first Play on a new build pays the minute it takes to make one" \
+    'await offerMissingContainer\(\)'
+
+check_absent \
+    "a second reading of whether onboarding is on screen — one copy, AppDelegate.isOnboardingOnScreen, so every question that waits for onboarding waits the same way" \
+    '^[^/]*object\(forKey: "isOnboardingPresented"\)' \
+    PorTalistic/Utilities PorTalistic/Views
+
+check_present "PorTalistic/Utilities/SparkleUpdateController.swift" \
+    "the launch update check is no longer retried once when it fails — on a Mac that has just woken, three seconds after launch is before there is a network" \
+    'retryLaunchCheckOnce\(\)'
+
 check_present "Scripts/bump-version.py" \
     "a new version can take an unpublished build number again — a build already copied onto a test Mac is then never offered the new one" \
     'elif requested and requested != current_version:'

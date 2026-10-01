@@ -33,6 +33,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             || NSClassFromString("XCTestCase") != nil
     }
 
+    /// Onboarding is on screen — the one time a question waits instead of being asked.
+    ///
+    /// Read the way `@AppStorage("isOnboardingPresented")` reads it: the key is only written once
+    /// onboarding ends, and a missing key means the one launch it is certainly showing. One copy,
+    /// for the update prompt and the container offer alike.
+    static var isOnboardingOnScreen: Bool {
+        UserDefaults.standard.object(forKey: "isOnboardingPresented") as? Bool ?? true
+    }
+
     func applicationDidFinishLaunching(_: Notification) {
         guard !Self.isRunningTests else { return }
 
