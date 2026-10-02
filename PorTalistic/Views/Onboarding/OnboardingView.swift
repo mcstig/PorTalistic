@@ -309,7 +309,7 @@ private extension OnboardingView {
                     }
                 } else {
                     HStack {
-                        Text("Setting up default container...")
+                        Text("Setting up the \(Runtime.bundled.name) container…")
                             .font(.largeTitle)
                             .bold()
                         
@@ -317,7 +317,10 @@ private extension OnboardingView {
                             .controlSize(.small)
                             .task {
                                 do {
-                                    _ = try await Wine.createContainer(name: "Default")
+                                    // Named after its Wine, like every container the app makes.
+                                    // "Default" said something that stopped being true the day
+                                    // the newest shipped build became the default runtime.
+                                    _ = try await Wine.createContainer(name: Runtime.bundled.name)
                                     propagateBootSuccess()
                                 } catch is Wine.Container.AlreadyExistsError {
                                     propagateBootSuccess()

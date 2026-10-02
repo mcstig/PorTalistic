@@ -238,6 +238,14 @@ final class Provisioner {
         await repairInstalledRuntimes()
         await ensureRuntimesForInstalledGames()
 
+        // The default build carries Direct3D 11 on Metal whether or not any game has been
+        // recognised as needing it. It used to arrive only for a game whose executable said
+        // "Direct3D 11", and Bloodstained's doesn't — Unreal's launcher stub says nothing, and
+        // the engine is two folders down — so with Wine 11.16 as the default the game ran on it
+        // through wined3d and stopped at "DX11 feature level 10.0 is required". On the bundled
+        // engine Apple's D3DMetal had hidden the gap.
+        await installDirect3DLayerIntoPreferredHost()
+
         settleActivity()
 
         await offerMissingContainer()

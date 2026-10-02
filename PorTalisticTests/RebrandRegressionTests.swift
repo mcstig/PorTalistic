@@ -167,6 +167,25 @@ struct InstallFolderRegressionTests {
     }
 }
 
+// MARK: - The engine's container's name
+
+/**
+ Onboarding called the bundled engine's container "Default", and the Containers page showed it
+ that way — while the default runtime had become the newest shipped build. Named after its Wine
+ now, like every other container, and the one already on disk is renamed once.
+ */
+@Suite("The engine's container's name")
+struct EngineContainerNameRegressionTests {
+    @Test("Only the engine's own 'Default' is renamed")
+    func onlyTheEnginesDefaultIsRenamed() {
+        #expect(Migrator.v0_6_22.shouldRename("Default", runtimeID: nil))
+        #expect(!Migrator.v0_6_22.shouldRename("Default", runtimeID: "managed:wine-dxmt-11.16"),
+                "a container the person named Default on another build is theirs")
+        #expect(!Migrator.v0_6_22.shouldRename("Mythic Engine", runtimeID: nil), "already done")
+        #expect(!Migrator.v0_6_22.shouldRename("Steam", runtimeID: nil))
+    }
+}
+
 // MARK: - The version the app shows
 
 /**

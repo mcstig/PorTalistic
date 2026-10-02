@@ -333,3 +333,48 @@ struct AutomaticSettingsRegressionTests {
         #expect(Provisioner.GameFacts(game: uninstalled) == nil, "nothing on disk to read")
     }
 }
+
+/**
+ Where a game keeps the binary that renders.
+
+ Unreal's launcher stub sits at the top of the install and imports nothing that draws; the game
+ is two folders down, in `<Game>/Binaries/Win64/`. Inspecting the stub and its siblings reported
+ "nothing says how it renders" for every Unreal game, which on the bundled engine was hidden by
+ D3DMetal and on Wine 11.16 without DXMT stopped Bloodstained at "DX11 feature level 10.0 is
+ required".
+ */
+@Suite("Finding the game behind its launcher")
+struct GameBinaryDiscoveryTests {
+    private func withInstall<T>(_ layout: [String], _ body: (URL) throws -> T) throws -> T {
+        let root: URL = .temporaryDirectory.appending(path: "PorTalisticTests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        for relative in layout {
+            let url = root.appending(path: relative)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            FileManager.default.createFile(atPath: url.path, contents: Data("x".utf8))
+        }
+
+        return try body(root)
+    }
+
+    @Test("Unreal's shipping executable is found two folders below the launcher")
+    func unrealShippingExecutableIsFound() throws {
+        try withInstall(["BloodstainedRotN.exe",
+                         "BloodstainedRotN/Binaries/Win64/BloodstainedRotN-Win64-Shipping.exe",
+                         "BloodstainedRotN/Content/Paks/pakchunk0.pak",
+                         "Engine/Extras/Redist/en-us/UE4PrereqSetup_x64.exe"]) { root in
+            let found = WindowsExecutable.unrealBinaries(under: root).map(\.lastPathComponent)
+
+            #expect(found == ["BloodstainedRotN-Win64-Shipping.exe"],
+                    "Binaries/Win64 under each top-level folder, and nothing else")
+        }
+    }
+
+    @Test("A game without Unreal's layout adds nothing to the search")
+    func otherLayoutsAddNothing() throws {
+        try withInstall(["Prey.exe", "PreyDll.dll", "Mods/readme.txt"]) { root in
+            #expect(WindowsExecutable.unrealBinaries(under: root).isEmpty)
+        }
+    }
+}

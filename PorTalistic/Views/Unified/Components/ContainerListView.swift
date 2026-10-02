@@ -24,7 +24,11 @@ struct ContainerListView: View {
     @State private var containerPendingDeletion: Wine.Container?
 
     @State private var isContainerCreationViewPresented = false
-    
+
+    /// The runtime a game lands on when it asks for nothing in particular — see
+    /// `Runtime.defaultOrder`. Read once, off the render path: it looks at the disk.
+    @State private var defaultRuntimeID: String?
+
     var body: some View {
         if Engine.isInstalled {
             // Panels rather than `Form` rows. This used to emit a bare `ForEach` of `HStack`s
@@ -62,6 +66,14 @@ struct ContainerListView: View {
                         // Which Wine build made this prefix. A container is married to its
                         // runtime — `Runtime.isCompatible(withPrefixCreatedBy:)` exists for
                         // exactly that reason — so it is worth saying out loud here.
+                        // "Default" on the container of the default runtime, because without it
+                        // the page could not say which build games land on — and a container
+                        // that happened to be *named* Default belonged to the fallback.
+                        if let defaultRuntimeID, Wine.runtime(forContainerAtURL: container.url).id == defaultRuntimeID {
+                            PortalBadge(String(localized: "Default"), systemImage: "star", tint: Theme.Palette.brand)
+                                .help("Games run here unless they need something else")
+                        }
+
                         PortalBadge(Wine.runtime(forContainerAtURL: container.url).name,
                                     systemImage: "shippingbox",
                                     tint: Theme.Palette.brandSecondary)
@@ -86,6 +98,7 @@ struct ContainerListView: View {
                     .panelSurface()
                 }
             }
+            .task { defaultRuntimeID = Runtime.newestManagedByMythic()?.id ?? Runtime.bundled.id }
             .sheet(item: $configuringContainer) { container in
                 ContainerConfigurationView(
                     containerURL: .constant(container.url),

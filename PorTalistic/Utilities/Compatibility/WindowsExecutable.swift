@@ -223,8 +223,9 @@ struct WindowsExecutable: Codable, Hashable {
         ) else { return primary }
 
         // Biggest first: the renderer is almost always the largest binary in the folder, and
-        // the noise — crash handlers, installers, updaters — is small.
-        let candidates = entries
+        // the noise — crash handlers, installers, updaters — is small. Unreal's binaries are
+        // looked at after the siblings: see ``unrealBinaries(under:)``.
+        let candidates = (entries + unrealBinaries(under: directory))
             .filter { ["exe", "dll"].contains($0.pathExtension.lowercased()) }
             .filter { $0 != primaryExecutable }
             .filter { !isUninteresting($0) }
@@ -281,6 +282,36 @@ struct WindowsExecutable: Codable, Hashable {
 
     private static func store(_ executable: WindowsExecutable, for key: String) {
         inspectionsLock.withLock { inspections[key] = executable }
+    }
+
+    /// The executables of an Unreal game, which are not beside the one that is launched.
+    ///
+    /// Unreal ships a launcher stub at the top of the install — `BloodstainedRotN.exe`, under a
+    /// megabyte, importing nothing that renders — and the game at
+    /// `<Game>/Binaries/Win64/<Game>-Win64-Shipping.exe`, two folders down. Looking only at the
+    /// stub's siblings reported "nothing says how it renders" for every Unreal game, which sent
+    /// each one to whatever the runtime happened to provide; on the bundled engine that was
+    /// D3DMetal and nobody noticed, on Wine 11.16 without DXMT it was wined3d and the game
+    /// stopped at "DX11 feature level 10.0 is required". Bounded: one level of folders, then
+    /// `Binaries/Win64` and `Binaries/Win32` in each, nothing else.
+    static func unrealBinaries(under directory: URL) -> [URL] {
+        guard let folders = try? FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles, .skipsSubdirectoryDescendants]
+        ) else { return [] }
+
+        return folders
+            .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
+            .flatMap { folder in
+                ["Binaries/Win64", "Binaries/Win32"].flatMap { subpath -> [URL] in
+                    (try? FileManager.default.contentsOfDirectory(
+                        at: folder.appending(path: subpath),
+                        includingPropertiesForKeys: [.fileSizeKey],
+                        options: [.skipsHiddenFiles, .skipsSubdirectoryDescendants]
+                    )) ?? []
+                }
+            }
     }
 
     /// Names that are never the game.

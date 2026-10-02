@@ -532,6 +532,23 @@ enum GOGDL {
             }
     }
 
+    /// Why ``primaryLaunchTarget(forGameAt:id:platform:)`` has no answer, in words.
+    ///
+    /// "Couldn't work out how to start it" covered three different situations — the folder
+    /// gone (a drive unplugged, a move), the `.info` file gone, or an `.info` with no play task
+    /// in it — and each needs a different thing done about it.
+    static func launchTargetProblem(forGameAt location: URL, id: String, platform: Game.Platform) -> String {
+        guard FileManager.default.fileExists(atPath: location.path) else {
+            return String(localized: "its folder isn't there: \(location.path)")
+        }
+
+        guard gameInfoURL(forGameAt: location, id: id, platform: platform) != nil else {
+            return String(localized: "there is no goggame-\(id).info file in \(location.path)")
+        }
+
+        return String(localized: "its goggame-\(id).info file lists nothing to run")
+    }
+
     static func playTasks(forGameAt location: URL, id: String, platform: Game.Platform) -> [PlayTask] {
         guard let infoURL = gameInfoURL(forGameAt: location, id: id, platform: platform),
               let data = try? Data(contentsOf: infoURL),

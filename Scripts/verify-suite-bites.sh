@@ -314,6 +314,11 @@ check "the bundled engine goes back to being the default runtime" \
     '        viable.filter { $0.origin == .bundledEngine }
             + byCatalogueOrder(viable.filter { $0.origin != .bundledEngine })'
 
+check "Unreal's Binaries/Win64 is no longer searched (every Unreal game reports nothing about rendering)" \
+    PorTalistic/Utilities/Compatibility/WindowsExecutable.swift \
+    '                ["Binaries/Win64", "Binaries/Win32"].flatMap { subpath -> [URL] in' \
+    '                [String]().flatMap { subpath -> [URL] in'
+
 # ── Nothing may be left changed ────────────────────────────────────────────
 echo
 if git diff --quiet -- PorTalistic 2>/dev/null; then

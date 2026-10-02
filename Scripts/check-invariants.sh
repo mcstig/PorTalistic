@@ -1995,6 +1995,21 @@ check_present "Scripts/bump-version.py" \
     "release.sh no longer steps the version by itself once the project's is released, so a plain run re-releases the version that is out" \
     'elif current_version in released_versions:'
 
+# The default build always carries Direct3D 11 on Metal, and the engine's container is named
+# after the engine. Bloodstained on Wine 11.16 without DXMT: "DX11 feature level 10.0 is required".
+check_present "PorTalistic/Utilities/Compatibility/Provisioner.swift" \
+    "a pass no longer puts DXMT into the default build by itself, so a Direct3D 11 game whose executable says nothing (every Unreal game) runs through wined3d and stops at 'DX11 feature level 10.0'" \
+    '^ {8}await installDirect3DLayerIntoPreferredHost\(\)'
+
+check_present "PorTalistic/Utilities/Compatibility/WindowsExecutable.swift" \
+    "the inspection no longer looks under <Game>/Binaries/Win64, so every Unreal game reports 'nothing says how it renders'" \
+    'unrealBinaries\(under: directory\)'
+
+check_absent \
+    "the engine's container is called Default again, which stopped being true when the newest shipped build became the default runtime" \
+    'createContainer\(name: "Default"\)' \
+    PorTalistic
+
 # The default runtime is the newest build this project ships, and the bundled engine is the
 # fallback. It was the other way round until 1/10/2026: every game that asked for nothing ran
 # on upstream's Wine 7.7, and the pass never fetched the shipped build for it.

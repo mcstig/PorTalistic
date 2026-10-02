@@ -95,9 +95,19 @@ class GOGGameManager {
 
     struct NoLaunchTargetError: LocalizedError {
         let title: String
-        var errorDescription: String? { String(localized: "PorTalistic couldn't work out how to start \(title).") }
+
+        /// What is missing — see `GOGDL.launchTargetProblem`.
+        var problem: String?
+
+        var errorDescription: String? {
+            guard let problem else {
+                return String(localized: "PorTalistic couldn't work out how to start \(title).")
+            }
+            return String(localized: "PorTalistic couldn't work out how to start \(title): \(problem).")
+        }
+
         var recoverySuggestion: String? {
-            String(localized: "Its install may be incomplete. Verifying the game's files should repair it.")
+            String(localized: "If the game is on a drive, make sure it is connected. Otherwise its install may be incomplete, and verifying the game's files should repair it.")
         }
     }
 
@@ -205,7 +215,8 @@ class GOGGameManager {
                 // A Windows install is a directory, so what to run has to be read out of the
                 // game's own play tasks rather than assumed to be the location itself.
                 guard let target = GOGDL.primaryLaunchTarget(forGameAt: location, id: game.id, platform: platform) else {
-                    throw NoLaunchTargetError(title: game.title)
+                    throw NoLaunchTargetError(title: game.title,
+                                              problem: GOGDL.launchTargetProblem(forGameAt: location, id: game.id, platform: platform))
                 }
 
                 // Which runtime this game wants, the container belonging to that runtime,

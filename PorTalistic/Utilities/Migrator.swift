@@ -28,6 +28,37 @@ final class Migrator {
         v0_3_2.migrate()
         v0_5_0.migrate()
         v0_6_1.migrate()
+        v0_6_22.migrate()
+    }
+
+    /// The bundled engine's container is named after the engine, not "Default".
+    ///
+    /// Onboarding called it "Default" because upstream had one Wine. Here the default runtime
+    /// is the newest shipped build, so a container called Default that belongs to the fallback
+    /// was a lie on the Containers page — the person looking at it could not tell whether the
+    /// default build had a container at all. The folder on disk keeps its name; only what the
+    /// page shows changes, and `container(for:)` finds the engine's container by its runtime,
+    /// never by name.
+    struct v0_6_22 { // swiftlint:disable:this type_name
+        private init() {}
+
+        static let hasRunKey = "didRenameDefaultContainer"
+
+        static func migrate() {
+            guard !UserDefaults.standard.bool(forKey: hasRunKey) else { return }
+
+            for container in Wine.containerObjects where shouldRename(container.name, runtimeID: container.settings.runtimeID) {
+                container.name = Runtime.bundled.name
+            }
+
+            UserDefaults.standard.set(true, forKey: hasRunKey)
+        }
+
+        /// Only the engine's own container — the one onboarding made — and only while it still
+        /// carries the name onboarding gave it. Pure, so the rule can be held by a test.
+        static func shouldRename(_ name: String, runtimeID: String?) -> Bool {
+            name == "Default" && runtimeID == nil
+        }
     }
 
     /// Retina Mode off on containers made before that became the default.
