@@ -6,6 +6,20 @@
         <description>Updates to PorTalistic. Read by the app when it opens; written by Scripts/release.sh, newest first.</description>
         <language>en</language>
         <item>
+            <title>PorTalistic 0.6.22</title>
+            <pubDate>Fri, 02 Oct 2026 08:39:27 GMT</pubDate>
+            <sparkle:version>77</sparkle:version>
+            <sparkle:shortVersionString>0.6.22</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown">## What's new in 0.6.22
+
+- **Wine 11.16 (DXMT) is now the default for every game.** The Mythic Engine (Wine 7.7) is only the fallback when a game can't run on it. Games already set up on the Engine move over automatically; PorTalistic downloads the build if it isn't there yet.
+- **PorTalistic notices a Wine build with no container** — when it opens, and right after you delete one — and offers to set it up. Previously it only looked at the build each game would pick, which was usually the Engine, so it never asked about Wine 11.16.
+- Setting up a container at that prompt shows progress in the sidebar; if it fails, you're told why, with Show Log.
+- New containers default to the newest Wine build in the Containers "+" sheet.</description>
+            <enclosure url="https://github.com/mcstig/PorTalistic/releases/download/v0.6.22/PorTalistic-0.6.22.zip" length="58372391" type="application/octet-stream" sparkle:edSignature="UOxH6P3NX4I4ti6VOH6gpzE5DFsO1mHusfHYduuc8l2k5gjVNRNo2l2HG/y+D3fjnbzckZy4xbYFQVUmwHMXDQ==" />
+        </item>
+        <item>
             <title>PorTalistic 0.6.21</title>
             <pubDate>Thu, 01 Oct 2026 11:34:15 GMT</pubDate>
             <sparkle:version>76</sparkle:version>
