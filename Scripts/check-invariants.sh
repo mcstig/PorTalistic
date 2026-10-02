@@ -1963,8 +1963,16 @@ check_present "PorTalistic/Utilities/Compatibility/Provisioner.swift" \
     'containerCreations\.value\(for: runtime\.id\)'
 
 check_present "PorTalistic/Utilities/Compatibility/Provisioner.swift" \
-    "a pass no longer offers a container for the runtime the games would run on, so the first Play on a new build pays the minute it takes to make one" \
+    "a pass no longer offers a container for an installed build without one, so the first Play on a new build pays the minute it takes to make one" \
     'await offerMissingContainer\(\)'
+
+check_present "PorTalistic/Utilities/Compatibility/Provisioner.swift" \
+    "the container offer is judged by which runtime the games would pick again — on the test Mac that was the bundled engine, whose container exists, so Wine 11.16 sat installed with no container and nothing was asked" \
+    'runtimesExpectedToHaveContainers\(among: candidates, catalogue: RuntimeRelease\.catalogue\)'
+
+check_present "PorTalistic/Utilities/Wine/WineInterface.swift" \
+    "deleting a container no longer asks for a pass, so a build left without one is offered one at the next launch instead of now" \
+    'requestPass\(because: "the container'
 
 check_absent \
     "a second reading of whether onboarding is on screen — one copy, AppDelegate.isOnboardingOnScreen, so every question that waits for onboarding waits the same way" \
@@ -1986,6 +1994,22 @@ check_present "Scripts/bump-version.py" \
 check_present "Scripts/bump-version.py" \
     "release.sh no longer steps the version by itself once the project's is released, so a plain run re-releases the version that is out" \
     'elif current_version in released_versions:'
+
+# The default runtime is the newest build this project ships, and the bundled engine is the
+# fallback. It was the other way round until 1/10/2026: every game that asked for nothing ran
+# on upstream's Wine 7.7, and the pass never fetched the shipped build for it.
+check_present "PorTalistic/Utilities/Compatibility/RuntimeSelection.swift" \
+    "the default ranking no longer goes through defaultOrder, where the newest shipped build comes first and the bundled engine last" \
+    'return defaultOrder\(viable\)'
+
+check_absent \
+    "the bundled engine is ranked first again — every game that asks for nothing goes back to upstream's Wine 7.7" \
+    '^ *(return )?viable\.filter \{ \$0\.origin == \.bundledEngine \}$' \
+    PorTalistic/Utilities/Compatibility/RuntimeSelection.swift
+
+check_present "PorTalistic/Utilities/Compatibility/Provisioner.swift" \
+    "a pass no longer fetches the default build for a game the bundled engine is serving, so the default is only ever reached by games that demand it" \
+    'serving\.origin == \.bundledEngine else \{ continue \}'
 check_present "Scripts/update-appcast.py" \
     "update-appcast.py no longer refuses a build number that isn't higher — Sparkle would never offer that release, and nothing would say so" \
     'int\(existing\) >= int\(args\.build\)'

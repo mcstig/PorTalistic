@@ -1,18 +1,14 @@
 name: SwiftLint
 
-concurrency:
-  group: pr-checks-${{ github.event.number }}
-  cancel-in-progress: true
-
+# By hand only, like the build workflow: GitHub → Actions → SwiftLint → Run workflow. The
+# Xcode build phase lints locally when SwiftLint is installed. Put the `push:` and
+# `pull_request:` triggers back to run it on every push again.
 on:
-  push:
-    paths: &workflow_paths
-      - '.github/workflows/swiftlint.yml'
-      - '.swiftlint.yml'
-      - '**/*.swift'
-  pull_request:
-    paths: *workflow_paths
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   SwiftLint:

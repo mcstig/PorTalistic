@@ -142,13 +142,19 @@ final class Provisioner {
 
     // MARK: - Containers at launch
 
-    /// A runtime the installed games would run on that has no container yet, for ContentView
-    /// to ask about. The answer comes back through ``answerContainerOffer(_:)``.
+    /// An installed Wine build that has no container yet, for ContentView to ask about. The
+    /// answer comes back through ``answerContainerOffer(_:)``.
     ///
     /// A container is made the first time a game is played on its runtime, and that is the
     /// worst moment for it: Play, then a minute of "Starting" while a Windows environment is
     /// built, and when building it fails, the failure lands on the game. Offering it once a
     /// pass has settled moves the minute, and the failure, to where they can be looked at.
+    ///
+    /// Judged by what is installed, not by what the games would pick. The first version asked
+    /// which runtime each installed game would launch on and offered a container for that —
+    /// and on the test Mac that answer was the bundled engine, whose container exists, so
+    /// Wine 11.16 sat installed with no container and nothing was ever asked. A build that is
+    /// on disk is a build the app means to use; if it has no container, that is the question.
     private(set) var containerOffer: Runtime?
 
     /// What went wrong setting one up at the person's request — for an alert, with the transcript.
@@ -243,45 +249,68 @@ final class Provisioner {
     /// on. Not during onboarding, which has questions of its own; the next pass asks. And not
     /// for a runtime that already failed to make one this session — that failure was reported.
     private func offerMissingContainer() async {
-        guard containerOffer == nil, !AppDelegate.isOnboardingOnScreen else { return }
+        // Every way out says why: a question that doesn't appear is otherwise indistinguishable
+        // from one that was never considered.
+        guard containerOffer == nil else {
+            Self.log.notice("No container offered: one is already on screen")
+            return
+        }
+        guard !AppDelegate.isOnboardingOnScreen else {
+            Self.log.notice("No container offered: onboarding is on screen; the next pass asks")
+            return
+        }
 
         let missing = await runtimesWithoutContainers()
+        guard !missing.isEmpty else {
+            Self.log.notice("No container offered: every installed build has one")
+            return
+        }
+
         guard let runtime = missing.first(where: {
             !offeredContainers.contains($0.id) && !Self.runtimesThatCannotBoot.contains($0.id)
-        }) else { return }
+        }) else {
+            Self.log.notice("No container offered: \(missing.map(\.id).joined(separator: ", "), privacy: .public) already asked about, or failed to boot, this session")
+            return
+        }
 
         offeredContainers.insert(runtime.id)
         Self.log.notice("Offering a container for \(runtime.id, privacy: .public)")
         containerOffer = runtime
     }
 
-    /// The runtimes the installed games would launch on today that have no container.
-    ///
-    /// The same reading as ``ensureRuntimesForInstalledGames()``, made after it. Games on
-    /// external volumes are left out for the reason given there: reading them is a prompt
-    /// about the drive.
+    /// The installed builds that should have a container and don't, most wanted first.
     func runtimesWithoutContainers() async -> [Runtime] {
-        let installed: [GameFacts] = GameDataStore.shared.library
-            .compactMap { GameFacts(game: $0) }
-            .filter { !$0.location.isOnAnExternalVolume }
+        let candidates = await Task.detached { Runtime.discoverAll() }.value
+        let expected = Self.runtimesExpectedToHaveContainers(among: candidates, catalogue: RuntimeRelease.catalogue)
 
-        let runtimes: [Runtime] = await Task.detached {
-            let candidates = Runtime.discoverAll()
-            var runtimes: [Runtime] = []
+        let served = Wine.containerObjects.map(\.settings.runtimeID)
+        Self.log.notice("""
+            Installed builds that should have a container: \(expected.map(\.id).joined(separator: ", "), privacy: .public); \
+            containers serve: \(served.map { $0 ?? "the bundled engine" }.joined(separator: ", "), privacy: .public)
+            """)
 
-            for facts in installed {
-                let requirements = Self.resolveProfile(for: facts).requirements
+        return Self.runtimesWithoutContainers(among: expected, served: served)
+    }
 
-                guard let runtime = Runtime.select(satisfying: requirements, from: candidates),
-                      !runtimes.contains(runtime) else { continue }
+    /// The builds PorTalistic itself put on disk, the newest first by catalogue order — the
+    /// build a game lands on by default — and the bundled engine last. Builds the person
+    /// installed some other way (Game Porting Toolkit, Whisky) are theirs, and not asked about.
+    nonisolated static func runtimesExpectedToHaveContainers(among candidates: [Runtime],
+                                                             catalogue: [RuntimeRelease]) -> [Runtime] {
+        let managed = candidates.filter { $0.origin == .managed }
 
-                runtimes.append(runtime)
-            }
+        var runtimes: [Runtime] = catalogue.compactMap { release in
+            managed.first { $0.id == "managed:\(release.id)" }
+        }
 
-            return runtimes
-        }.value
+        // A managed build the catalogue no longer names still runs games; keep it, after the
+        // ones it does.
+        for runtime in managed where !runtimes.contains(runtime) {
+            runtimes.append(runtime)
+        }
 
-        return Self.runtimesWithoutContainers(among: runtimes, served: Wine.containerObjects.map(\.settings.runtimeID))
+        runtimes.append(contentsOf: candidates.filter { $0.origin == .bundledEngine })
+        return runtimes
     }
 
     /// Which of `runtimes` has no container, given the runtime ids the containers on disk serve.
@@ -425,17 +454,17 @@ final class Provisioner {
                 }
 
                 // Something on disk may already serve this game, and usually does. Fetching
-                // anyway is right in exactly one case: the catalogue's answer is a newer build
-                // of the same lineage, which is an upgrade rather than a second opinion.
-                //
-                // The narrowness is the point. "Fetch whenever the catalogue prefers something
-                // else" would hand a library that runs fine on the bundled engine a download
-                // per game, and `RuntimeRetention.isUpgrade(_:over:)` answers false for
-                // anything that isn't a managed build of the same family.
+                // anyway is right in two cases: the catalogue's answer is a newer build of the
+                // same lineage, which is an upgrade rather than a second opinion — and the only
+                // thing serving the game is the bundled engine, which is the fallback and not
+                // the default (see `Runtime.defaultOrder`). The second is one download, once:
+                // the moment the build is installed it is what serves the game, and
+                // `RuntimeRetention.isUpgrade(_:over:)` answers false for anything that isn't
+                // a managed build of the same family.
                 if let serving = Runtime.select(satisfying: requirements, from: candidates) {
-                    guard RuntimeRetention.isUpgrade(release, over: serving) else { continue }
+                    guard RuntimeRetention.isUpgrade(release, over: serving) || serving.origin == .bundledEngine else { continue }
 
-                    Self.log.notice("\(facts.title, privacy: .public) runs on \(serving.id, privacy: .public); \(release.id, privacy: .public) is newer in the same family")
+                    Self.log.notice("\(facts.title, privacy: .public) runs on \(serving.id, privacy: .public); \(release.id, privacy: .public) is \(serving.origin == .bundledEngine ? "the default build" : "newer in the same family", privacy: .public)")
                 }
 
                 wanted[release.id] = requirements

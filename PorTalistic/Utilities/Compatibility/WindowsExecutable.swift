@@ -49,7 +49,10 @@ struct WindowsExecutable: Codable, Hashable {
         /// 32-bit x86. Rules a great deal out: Apple's D3DMetal is 64-bit only, and so is
         /// DXMT, which leaves wined3d as the only way to render.
         case i386
-        case x86_64
+        /// Named as the architecture is, underscore and all — it is matched against PE
+        /// headers and Wine's own `x86_64` directories, so a prettier spelling would be a
+        /// translation nobody asked for.
+        case x86_64 // swiftlint:disable:this identifier_name
         /// A native ARM64 Windows binary. Vanishingly rare in games, and no runtime here
         /// runs one, but worth naming rather than guessing wrong about.
         case arm64

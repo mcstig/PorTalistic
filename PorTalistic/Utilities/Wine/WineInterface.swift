@@ -939,6 +939,11 @@ final class Wine { // TODO: https://forum.winehq.org/viewtopic.php?t=15416
 
         try FileManager.default.removeItem(at: containerURL)
         containerURLs.remove(containerURL)
+
+        // A build left without a container is offered one straight away, not at the next launch.
+        Task { @MainActor in
+            Provisioner.shared.requestPass(because: "the container \(containerURL.lastPathComponent) was deleted")
+        }
     }
 
     /// Stop everything running in a container, now, and make sure of it a moment later.

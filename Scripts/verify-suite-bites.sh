@@ -302,6 +302,18 @@ check "a container the bundled engine already has is offered again (nil is how a
     '        return runtimes.filter { !served.contains($0.origin == .bundledEngine ? nil : $0.id) }' \
     '        return runtimes.filter { !served.contains($0.id) }'
 
+check "builds PorTalistic installed are no longer expected to have containers (Wine 11.16 installed, container deleted, nothing asked)" \
+    PorTalistic/Utilities/Compatibility/Provisioner.swift \
+    '        let managed = candidates.filter { $0.origin == .managed }' \
+    '        let managed: [Runtime] = []'
+
+check "the bundled engine goes back to being the default runtime" \
+    PorTalistic/Utilities/Compatibility/RuntimeSelection.swift \
+    '        byCatalogueOrder(viable.filter { $0.origin != .bundledEngine })
+            + viable.filter { $0.origin == .bundledEngine }' \
+    '        viable.filter { $0.origin == .bundledEngine }
+            + byCatalogueOrder(viable.filter { $0.origin != .bundledEngine })'
+
 # ── Nothing may be left changed ────────────────────────────────────────────
 echo
 if git diff --quiet -- PorTalistic 2>/dev/null; then

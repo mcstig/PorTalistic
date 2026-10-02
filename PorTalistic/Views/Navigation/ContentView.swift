@@ -36,6 +36,9 @@ struct ContentView: View {
     @ObservedObject private var updateController: SparkleUpdateController = .shared
     @Bindable private var operationManager: GameOperationManager = .shared
     @Bindable private var provisioner: Provisioner = .shared
+
+    @State private var containerOfferIsShown = false
+    @State private var containerFailureIsShown = false
     @Bindable private var gameDataStore: GameDataStore = .shared
 
     @State private var selection: SidebarItem = .home
@@ -77,28 +80,42 @@ struct ContentView: View {
         // Changing shelf while three pages deep in a game would otherwise leave the old
         // page on screen, since the stack belongs to the column rather than the selection.
         .onChange(of: selection) { path = .init() }
+        // Plain state, set from the offer rather than computed from it: `initial: true` covers an
+        // offer made before this view existed — the pass at launch can finish first — and a
+        // dismissal with no button (Escape) counts as Not Now, so the offer isn't left pending.
+        .onChange(of: provisioner.containerOffer, initial: true) {
+            containerOfferIsShown = provisioner.containerOffer != nil
+        }
+        .onChange(of: containerOfferIsShown) {
+            if !containerOfferIsShown, provisioner.containerOffer != nil {
+                provisioner.answerContainerOffer(false)
+            }
+        }
         .alert(
             Text("Set up \(provisioner.containerOffer?.name ?? "Wine") now?"),
-            isPresented: Binding(
-                get: { provisioner.containerOffer != nil },
-                set: { if !$0 { provisioner.answerContainerOffer(false) } }
-            ),
+            isPresented: $containerOfferIsShown,
             presenting: provisioner.containerOffer
         ) { _ in
             Button("Set Up") { provisioner.answerContainerOffer(true) }
             Button("Not Now", role: .cancel) { provisioner.answerContainerOffer(false) }
         } message: { runtime in
             Text("""
-                Your games will run on \(runtime.name), which has no Windows environment yet. \
-                Setting one up takes about a minute; otherwise it happens the first time you press Play.
+                \(runtime.name) is installed but has no container — the Windows environment games \
+                run in. Setting one up takes about a minute; otherwise it happens the first time a \
+                game needs it.
                 """)
+        }
+        .onChange(of: provisioner.containerFailure, initial: true) {
+            containerFailureIsShown = provisioner.containerFailure != nil
+        }
+        .onChange(of: containerFailureIsShown) {
+            if !containerFailureIsShown, provisioner.containerFailure != nil {
+                provisioner.dismissContainerFailure()
+            }
         }
         .alert(
             Text("Couldn't set up \(provisioner.containerFailure?.runtimeName ?? "the container")"),
-            isPresented: Binding(
-                get: { provisioner.containerFailure != nil },
-                set: { if !$0 { provisioner.dismissContainerFailure() } }
-            ),
+            isPresented: $containerFailureIsShown,
             presenting: provisioner.containerFailure
         ) { failure in
             Button("OK", role: .cancel) { provisioner.dismissContainerFailure() }

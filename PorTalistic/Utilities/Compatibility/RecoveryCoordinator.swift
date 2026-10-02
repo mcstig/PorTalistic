@@ -88,7 +88,7 @@ final class RecoveryCoordinator {
        - backendInEffect: which Direct3D implementation the game actually rendered through, so
          the ladder never offers it the one it is already using.
      */
-    func launchFinished(facts: Provisioner.GameFacts,
+    func launchFinished(facts: Provisioner.GameFacts, // swiftlint:disable:this function_parameter_count
                         outcome: LaunchOutcome,
                         transcriptURL: URL?,
                         containerURL: URL?,
@@ -225,7 +225,8 @@ final class RecoveryCoordinator {
 
     // MARK: - A configuration that doesn't
 
-    private func react(_ record: inout RecoveryJournal.GameRecord,
+    // Everything a verdict is made from, named, rather than a bag the reader has to open.
+    private func react(_ record: inout RecoveryJournal.GameRecord, // swiftlint:disable:this function_parameter_count
                        key: String,
                        facts: Provisioner.GameFacts,
                        verdict: LaunchVerdict,
@@ -345,7 +346,7 @@ final class RecoveryCoordinator {
 
     // MARK: - Plumbing
 
-    private static func report(kind: CrashReport.Kind,
+    private static func report(kind: CrashReport.Kind, // swiftlint:disable:this function_parameter_count
                                facts: Provisioner.GameFacts,
                                runtimeID: String,
                                settings: RuntimeProfile.SettingsOverride,

@@ -156,8 +156,12 @@ extension Runtime {
     ///   a Mac that already has the Game Porting Toolkit can still use it, and because it is
     ///   the honest fallback when nothing else will start. What changes is that nothing
     ///   *chooses* it.
-    /// - Neither: the bundled engine, as the most exercised path for everything that goes
-    ///   through wined3d.
+    /// - Neither: the newest build this project ships, in catalogue order, then anything the
+    ///   person installed themselves, and the bundled engine **last**. Until 1/10/2026 this was
+    ///   the other way round — "the bundled engine, as the most exercised path" — which meant
+    ///   every game that asked for nothing in particular ran on upstream Mythic's Wine 7.7, and
+    ///   the build this project exists to ship was reached only by games that demanded it. The
+    ///   engine is the fallback, not the default; see ``defaultOrder(_:)``.
     ///
     /// Note what this does *not* do: prefer the newest version. Two builds of Wine 11 are not
     /// interchangeable when one exposes the entry points DXMT needs and the other doesn't,
@@ -238,10 +242,20 @@ extension Runtime {
             return direct3DOnMetalOrder(dxmt: byDXMT, wined3d: rest, appleD3DMetal: byD3DMetal)
         }
 
-        // The bundled engine first: the most exercised path for everything that goes through
-        // wined3d. The others stay reachable behind it for the same reason as above.
-        return viable.filter { $0.origin == .bundledEngine }
-            + byCatalogueOrder(viable.filter { $0.origin != .bundledEngine })
+        return defaultOrder(viable)
+    }
+
+    /// The order for a game that asks for nothing in particular.
+    ///
+    /// The newest build this project ships first — it is the one being maintained, tested and
+    /// fixed, and the one every other machine is on — then the rest by catalogue, then whatever
+    /// the person installed themselves, and the bundled engine last. The engine stays reachable
+    /// as the fallback it is: ``rankedWithCompromises(satisfying:from:)`` walks past a build that
+    /// cannot boot a prefix. Its own function, like ``preferring(_:in:provides:)``, so the policy
+    /// can be held by a test that owns no runtime on disk.
+    static func defaultOrder(_ viable: [Runtime]) -> [Runtime] {
+        byCatalogueOrder(viable.filter { $0.origin != .bundledEngine })
+            + viable.filter { $0.origin == .bundledEngine }
     }
 
     /**

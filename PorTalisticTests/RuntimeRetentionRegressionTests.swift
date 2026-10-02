@@ -586,16 +586,63 @@ struct ProvisioningSchedulingRegressionTests {
         .init(id: id, name: id, executableURL: .init(filePath: "/tmp/\(id)/bin/wine"), origin: origin)
     }
 
-    @Test("A runtime the games would run on, with no container, is the one offered at launch")
-    func missingContainersAreFound() {
+    private func release(_ id: String, _ family: String?, _ version: SemanticVersion) -> RuntimeRelease {
+        .init(id: id,
+              name: id,
+              version: version,
+              downloadURL: .init(string: "https://github.com/mcstig/PorTalistic/releases/download/\(id)/\(id).tar.xz")!,
+              sha256: String(repeating: "a", count: 64),
+              payloadSubpath: id,
+              executableSubpath: "bin/wine",
+              summary: id,
+              family: family)
+    }
+
+    @Test("A game that asks for nothing runs on the newest shipped build, and the engine is the last resort")
+    func theDefaultIsTheNewestShippedBuild() {
+        // Real catalogue ids, because the order comes from the catalogue; shuffled on the way in.
         let dxmt = runtime("managed:wine-dxmt-11.16")
+        let sikarugir = runtime("managed:wine-sikarugir-11.0")
         let engine = runtime("engine", origin: .bundledEngine)
         let gptk = runtime("gptk", origin: .external)
 
-        // One container, for the bundled engine — which a container names as `nil`.
-        let missing = Provisioner.runtimesWithoutContainers(among: [engine, dxmt, gptk], served: [nil])
+        let order = Runtime.defaultOrder([engine, gptk, sikarugir, dxmt]).map(\.id)
 
-        #expect(missing == [dxmt, gptk], "the engine has its Default container; the other two have none")
+        #expect(order.first == dxmt.id, "the build this project ships is the default, not upstream's Wine 7.7")
+        #expect(order.last == engine.id, "the engine stays reachable, behind everything else")
+        #expect(order == [dxmt.id, sikarugir.id, gptk.id, engine.id])
+    }
+
+    @Test("An installed build with no container is the one offered at launch")
+    func missingContainersAreFound() {
+        let dxmt = runtime("managed:wine-dxmt-11.16")
+        let engine = runtime("engine", origin: .bundledEngine)
+
+        // One container, for the bundled engine — which a container names as `nil`.
+        let missing = Provisioner.runtimesWithoutContainers(among: [dxmt, engine], served: [nil])
+
+        #expect(missing == [dxmt], "the engine has its Default container; Wine 11.16 has none")
+    }
+
+    @Test("Every build PorTalistic installed is expected to have a container, newest first, and the engine last")
+    func installedBuildsAreExpectedToHaveContainers() {
+        let dxmt = runtime("managed:wine-dxmt-11.16")
+        let sikarugir = runtime("managed:wine-sikarugir-11.0")
+        let old = runtime("managed:wine-dxmt-10.0")
+        let engine = runtime("engine", origin: .bundledEngine)
+        let gptk = runtime("gptk", origin: .external)
+        let catalogue = [release("wine-dxmt-11.16", "wine-dxmt", .init(11, 16, 0)),
+                         release("wine-sikarugir-11.0", "wine-sikarugir", .init(11, 0, 0))]
+
+        let expected = Provisioner.runtimesExpectedToHaveContainers(among: [engine, old, gptk, sikarugir, dxmt],
+                                                                    catalogue: catalogue)
+
+        #expect(expected == [dxmt, sikarugir, old, engine],
+                "catalogue order first, a build the catalogue no longer names after, the engine last — and never the person's own Wine")
+
+        // So on a Mac with Wine 11.16 installed and only the Default container, that is the offer.
+        #expect(Provisioner.runtimesWithoutContainers(among: expected, served: [nil]).first == dxmt,
+                "this is the test Mac on 1/10/2026: Wine 11.16 installed, container deleted, nothing asked")
     }
 
     @Test("A container that is there is not offered again")

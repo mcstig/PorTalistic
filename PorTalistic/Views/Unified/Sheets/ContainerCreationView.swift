@@ -72,7 +72,12 @@ struct ContainerCreationView: View {
                         Text(runtime.description).tag(runtime.id)
                     }
                 }
-                .task { availableRuntimes = Runtime.discoverAll() }
+                .task {
+                    availableRuntimes = Runtime.discoverAll()
+                    // The newest build this project ships is the default here as everywhere;
+                    // the engine only when nothing else is installed.
+                    runtimeID = Runtime.newestManagedByMythic()?.id ?? Runtime.bundled.id
+                }
                 .help("""
                     Wine upgrades a container the first time it runs it and can't downgrade it \
                     again, so this can't be changed back later.

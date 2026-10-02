@@ -139,6 +139,9 @@ struct OnboardingView: View {
                                         withAnimation {
                                             isOnboardingPresented = false
                                         }
+                                        // The questions that waited for onboarding — a build with
+                                        // no container — are asked now rather than at the next launch.
+                                        Provisioner.shared.requestPass(because: "onboarding finished")
                                     }
                                 }
                                 .clipShape(.capsule)
