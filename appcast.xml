@@ -6,6 +6,15 @@
         <description>Updates to PorTalistic. Read by the app when it opens; written by Scripts/release.sh, newest first.</description>
         <language>en</language>
         <item>
+            <title>PorTalistic 0.6.23</title>
+            <pubDate>Fri, 02 Oct 2026 10:08:10 GMT</pubDate>
+            <sparkle:version>78</sparkle:version>
+            <sparkle:shortVersionString>0.6.23</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown">PorTalistic 0.6.23.</description>
+            <enclosure url="https://github.com/mcstig/PorTalistic/releases/download/v0.6.23/PorTalistic-0.6.23.zip" length="58379993" type="application/octet-stream" sparkle:edSignature="QCC8ARHGmkFzTW/velbBlI7cpPeFBHYwD1qOW+FvPqdEOrNaIaaUQpL/sCD/Dp1HPHp50QqhIVRXiHbADmGSAg==" />
+        </item>
+        <item>
             <title>PorTalistic 0.6.22</title>
             <pubDate>Fri, 02 Oct 2026 08:39:27 GMT</pubDate>
             <sparkle:version>77</sparkle:version>
