@@ -12,11 +12,15 @@ your Mac, drawing with the Mac's GPU, and Steam plays Windows games through Prot
 - Unzip it and move Portalistic to Applications. Its first launch downloads its Linux system (a
   little over 2 GB), then Steam installs itself and asks you to sign in.
 - Games go in Games/Portalistic in your home folder. Bottle > Add a Game Folder adds another
-  folder or an external drive. The Linux system's own drive (Steam's "Internal Drive") is 20 GB:
+  folder or an external drive (Steam's own Add Drive can't see your Mac's drives; Portalistic
+  offers a drive when you connect it). The Linux system's own drive (Steam's "Internal Drive") is 20 GB:
   Linux, Steam and Proton, not games.
 - Some games won't run: those whose anti-cheat doesn't accept Proton or a VM, and some whose copy
   protection fails under x86 emulation. Portalistic doesn't work around either.
 - It's experimental: the ARM64 Steam client it uses is a beta build from Valve.
+
+Portalistic is free. If you'd like to support it: [Patreon](https://www.patreon.com/PorTalistic)
+(also Portalistic > Support Portalistic on Patreon in the app).
 
 Portalistic isn't affiliated with Valve. It's free software under the GNU GPL, version 3
 ([LICENSE.md](LICENSE.md)); the software it includes and their licenses are in

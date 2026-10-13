@@ -40,26 +40,33 @@ extension AppDelegate {
         let c = BottleCommand(["app-update", "check"], log: "app-update-check")
         c.onExit = { [weak self, unowned c] code in
             guard let self = self else { return }
-            let answer = c.lines.last(where: { $0.hasPrefix("update ") || $0.hasPrefix("current ") }) ?? ""
+            let answer = c.lines.last(where: { line in
+                ["update ", "replace ", "current "].contains { line.hasPrefix($0) } }) ?? ""
             let words = answer.split(separator: " ").map(String.init)
             guard code == 0, let kind = words.first else {
                 if when == .asked { self.tell("Couldn't check for updates.", c.problem) }
                 return
             }
             let version = words.count > 1 ? words[1] : ""
-            if kind == "current" {
+            if kind == "current" {               // "current THIS NEWEST"
                 AppDelegate.availableUpdate = nil
-                if when == .asked { self.tell("Portalistic is up to date.", "\(version) is the newest version.") }
+                let newest = words.count > 2 ? words[2] : version
+                if when == .asked {
+                    self.tell("Portalistic is up to date.", newest == version
+                        ? "You have \(version), the newest release."
+                        : "You have \(version); the newest release is \(newest).")
+                }
                 return
             }
+            let replacing = kind == "replace"     // this copy's version isn't a release any more
             AppDelegate.availableUpdate = version
             let notes = words.count > 2 ? words[2] : ""
             let skipped = UserDefaults.standard.string(forKey: AppDelegate.skippedUpdateKey) == version
             switch when {
             case .asked:
-                self.offerUpdate(version, notes: notes)
+                self.offerUpdate(version, notes: notes, replacing: replacing)
             case .atLaunch:
-                if !skipped { self.offerUpdate(version, notes: notes) }
+                if !skipped { self.offerUpdate(version, notes: notes, replacing: replacing) }
             case .daily:
                 if !skipped {
                     self.noticeView.show(problem: false, title: "Portalistic \(version) is available",
@@ -77,14 +84,17 @@ extension AppDelegate {
     }
 
     /// Update / Later / What's New, on the window (or on its own if the window isn't up).
-    func offerUpdate(_ version: String, notes: String) {
+    /// replacing: this copy's version was withdrawn (or renumbered), so the newest release replaces
+    /// it even if its number is lower.
+    func offerUpdate(_ version: String, notes: String, replacing: Bool = false) {
         guard !AppDelegate.offeringUpdate else { return }
         AppDelegate.offeringUpdate = true
         let current = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
         let alert = NSAlert()
-        alert.messageText = "Portalistic \(version) is available"
-        alert.informativeText = "You have \(current). Updating downloads the new version, replaces the app and opens it "
-            + "again, in about a minute. Steam and any game keep running in the VM."
+        alert.messageText = replacing ? "Portalistic \(version) is the current release" : "Portalistic \(version) is available"
+        alert.informativeText = (replacing ? "You have \(current), which isn't a release any more. " : "You have \(current). ")
+            + "Updating downloads \(version), replaces the app and opens it again, in about a minute. "
+            + "Steam and any game keep running in the VM."
         alert.addButton(withTitle: "Update")
         alert.addButton(withTitle: "Later")
         if URL(string: notes) != nil { alert.addButton(withTitle: "What's New") }

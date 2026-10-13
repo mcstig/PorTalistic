@@ -1,6 +1,6 @@
 // Portalistic — a notice over the picture: something the VM wants the player to read (why a
 // game closed at launch, say). A banner at the top of the window that goes away by itself after
-// a while, or when clicked.
+// a while, or when clicked; a notice can also do something when it's clicked (show(onClick:)).
 
 import AppKit
 
@@ -10,6 +10,7 @@ final class NoticeView: NSView {
     private let icon = NSImageView()
     private var hideAt: Date = .distantPast
     private var hideTimer: Timer?
+    private var onClick: (() -> Void)?
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -54,11 +55,16 @@ final class NoticeView: NSView {
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
-    override func mouseDown(with event: NSEvent) { dismiss() }
+    override func mouseDown(with event: NSEvent) {
+        let action = onClick
+        dismiss()
+        action?()
+    }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
-    /// Shows the notice for `seconds` (a newer one replaces it).
-    func show(problem: Bool, title t: String, detail d: String, seconds: Double) {
+    /// Shows the notice for `seconds` (a newer one replaces it); onClick runs if it's clicked.
+    func show(problem: Bool, title t: String, detail d: String, seconds: Double, onClick: (() -> Void)? = nil) {
+        self.onClick = onClick
         title.stringValue = t
         detail.stringValue = d
         detail.isHidden = d.isEmpty
@@ -80,6 +86,7 @@ final class NoticeView: NSView {
     @objc private func timerFired() { dismiss() }
 
     func dismiss() {
+        onClick = nil
         hideTimer?.invalidate()
         hideTimer = nil
         guard !isHidden else { return }

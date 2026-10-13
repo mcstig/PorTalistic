@@ -40,6 +40,10 @@ extension AppDelegate {
 
     @objc func releaseMouse(_ sender: Any?) { view.releaseMouse() }
 
+    static let patreonURL = URL(string: "https://www.patreon.com/PorTalistic")!
+
+    @objc func openPatreon(_ sender: Any?) { NSWorkspace.shared.open(AppDelegate.patreonURL) }
+
     func buildMenu() {
         let main = NSMenu()
         let appItem = NSMenuItem()
@@ -49,6 +53,9 @@ extension AppDelegate {
         let update = NSMenuItem(title: "Check for Updates…", action: #selector(checkForUpdatesNow(_:)), keyEquivalent: "")
         update.target = self
         appMenu.addItem(update)
+        let patreon = NSMenuItem(title: "Support Portalistic on Patreon", action: #selector(openPatreon(_:)), keyEquivalent: "")
+        patreon.target = self
+        appMenu.addItem(patreon)
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Hide Portalistic", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
         appMenu.addItem(withTitle: "Quit Portalistic", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
@@ -67,6 +74,7 @@ extension AppDelegate {
         add("Open Steam Settings", #selector(steamSettings(_:)))
         bottleMenu.addItem(.separator())
         add("Add a Game Folder…", #selector(addGameFolder(_:)))
+        add("Remove a Game Folder…", #selector(removeGameFolder(_:)))
         add("Show Game Folders", #selector(showGameFolders(_:)))
         bottleMenu.addItem(.separator())
         add("Update the Bottle", #selector(updateBottle(_:)))
@@ -120,7 +128,8 @@ extension AppDelegate: NSMenuItemValidation {
         if item.action == #selector(startBottle(_:)) { return !busy && !view.connected }
         if item.action == #selector(restartSteam(_:)) || item.action == #selector(updateBottle(_:))
             || item.action == #selector(saveLogs(_:)) || item.action == #selector(shutDown(_:))
-            || item.action == #selector(addGameFolder(_:)) || item.action == #selector(showGameFolders(_:)) {
+            || item.action == #selector(addGameFolder(_:)) || item.action == #selector(showGameFolders(_:))
+            || item.action == #selector(removeGameFolder(_:)) {
             return !busy
         }
         if item.action == #selector(steamSettings(_:)) { return !busy && view.connected }

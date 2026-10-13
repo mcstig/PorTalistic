@@ -98,9 +98,10 @@
 #                             (host/image.env), make the VM from it, start it, install Steam
 #                             (the app does this when there's no VM); IMAGE: a local image file
 #   bottle app-update [check|install]
-#                             Portalistic.app's newest version on GitHub: check prints "update
-#                             VERSION URL" or "current VERSION"; install downloads it, checks its
-#                             signature and swaps it in (the app offers this itself)
+#                             Portalistic.app's newest release on GitHub: check prints "update
+#                             VERSION URL", "replace VERSION URL" (this copy's version isn't a
+#                             release any more) or "current THIS LATEST"; install downloads it,
+#                             checks its signature and swaps it in (the app offers this itself)
 #   bottle prebuild           build the VM's own programs (C) in the VM, into the kit's
 #                             guest/prebuilt/aarch64: VMs then install those instead of compiling
 #                             them (the packaged app's VMs have no build tools). Run it after
@@ -1024,7 +1025,7 @@ app_build() {  # build the app bundle when it's missing or older than its source
   # macOS 13 or later (as Info.plist says): controllers, rumble and the window subtitle need 11+.
   # -parse-as-library: the app starts at its @main type (as in the Xcode build).
   while IFS= read -r -d '' f; do srcs+=("$f"); done < <(find "$APP_SRC" -name '*.swift' -print0)
-  if ! swiftc -O -parse-as-library -module-name Portalistic -target "$(uname -m)-apple-macosx13.0" \
+  if ! swiftc -O -parse-as-library -module-name Portalistic -target "$(uname -m)-apple-macosx26.0" \
         -o "$bin.new" "${srcs[@]}" >"$log" 2>&1; then
     grep -E "error:" "$log" | head -10 >&2 || true
     rm -f "$bin.new"
@@ -1059,7 +1060,7 @@ app_build() {  # build the app bundle when it's missing or older than its source
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>$(sed -n 's/^MARKETING_VERSION *= *//p' "$KIT_DIR/host/xcode/Bottle.xcconfig")</string>
   <key>CFBundleVersion</key><string>$(sed -n 's/^CURRENT_PROJECT_VERSION *= *//p' "$KIT_DIR/host/xcode/Bottle.xcconfig")</string>
-  <key>LSMinimumSystemVersion</key><string>13.0</string>
+  <key>LSMinimumSystemVersion</key><string>26.0</string>
   <key>NSHighResolutionCapable</key><true/>
 </dict>
 </plist>
@@ -1460,6 +1461,8 @@ lib_restart_vm() {
 }
 # What Steam made of them: bottle-libraries status in the VM, once Steam has started ($1: seconds
 # to wait for steam-arm64 to have set them up).
+# Steam's own list has the game folder NAME (bottle-libraries status, from Steam's libraryfolders.vdf)
+lib_in_steam() { vsh_for 30 bottle-libraries status --json 2>/dev/null | grep -q "\"$LIB_MOUNT_ROOT/$1\""; }
 lib_status_vm() {
   local end=$(( SECONDS + ${1:-0} ))
   [[ "$(vm_status)" == Running ]] || return 0
@@ -1541,7 +1544,22 @@ lib_add() {
   def="$(lib_key default)"
   if [[ -n "$row" ]]; then
     name="$(cut -f1 <<<"$row")"
-    info "$dir is already a game folder ($name)."
+    # Steam's Settings > Storage can drop a library from Steam's own list; adding the folder again
+    # brings it back now (Steam restarts: it keeps its list in memory and writes it when it quits)
+    if [[ "$(vm_status)" == Running ]] && ! lib_in_steam "$name"; then
+      lib_game_running && die "A game is running. Quit it first: Steam restarts to get the folder back."
+      info "$dir is a game folder ($name) that Steam doesn't list any more: Steam restarts to get it back."
+      lib_push_conf
+      if steam_running; then
+        steam_stop
+        steam_start "$debug"
+      else
+        vsh_for 60 bash -c 'command -v bottle-libraries >/dev/null && bottle-libraries sync' || true
+      fi
+      if (( make_default )) && [[ "$def" != "$name" ]]; then lib_default_set "$name"; else lib_status_vm 60; fi
+      return 0
+    fi
+    info "$dir is already a game folder ($name), and Steam lists it (Settings > Storage)."
     if (( make_default )) && [[ "$def" != "$name" ]]; then lib_default_set "$name"; fi
     return 0
   fi
@@ -1844,6 +1862,15 @@ version_newer() {
   done
   return 1
 }
+# A copy whose version isn't a published release (withdrawn, or renumbered as 0.7.1 was on Oct 13,
+# when 0.7.0.x became the numbering) is offered the newest release even if its number is lower;
+# one that is a release, never a lower one.
+app_release_exists() { curl -fsS -o /dev/null --connect-timeout 15 --max-time 30 "$APP_RELEASES/tag/v$1" 2>/dev/null; }
+app_update_kind() {   # $1 newest release, $2 this copy: update, replace or current
+  if version_newer "$1" "$2"; then echo update
+  elif [[ "$1" != "$2" ]] && ! app_release_exists "$2"; then echo replace
+  else echo current; fi
+}
 # the newest release's version: where releases/latest leads (…/releases/tag/v0.7.2)
 app_latest() {
   local u
@@ -1853,16 +1880,17 @@ app_latest() {
   echo "${u##*/tag/v}"
 }
 cmd_app_update() {
-  local what="${1:-check}" cur latest dir zip new old team
+  local what="${1:-check}" cur latest kind dir zip new old team
   [[ -n "$APP_BUNDLE" ]] || die "Only Portalistic.app updates itself; this is the kit (host/package-app.sh makes the app)."
   case "$what" in check|install) ;; *) die "usage: bottle app-update [check|install]" ;; esac
   cur="$(app_version_of "$APP_BUNDLE")"
   latest="$(app_latest)" || die "Couldn't reach GitHub to see Portalistic's newest version."
+  kind="$(app_update_kind "$latest" "$cur")"
   if [[ "$what" == check ]]; then
-    if version_newer "$latest" "$cur"; then echo "update $latest $APP_RELEASES/tag/v$latest"; else echo "current $cur"; fi
+    if [[ "$kind" == current ]]; then echo "current $cur $latest"; else echo "$kind $latest $APP_RELEASES/tag/v$latest"; fi
     return 0
   fi
-  version_newer "$latest" "$cur" || { info "Portalistic $cur is the newest version."; return 0; }
+  [[ "$kind" != current ]] || { info "Portalistic $cur is up to date (the newest release is $latest)."; return 0; }
   case "$APP_BUNDLE" in
     */AppTranslocation/*)
       die "Portalistic is running from where it was downloaded. Move it to the Applications folder, open it from there, then update." ;;
@@ -1886,7 +1914,7 @@ cmd_app_update() {
   [[ "$(app_sign_field "$new" TeamIdentifier)" == "$team" ]] || die "The new copy isn't signed by Portalistic's developer. Nothing was changed."
   [[ "$(app_sign_field "$new" Identifier)" == "$(app_sign_field "$APP_BUNDLE" Identifier)" ]] || die "The download is a different app. Nothing was changed."
   spctl -a -t exec "$new" 2>/dev/null || die "macOS doesn't accept the new copy (it isn't notarized). Nothing was changed."
-  version_newer "$(app_version_of "$new")" "$cur" || die "The download isn't newer than this copy ($cur). Nothing was changed."
+  [[ "$(app_version_of "$new")" == "$latest" ]] || die "The download is Portalistic $(app_version_of "$new"), not $latest. Nothing was changed."
   info "Replacing Portalistic $cur with $latest…"
   old="$dir/Portalistic-$cur.app"
   mv "$APP_BUNDLE" "$old" || die "Couldn't move this copy aside. Nothing was changed."
@@ -2559,7 +2587,7 @@ swift_check() {
   while IFS= read -r -d '' f; do srcs+=("$f"); done < <(find "$dir" -name '*.swift' -print0)
   { echo "== swift check, $(date), ${#srcs[@]} files, $(swiftc --version 2>&1 | head -1)"
     if nice -n 15 swiftc -typecheck -parse-as-library -module-name Portalistic \
-         -target "$(uname -m)-apple-macosx13.0" "${srcs[@]}" 2>&1; then echo "== OK"; else echo "== FAILED"; fi
+         -target "$(uname -m)-apple-macosx26.0" "${srcs[@]}" 2>&1; then echo "== OK"; else echo "== FAILED"; fi
   } > "$out" 2>&1
 }
 
