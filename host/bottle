@@ -167,6 +167,7 @@ fi
 info() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33mwarn:\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
+err()  { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; }   # (and carry on)
 
 # limactl shell enters the same folder inside the VM; home is always shared.
 cd "$HOME"
@@ -273,7 +274,16 @@ vm_start() {
   if [[ -n "$icd" ]] && ! grep -q '^MESA_KK_DISABLE_WORKAROUNDS=' "$HOST_ENV" 2>/dev/null; then
     envs+=("MESA_KK_DISABLE_WORKAROUNDS=6,12,13,14,17")
   fi
-  local extra=""
+  local extra="" why k0 d0
+  VM_START_WHY=""
+  why="$(hv_problem)"
+  if [[ -n "$why" && "${BOTTLE_ALLOW_NESTED:-0}" != 1 ]]; then
+    VM_START_WHY="$why"
+    err "$why"
+    return 1
+  fi
+  k0="$(stat -f %z "$VM_DIR/krunkit.log" 2>/dev/null || echo 0)"          # (for vm_start_explain)
+  d0="$(stat -f %z "$VM_DIR/driver.stderr.log" 2>/dev/null || echo 0)"
   [[ ${#envs[@]} -gt 0 ]] && extra=" (settings: $(printf '%s ' "${envs[@]}"| sed 's/ $//'))"
   [[ -n "$icd" ]] && envs+=("VK_DRIVER_FILES=$icd" "VK_ICD_FILENAMES=$icd")
   lib_mounts_apply || true   # the game folders the VM shares (bottle library)
@@ -295,7 +305,51 @@ vm_start() {
       return 0
     fi
   fi
+  vm_start_explain "$k0" "$d0"
   return 1
+}
+
+# ---- why the VM can't start, in plain words ----
+# krunkit runs the VM with macOS's Hypervisor. A Mac that is itself a virtual machine (macOS in
+# UTM, Parallels, VMware or a cloud Mac: hw.model VirtualMac…, kern.hv_vmm_present 1) can't run
+# one of its own: Apple offers nested virtualization only to Linux guests. hv_problem says so
+# before setup downloads anything and before each start. BOTTLE_PRETEND_VIRTUAL=1 pretends
+# (tests); BOTTLE_ALLOW_NESTED=1 tries anyway.
+VM_START_WHY=""
+MSG_NOT_STARTED="The VM didn't start (see above). Try: bottle start"
+mac_is_virtual() {
+  [[ "${BOTTLE_PRETEND_VIRTUAL:-0}" == 1 ]] && return 0
+  [[ "$(sysctl -n kern.hv_vmm_present 2>/dev/null)" == 1 || "$(sysctl -n hw.model 2>/dev/null)" == VirtualMac* ]]
+}
+hv_problem() {
+  if mac_is_virtual; then
+    echo "Portalistic can't run on this Mac: it is a virtual machine itself ($(sysctl -n hw.model 2>/dev/null)), and macOS doesn't let a virtual Mac run virtual machines of its own. Portalistic runs Steam in one, so it needs a real Mac with Apple silicon."
+  elif [[ "$(sysctl -n kern.hv_support 2>/dev/null)" == 0 ]]; then
+    echo "This Mac can't run virtual machines: macOS's Hypervisor isn't available. Portalistic runs Steam in one."
+  fi
+}
+# A start that failed: what krunkit (the VM's process) and Lima's krunkit driver wrote during it
+# ($1, $2 = their logs' sizes before it), in plain words when it's a known cause.
+vm_start_explain() {
+  local new="" f off line
+  for f in krunkit.log:"$1" driver.stderr.log:"$2"; do
+    off="${f##*:}"; f="$VM_DIR/${f%%:*}"
+    [[ -f "$f" ]] || continue
+    if (( $(stat -f %z "$f" 2>/dev/null || echo 0) >= off )); then
+      new+="$(tail -c +$(( off + 1 )) "$f" 2>/dev/null)"$'\n'
+    else
+      new+="$(cat "$f" 2>/dev/null)"$'\n'   # (started over)
+    fi
+  done
+  if grep -qE 'HV_(ERROR|BUSY|BAD_ARGUMENT|NO_RESOURCES|NO_DEVICE|DENIED|UNSUPPORTED)|hv_vm_create|[Hh]ypervisor|VmCreate|VcpuCreate' <<<"$new"; then
+    VM_START_WHY="macOS refused to start the VM: its Hypervisor isn't available to Portalistic here$(mac_is_virtual && echo ', as on a Mac that is itself a virtual machine' || true). Portalistic runs Steam in a virtual machine, so it needs a real Mac with Apple silicon."
+  elif grep -qE 'Cannot allocate memory|ENOMEM|[Oo]ut of memory' <<<"$new"; then
+    VM_START_WHY="macOS couldn't give the VM its memory ($(vm_memory_gb) GB). Quit some apps and try again."
+  else
+    line="$(grep -E 'ERROR|[Ee]rror' <<<"$new" | grep -v 'unexpected dgram' | tail -n 1 | sed -E 's/^\[[^]]*\] *//' | cut -c1-200 || true)"
+    VM_START_WHY="The VM stopped while it was starting${line:+ (krunkit: $line)}. Try again; if it happens again, Bottle > Save Logs saves what to attach to a bug report."
+  fi
+  err "$VM_START_WHY"
 }
 
 desktop_start() {
@@ -1396,7 +1450,7 @@ lib_restart_vm() {
   steam_stop
   info "Stopping the VM…"
   vm_stop >/dev/null 2>&1 || vm_stop --force >/dev/null 2>&1 || true
-  vm_start || die "The VM didn't start (see above). Try: bottle start"
+  vm_start || die "${VM_START_WHY:-$MSG_NOT_STARTED}"
   update_if_behind "then Steam starts" || true
   desktop_start >/dev/null
   steam_start "$debug"
@@ -1678,7 +1732,7 @@ setup_fetch() {
   wait "$p"
 }
 cmd_setup() {
-  local src="${1:-}" dl="$HOME/.portalistic/download" f part n before=0 sha yaml mem cpus
+  local src="${1:-}" dl="$HOME/.portalistic/download" f part n before=0 sha yaml mem cpus why
   command -v limactl >/dev/null || die "Lima isn't here (the app carries it; in a kit: host/setup-host.sh)."
   if limactl list -q 2>/dev/null | grep -qx "$VM_NAME"; then
     info "Portalistic is already set up."
@@ -1686,12 +1740,12 @@ cmd_setup() {
     return
   fi
   [[ -f "$IMAGE_ENV" ]] || die "This copy of Portalistic doesn't say where its Linux system is (host/image.env)."
+  # a virtual Mac, or one without the Hypervisor, can't run the VM (hv_problem): said before any download
+  why="$(hv_problem)"
+  [[ -z "$why" || "${BOTTLE_ALLOW_NESTED:-0}" == 1 ]] || die "$why"
   # the VM gets 2 GB at least, and macOS keeps as much (memory_suggested_gb)
   (( $(mac_memory_gb) >= MAC_MEMORY_MIN_GB )) \
     || die "Portalistic needs a Mac with ${MAC_MEMORY_MIN_GB} GB of memory or more; this one has $(mac_memory_gb) GB."
-  # krunkit runs the VM with macOS's Hypervisor, which a Mac that is itself a virtual machine doesn't offer
-  [[ "$(sysctl -n kern.hv_support 2>/dev/null)" != 0 ]] \
-    || die "This Mac can't run virtual machines: macOS's Hypervisor isn't available here, as happens when macOS itself runs in a virtual machine. Portalistic runs Steam in one."
 
   # shellcheck disable=SC1090
   . "$IMAGE_ENV"
@@ -2408,7 +2462,7 @@ cmd_memory() {
   fi
   limactl edit "$VM_NAME" --memory "$want" </dev/null || die "Lima couldn't change the VM's memory (see above). Start it again with: bottle start"
   info "Starting the VM…"
-  vm_start || die "The VM didn't start (see above). Try: bottle start"
+  vm_start || die "${VM_START_WHY:-$MSG_NOT_STARTED}"
   update_if_behind "then Steam starts" || true
   desktop_start >/dev/null
   steam_start "$debug"
