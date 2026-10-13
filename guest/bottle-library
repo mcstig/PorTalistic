@@ -1,0 +1,192 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""bottle-library: the Steam games installed in the bottle, for the Mac app's Library screen.
+
+    bottle-library                 a list, one game per line
+    bottle-library --json          the same as JSON
+    bottle-library --export DIR    DIR/library.json plus DIR/covers/<appid>.jpg (the Mac copies
+                                   DIR over with `bottle library`)
+
+Games are what Steam has installed (appmanifest_*.acf in every library folder), without Steam's
+own tools (Proton, runtimes, FEX...: the same test as bottle-steamplay). Covers are the ones
+Steam already downloaded for its own library (appcache/librarycache, old and new layouts): the
+tall 600x900 capsule when there is one, else the wide header. Last played and play time come
+from the app manifest, or from each Steam user's localconfig.vdf; the game running now from
+Steam's registry.vdf.
+"""
+import argparse
+import importlib.machinery
+import importlib.util
+import json
+import os
+import shutil
+import sys
+import time
+from pathlib import Path
+
+
+def load_steamplay():
+    """bottle-steamplay's VDF reader and its list of installed apps (one place for what's a tool)."""
+    sys.dont_write_bytecode = True        # no __pycache__ next to it
+    here = Path(__file__).resolve().parent
+    for cand in (here / "bottle-steamplay", Path("/usr/local/bin/bottle-steamplay")):
+        if cand.is_file():
+            loader = importlib.machinery.SourceFileLoader("bottle_steamplay", str(cand))
+            spec = importlib.util.spec_from_loader("bottle_steamplay", loader)
+            mod = importlib.util.module_from_spec(spec)
+            loader.exec_module(mod)
+            return mod
+    sys.exit("bottle-library: bottle-steamplay not found (bottle update installs it)")
+
+
+sp = load_steamplay()
+
+# Steam's StateFlags bits
+FULLY_INSTALLED, UPDATE_REQUIRED, UPDATE_RUNNING, UPDATE_PAUSED, UPDATE_STARTED = 4, 2, 256, 512, 1024
+
+
+def state_of(flags):
+    if flags & (UPDATE_RUNNING | UPDATE_STARTED):
+        return "updating"
+    if flags & UPDATE_PAUSED:
+        return "paused"
+    if flags & UPDATE_REQUIRED:
+        return "update"
+    return "installed" if flags & FULLY_INSTALLED else "incomplete"
+
+
+def played_times():
+    """appid -> (last played unix time, minutes played), from every Steam user on this machine."""
+    out = {}
+    for lc in (sp.STEAM / "userdata").glob("*/config/localconfig.vdf"):
+        try:
+            root = sp.vdf_parse(lc.read_text(errors="replace"))
+        except OSError:
+            continue
+        node = sp.vdf_get(root, "UserLocalConfigStore") or []
+        for key in ("Software", "Valve", "Steam", "apps"):
+            node = sp.vdf_get(node, key) or []
+        for appid, block in node:
+            if not isinstance(block, list):
+                continue
+            last = int(sp.vdf_value(block, "LastPlayed") or 0)
+            mins = int(sp.vdf_value(block, "Playtime") or 0)
+            old = out.get(appid, (0, 0))
+            out[appid] = (max(old[0], last), max(old[1], mins))
+    return out
+
+
+COVER_NAMES = ("library_600x900_2x.jpg", "library_600x900.jpg", "library_capsule.jpg")
+WIDE_NAMES = ("header.jpg", "library_header.jpg", "capsule_616x353.jpg")
+
+
+def find_cover(appid):
+    """(path, "tall"|"wide") of the best cover Steam has cached for appid, or (None, None)."""
+    cache = sp.STEAM / "appcache/librarycache"
+    folder = cache / appid
+    for names, kind in ((COVER_NAMES, "tall"), (WIDE_NAMES, "wide")):
+        for name in names:
+            flat = cache / f"{appid}_{name}"            # the layout before 2024
+            if flat.is_file():
+                return flat, kind
+            if folder.is_dir():                          # newer: librarycache/<appid>/[<hash>/]name
+                hits = sorted(folder.rglob(name), key=lambda p: p.stat().st_mtime, reverse=True)
+                if hits:
+                    return hits[0], kind
+    return None, None
+
+
+def running_app():
+    """The app id Steam says is running (RunningAppID in its registry.vdf), or None."""
+    for reg in (Path.home() / ".steam/registry.vdf", sp.STEAM / "registry.vdf"):
+        try:
+            node = sp.vdf_parse(reg.read_text(errors="replace"))
+        except OSError:
+            continue
+        for key in ("Registry", "HKCU", "Software", "Valve", "Steam"):
+            node = sp.vdf_get(node, key) or []
+        rid = (sp.vdf_value(node, "RunningAppID") or "0").strip()
+        return rid if rid not in ("", "0") else None
+    return None
+
+
+def document():
+    """What --json prints and --export writes (covers as paths in the VM)."""
+    gs = games()
+    running = running_app()
+    return {"generated": int(time.time()), "games": gs,
+            "running": running if any(g["appid"] == running for g in gs) else None}
+
+
+def games():
+    played = played_times()
+    out = []
+    for appid, a in sp.installed_apps().items():
+        if a["tool"]:
+            continue
+        try:
+            st = sp.vdf_get(sp.vdf_parse(a["acf"].read_text(errors="replace")), "AppState") or []
+        except OSError:
+            continue
+        flags = int(sp.vdf_value(st, "StateFlags") or 0)
+        last = int(sp.vdf_value(st, "LastPlayed") or 0)
+        p_last, p_mins = played.get(appid, (0, 0))
+        cover, kind = find_cover(appid)
+        out.append({
+            "appid": appid,
+            "name": a["name"],
+            "state": state_of(flags),
+            "size": int(sp.vdf_value(st, "SizeOnDisk") or 0),
+            "lastPlayed": max(last, p_last),
+            "playtime": p_mins,
+            "linux": a["native"],
+            "cover": str(cover) if cover else None,
+            "coverKind": kind,
+        })
+    out.sort(key=lambda g: (-g["lastPlayed"], g["name"].lower()))
+    return out
+
+
+def export(dest):
+    dest = Path(dest)
+    (dest / "covers").mkdir(parents=True, exist_ok=True)
+    doc = document()
+    gs = doc["games"]
+    for g in gs:
+        src = g.pop("cover")
+        g["cover"] = None
+        if src:
+            name = f"{g['appid']}.jpg"
+            try:
+                shutil.copy2(src, dest / "covers" / name)   # with Steam's time: the app sees a new cover
+                g["cover"] = name
+            except OSError:
+                g["coverKind"] = None
+    tmp = dest / "library.json.tmp"
+    tmp.write_text(json.dumps(doc, indent=1))
+    os.replace(tmp, dest / "library.json")
+    with_cover = sum(1 for g in gs if g["cover"])
+    print(f"{len(gs)} games, {with_cover} with a cover")
+
+
+def main():
+    ap = argparse.ArgumentParser(description="The Steam games installed in the bottle.")
+    ap.add_argument("--json", action="store_true", help="print JSON")
+    ap.add_argument("--export", metavar="DIR", help="write DIR/library.json and DIR/covers/")
+    args = ap.parse_args()
+    sp.ARGS = argparse.Namespace(quiet=True)       # bottle-steamplay's own messages: off
+    if args.export:
+        export(args.export)
+    elif args.json:
+        print(json.dumps(document(), indent=1))
+    else:
+        doc = document()
+        for g in doc["games"]:
+            when = time.strftime("%Y-%m-%d", time.localtime(g["lastPlayed"])) if g["lastPlayed"] else "never"
+            print(f"{g['appid']:>8}  {g['name'][:40]:40}  {g['state']:10}  last played {when}"
+                  f"{'' if g['cover'] else '  (no cover yet)'}"
+                  f"{'  (running)' if g['appid'] == doc['running'] else ''}")
+
+
+if __name__ == "__main__":
+    main()

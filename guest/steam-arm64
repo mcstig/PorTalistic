@@ -1,0 +1,602 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Copyright (C) 2026-present ROCKNIX (https://github.com/ROCKNIX)
+# Modified by Radical <radical@radical.fun> (github.com/justradical/steam-arm64-fedora)
+# Modified for the SteamOS-bottle proof of concept: no sleeps, default DISPLAY,
+# timing log, CEF flags passthrough, per-user env file, DXVK drop-in for games.
+#
+# steam-arm64: downloads Valve's (unreleased, public-beta) ARM64 Steam client and
+# its arm64 runtime on first run, then launches it. Re-run to start Steam again.
+#
+# Steam starts in Big Picture (the SteamOS interface; -gamepadui) unless
+# ~/.config/steamos-bottle/steam-ui says "desktop" (bottle ui desktop).
+# ~/.config/steamos-bottle/steam-gpu = zink (bottle steam-gpu on): Steam's own interface draws
+# with OpenGL on the Mac's GPU (Mesa's zink, on the same Vulkan path games use) instead of on
+# the VM's processors (llvmpipe).
+#
+# ~/.config/steamos-bottle/steam.env (optional, KEY=value lines) is exported first:
+# handy for PROTON_LOG=1, DXVK_HUD=fps, BOTTLE_PRESENT_DEBUG=1.
+# BOTTLE_DXVK=0 turns off the DXVK 2.6.2 drop-in (see bottle-dxvk); BOTTLE_STEAMPLAY=0 leaves
+# Steam Play settings alone (see bottle-steamplay).
+# bottle-logkeep runs alongside Steam and keeps the Proton logs of earlier launches.
+
+set -uo pipefail
+
+STEAM="${HOME}/.local/share/Steam"
+STEAM_DOT="${HOME}/.steam"
+RUNTIME_DIR="${STEAM}/steam-runtime-steamrt-arm64"
+CLIENT_DIR="${STEAM}/steamrtarm64"
+RUNTIME_TAR_URL="https://repo.steampowered.com/steamrt3c/images/latest-public-beta/steam-runtime-steamrt-arm64.tar.xz"
+STEAM_MANIFEST_URL="https://client-update.fastly.steamstatic.com/steam_client_publicbeta_linuxarm64"
+STEAM_CDN="https://client-update.steamstatic.com"
+LOG_DIR="${HOME}/.config/steamos-bottle"
+TIMING_LOG="${LOG_DIR}/steam-timing.log"
+
+# Started again from a Steam this launcher put on the Mac's GPU (a self-update restart, or the
+# window keeper it started): that one's GPU settings aren't this start's; the mode is read
+# again below. (A setting of the user's own in steam.env comes back with it.)
+if [[ -n "${BOTTLE_STEAM_ZINK:-}" ]]; then   # (how the mode was set up until Oct 9, 17:30)
+  unset MESA_LOADER_DRIVER_OVERRIDE LIBGL_KOPPER_DRI2 BOTTLE_PRESENT_DEBUG BOTTLE_STEAM_ZINK BOTTLE_FAKE_ZINK BOTTLE_GPU_UI_VARS
+fi
+unset BOTTLE_STEAM_GPU BOTTLE_STEAM_GPU_FAKE
+# (the same for the light game log below, which isn't a PROTON_LOG=1 of the user's)
+if [[ -n "${BOTTLE_LIGHT_LOG:-}" ]]; then
+  unset PROTON_LOG WINEDEBUG BOTTLE_LIGHT_LOG
+fi
+# (and for the game settings this launcher picks below: DXVK_ASYNC, FEX_TSOENABLED, ...)
+if [[ -n "${BOTTLE_AUTO_VARS:-}" ]]; then
+  IFS=: read -ra _auto <<<"$BOTTLE_AUTO_VARS"
+  unset "${_auto[@]}" BOTTLE_AUTO_VARS
+fi
+
+if [[ -f "${LOG_DIR}/steam.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  . "${LOG_DIR}/steam.env"
+  set +a
+fi
+
+export DISPLAY="${DISPLAY:-:1}"
+# Venus (the games' GPU driver) stops a game outright when one of its waits outlasts ~3.5 s
+# while the Mac side looks unresponsive, which can happen while a game compiles lots of
+# shaders at startup; and it does so silently. Wait instead (a fatal GPU error still stops
+# the game). BOTTLE_VN_ABORT=1 in steam.env restores Venus's default.
+if [[ "${BOTTLE_VN_ABORT:-0}" != 1 ]]; then
+  case ",${VN_DEBUG:-}," in
+    *,no_abort,*) ;;
+    *) export VN_DEBUG="${VN_DEBUG:+${VN_DEBUG},}no_abort" ;;
+  esac
+fi
+# With game logs on (bottle steam --debug): Venus says why it stops or stalls a game, and
+# Wine traces exceptions without the stack unwinding (a crash otherwise writes 100+ MB of
+# unwinding and pushes its own cause out of the log).
+if [[ "${PROTON_LOG:-0}" != 0 ]]; then
+  export MESA_LOG_LEVEL="${MESA_LOG_LEVEL:-debug}"
+  export WINEDEBUG="${WINEDEBUG:-+timestamp,+pid,+tid,+seh,+threadname,+debugstr,+loaddll}"
+elif [[ -z "${PROTON_LOG:-}" ]]; then
+  # Otherwise every launch still leaves a light log (Proton's setup, the DLLs a game loads, so
+  # DirectX 11 or 12, Wine's errors, DXVK/vkd3d messages; ~/steam-<appid>.log, kept per launch
+  # by bottle-logkeep): a game that quits at once can be told why (The Witcher 3 left nothing,
+  # Oct 9). Nothing traced per frame. PROTON_LOG=0 in steam.env turns it off.
+  export PROTON_LOG=1 WINEDEBUG="${WINEDEBUG:-+timestamp,+pid,+loaddll}" BOTTLE_LIGHT_LOG=1
+fi
+# Settings for every game that this launcher picks (not the user's: steam.env wins), listed in
+# BOTTLE_AUTO_VARS so a restart picks them again.
+auto_vars=()
+# Shader compiling without freezes: the DXVK build bottle-dxvk puts in place (dxvk-gplasync)
+# compiles a pipeline the game needs for the first time in the background and leaves out what
+# it would draw for a frame or two, instead of stopping the game until the Mac has compiled it
+# (KosmicKrisp turns each into Metal, which takes tens of milliseconds). Pipelines it compiled
+# go into DXVK's state cache, so the next start compiles them while loading. DXVK_ASYNC=0 in
+# steam.env, or in a game's launch options (DXVK_ASYNC=0 %command%), turns it off.
+if [[ -z "${DXVK_ASYNC:-}" ]]; then
+  export DXVK_ASYNC=1
+  auto_vars+=(DXVK_ASYNC)
+fi
+if [[ -z "${DXVK_GPLASYNCCACHE:-}" ]]; then
+  export DXVK_GPLASYNCCACHE=1
+  auto_vars+=(DXVK_GPLASYNCCACHE)
+fi
+# x86 memory ordering in hardware (bottle tso on): with Apple's TSO mode on in every CPU of the
+# VM, FEX can leave out its own ordering of every memory access, the biggest part of its cost
+# in multithreaded games. Only when the quick test says the hardware ordering holds right now
+# (bottle-tso check, ~1 s); otherwise FEX keeps doing it. FEX_TSOENABLED=1 in steam.env forces
+# FEX's own.
+if [[ -z "${FEX_TSOENABLED:-}" ]] && command -v bottle-tso >/dev/null && timeout 15 bottle-tso check; then
+  export FEX_TSOENABLED=0
+  auto_vars+=(FEX_TSOENABLED)
+  echo "x86 memory ordering: in hardware (Apple TSO; FEX_TSOENABLED=0)"
+fi
+# Steam's in-game overlay, while it's being brought up in the bottle (Oct 10): with
+# STEAM_OVERLAY_LOGGING=1 its game side writes what it does to /tmp/gameoverlayrenderer.<pid>.log
+# (the log export collects them). Set STEAM_OVERLAY_LOGGING in steam.env to change it.
+if [[ -z "${STEAM_OVERLAY_LOGGING:-}" ]]; then
+  export STEAM_OVERLAY_LOGGING=1
+  auto_vars+=(STEAM_OVERLAY_LOGGING)
+fi
+# ...written as it goes (Oct 11: a game's log was still empty after it quit; Wine ends its
+# processes without flushing what the overlay had buffered).
+if [[ "${STEAM_OVERLAY_LOGGING:-}" == 1 && -z "${STEAM_OVERLAY_LOGGING_FLUSH:-}" ]]; then
+  export STEAM_OVERLAY_LOGGING_FLUSH=1
+  auto_vars+=(STEAM_OVERLAY_LOGGING_FLUSH)
+fi
+# DirectX 12 (vkd3d-proton): the Mac's GPU has no sparse memory here, so vkd3d-proton would offer
+# games feature level 11_1 at most, and many DX12 games ask for 12_0 to start at all. 12_0 is
+# offered (vkd3d-proton's own setting; it also reports tiled resources tier 2, which a game that
+# really uses them would trip on). VKD3D_FEATURE_LEVEL in steam.env or launch options wins.
+if [[ -z "${VKD3D_FEATURE_LEVEL:-}" ]]; then
+  export VKD3D_FEATURE_LEVEL=12_0
+  auto_vars+=(VKD3D_FEATURE_LEVEL)
+fi
+BOTTLE_AUTO_VARS="$(IFS=:; echo "${auto_vars[*]}")"
+export BOTTLE_AUTO_VARS
+# Anti-cheat: Valve's Proton EasyAntiCheat / BattlEye Runtime tools (bottle anticheat installs
+# them) hold the Linux side of each anti-cheat; Proton loads it from these folders when a game
+# that allows Proton starts its anti-cheat. Set here in case the ARM64 client doesn't pass them.
+STEAM_REAL="$(realpath "${STEAM}" 2>/dev/null || echo "${STEAM}")"
+if [[ -z "${PROTON_EAC_RUNTIME:-}" && -d "${STEAM_REAL}/steamapps/common/Proton EasyAntiCheat Runtime" ]]; then
+  export PROTON_EAC_RUNTIME="${STEAM_REAL}/steamapps/common/Proton EasyAntiCheat Runtime"
+fi
+if [[ -z "${PROTON_BATTLEYE_RUNTIME:-}" && -d "${STEAM_REAL}/steamapps/common/Proton BattlEye Runtime" ]]; then
+  export PROTON_BATTLEYE_RUNTIME="${STEAM_REAL}/steamapps/common/Proton BattlEye Runtime"
+fi
+# Steam's interface (its Chromium web views: Big Picture, the store) on the Mac's GPU: OpenGL
+# through zink on Venus, presented by the bottle layer. Off: Mesa's llvmpipe, on the CPU.
+# LIBGL_KOPPER_DRI2: Xvnc has no DRI3, and without this Mesa refuses zink for GLX (and EGL
+# quietly falls back to llvmpipe); zink's own presenting (kopper) doesn't need DRI3.
+# Steam sets LIBGL_KOPPER_DISABLE=true for its web views, which leaves zink no way to show
+# frames here (no DRI3): the bottle's shim (/usr/local/lib64/libbottle_kopper.so, from
+# present-layer/bottle_kopper.c), standing in for Mesa's GLVND libraries on Steam's library path,
+# undoes it. Without the shim the mode would be a black screen, so it stays off.
+# The mode's settings never go into Steam's environment (games would inherit them; Steam starts
+# its web helper through sh, so taking them off Steam's other children took them off the web
+# helper too: Big Picture was on the CPU from 14:03 to 17:30 on Oct 9). Only BOTTLE_STEAM_GPU=zink
+# and the stand-ins' list do; the shim sets zink's own settings inside the web helper.
+KOPPER_SHIM=/usr/local/lib64/libbottle_kopper.so
+steam_zink=0
+if [[ "$(cat "${LOG_DIR}/steam-gpu" 2>/dev/null)" == zink && -z "${MESA_LOADER_DRIVER_OVERRIDE:-}" ]]; then
+  if [[ -f "$KOPPER_SHIM" ]]; then
+    steam_zink=1
+    # The Mac's GPU (Venus on KosmicKrisp) has no transform feedback and no geometry shaders, so
+    # zink offers only OpenGL 2.1 (no core profile), and Steam's interface asks for more: the
+    # bottle layer reports them to zink as it does to DXVK (stand-ins Steam never uses).
+    # Which ones: what bottle steam-gpu on found to work (steam-gpu-fake), else geometry shaders.
+    BOTTLE_STEAM_GPU_FAKE="$(cat "${LOG_DIR}/steam-gpu-fake" 2>/dev/null)"
+    export BOTTLE_STEAM_GPU=zink BOTTLE_STEAM_GPU_FAKE="${BOTTLE_STEAM_GPU_FAKE:-geometryShader}"
+  else
+    echo "Steam's interface stays on the processors: the bottle's OpenGL shim is missing (Bottle > Update the Bottle)."
+  fi
+fi
+# glibc reports fatal errors (heap corruption etc.) on /dev/tty, which games here don't have;
+# send them to stderr so they land in the game log (bottle log).
+export LIBC_FATAL_STDERR_=1
+# Sound: games reach PipeWire's silent output (update-guest.sh) through its PulseAudio
+# socket; Steam's container (pressure-vessel) passes PULSE_SERVER on to Proton.
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+if [[ ! -S "${XDG_RUNTIME_DIR}/pulse/native" ]]; then
+  systemctl --user start pipewire.socket pipewire-pulse.socket wireplumber.service >/dev/null 2>&1 || true
+fi
+[[ -S "${XDG_RUNTIME_DIR}/pulse/native" ]] && export PULSE_SERVER="${PULSE_SERVER:-unix:${XDG_RUNTIME_DIR}/pulse/native}"
+# Valve's client expects Debian's CA bundle path; Fedora keeps it elsewhere.
+for ca in /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt; do
+  [[ -f "$ca" ]] && { export SSL_CERT_FILE="${SSL_CERT_FILE:-$ca}"; break; }
+done
+[[ -d /etc/pki/ca-trust/extracted/pem/directory-hash ]] \
+  && export SSL_CERT_DIR="${SSL_CERT_DIR:-/etc/pki/ca-trust/extracted/pem/directory-hash}"
+
+log_info() { echo -e "[\033[1;34mINFO\033[0m] $1"; }
+die()      { echo -e "[\033[1;31mERROR\033[0m] $1" >&2; exit 1; }
+
+# Steam builds FEX socket paths under its folder and Unix sockets max out at 107
+# characters, so with a long home folder Steam lives in /s (made by update-guest.sh).
+if [[ ! -e "${STEAM}" && ${#HOME} -gt 16 && -d /s && -w /s ]]; then
+  mkdir -p "$(dirname "${STEAM}")"
+  ln -s /s "${STEAM}"
+fi
+mkdir -p "${STEAM}" "${LOG_DIR}"
+
+install_steam_runtime_arm64() {
+  if [[ -d "${RUNTIME_DIR}" ]]; then
+    log_info "Steam runtime already present."
+    return 0
+  fi
+  log_info "Downloading Steam runtime (arm64)…"
+  local tar_path="${STEAM}/steam-runtime-steamrt-arm64.tar.xz"
+  wget -c -t 5 -O "${tar_path}" "${RUNTIME_TAR_URL}" || die "Failed to download the Steam runtime."
+  tar xf "${tar_path}" -C "${STEAM}" || die "Failed to extract the Steam runtime."
+  rm -f "${tar_path}"
+}
+
+link_runtime_lib() {  # $1 = glob, $2 = symlink name (soname)
+  local target
+  # 1) Anywhere in the runtime: Valve changes the tarball layout between betas.
+  target=$(find "${RUNTIME_DIR}" -name "$1" -path '*aarch64*' \( -type f -o -type l \) 2>/dev/null | sort | head -n 1)
+  # 2) Fall back to Fedora's own copy (gtk2 / ibus-libs packages).
+  if [[ -z "$target" ]]; then
+    target=$(/usr/sbin/ldconfig -p | awk -v so="$2" '$1 == so && /AArch64/ {print $NF; exit}')
+    [[ -n "$target" ]] && log_info "$2 not in the runtime; using system copy ${target}"
+  fi
+  if [[ -z "$target" ]]; then
+    log_info "WARNING: $2 not found (sudo dnf install gtk2 ibus-libs). Trying without it."
+    return 0
+  fi
+  ln -sfn "$(realpath "${target}")" "${STEAM}/lib/aarch64-linux-gnu/$2"
+}
+
+symlink_libraries() {
+  mkdir -p "${STEAM}/lib/aarch64-linux-gnu"
+  link_runtime_lib 'libibus-1.0.so.5.*'     libibus-1.0.so.5
+  link_runtime_lib 'libgtk-x11-2.0.so.0.*'  libgtk-x11-2.0.so.0
+  link_runtime_lib 'libgdk-x11-2.0.so.0.*'  libgdk-x11-2.0.so.0
+
+  local vpx
+  vpx=$(/usr/sbin/ldconfig -p | grep -E 'libvpx.*AArch64' | awk -F' => ' '{print $2}' | sort -V | head -n 1)
+  [[ -n "$vpx" ]] || die "libvpx not found (sudo dnf install libvpx)."
+  ln -sfn "$(realpath "$vpx")" "${STEAM}/lib/aarch64-linux-gnu/libvpx.so.6"
+
+  # Steam's interface on the Mac's GPU: the kopper shim under Mesa's GLVND names (above), only
+  # in that mode; GLVND finds Mesa's real ones in the system folders otherwise.
+  local n
+  for n in libGLX_mesa.so.0 libEGL_mesa.so.0; do
+    if (( steam_zink )); then
+      ln -sfn "$KOPPER_SHIM" "${STEAM}/lib/aarch64-linux-gnu/$n"
+    else
+      rm -f "${STEAM}/lib/aarch64-linux-gnu/$n"
+    fi
+  done
+}
+
+# Steam's in-game overlay UI (steamrtarm64/gameoverlayui, one per game) loads gameoverlayui.so,
+# which finds the libraries it needs next to itself ($ORIGIN) but not what those need in turn:
+# its libavif.so.16 needs libdav1d.so.6, also in steamrtarm64, which nothing on the library path
+# points at here. So gameoverlayui.so doesn't load, the UI process crashes on the way out (dlclose
+# of a NULL handle: SIGSEGV in _dl_close, Oct 10, every game start), and no game gets an overlay
+# (no Shift+Tab, no FPS counter or performance monitor). Asks the loader what's missing and links
+# just those from steamrtarm64 into the folder on Steam's library path; again at every start,
+# since a client update can change them.
+overlay_ui_libs() {
+  local rt="${STEAM}/steamrtarm64" dir="${STEAM}/lib/aarch64-linux-gnu" n missing
+  [[ -f "$rt/gameoverlayui.so" ]] || return 0
+  for n in 1 2 3 4 5 6 7 8 9 10; do
+    missing="$(cd "$rt" && LD_LIBRARY_PATH="$dir" timeout 10 /lib/ld-linux-aarch64.so.1 --list ./gameoverlayui.so 2>&1 \
+      | sed -n -e 's/.*error while loading shared libraries: \([^:]*\):.*/\1/p' -e 's/^[[:space:]]*\([^ ]*\) => not found.*/\1/p' | head -n 1)"
+    [[ -n "$missing" ]] || return 0
+    if [[ ! -e "$rt/$missing" ]]; then
+      log_info "Steam overlay: $missing (needed by its UI) isn't in steamrtarm64; the overlay may not work"
+      return 0
+    fi
+    ln -sfn "$rt/$missing" "$dir/$missing"
+    log_info "Steam overlay: linked $missing from steamrtarm64 (its UI needs it)"
+  done
+}
+
+# The Mac's GPU numbers in Steam's performance monitor: its overlay UI (gameoverlayui.so) reads
+# GPU load, memory and temperature through NVML when libnvidia-ml.so.1 loads. The bottle's own
+# (guest/nvml, from update-guest) answers with what the Mac app measures; it goes into Steam's
+# library folder only, so nothing else in the VM takes the Mac for an NVIDIA GPU.
+# BOTTLE_GPU_STATS=0 leaves it out.
+gpu_stats_lib() {
+  local lib=/usr/local/lib/steamos-bottle/libnvidia-ml.so.1 dir="${STEAM}/lib/aarch64-linux-gnu"
+  if [[ "${BOTTLE_GPU_STATS:-1}" == 0 || ! -f "$lib" ]]; then
+    [[ -L "$dir/libnvidia-ml.so.1" ]] && rm -f "$dir/libnvidia-ml.so.1"
+    return 0
+  fi
+  mkdir -p "$dir" && ln -sfn "$lib" "$dir/libnvidia-ml.so.1"
+}
+
+# Steam's in-game overlay, game side: Steam starts each game with the x86 overlay renderer
+# (ubuntu12_64/gameoverlayrenderer.so) in LD_PRELOAD, but its container launcher here, the arm64
+# pressure-vessel, can't work out x86 library paths and drops it, so the game gets none. The
+# present layer then loads it itself, which is too late for what it does by being preloaded:
+# catching the game's X display and window and its keyboard (Shift+Tab). With that, Steam's
+# overlay came up but laid out for a 100x100 window, a few thin lines on the screen (Oct 10).
+# Proton applies the settings in a user_settings.py next to its proton script to the game's
+# environment, inside the container: this one puts the renderer back in LD_PRELOAD there, only
+# when Steam asked for the overlay (and not with BOTTLE_STEAM_OVERLAY=0). A user_settings.py of
+# someone's own (no "SteamOS Bottle" in it) is left alone.
+# The same file gives a game that quit by itself within a minute last time a detailed log this
+# time: Wine's exceptions and the program's own debug messages, which the light log every
+# launch gets leaves out (a crash or a silent quit says why there). FINAL FANTASY RESONANCE
+# DEMO quit 3 s after starting, before any graphics, and the light log couldn't say why (Oct
+# 10). Proton reads the previous launch's ~/steam-<appid>.log only after this file has run, and
+# a WINEDEBUG already set (the light log's) wins over user_settings, so the detailed one goes
+# straight into Proton's game environment. Only when the light log is this launcher's own
+# (BOTTLE_LIGHT_LOG=1), not a PROTON_LOG or WINEDEBUG of the user's.
+PROTON_OVERLAY_SETTINGS='# SteamOS Bottle (steam-arm64 writes this file; delete it to stop that, or put your own here)
+# Proton applies these settings to the game'"'"'s environment.
+import os
+user_settings = {}
+# Steam'"'"'s in-game overlay for the game
+if os.environ.get("ENABLE_VK_LAYER_VALVE_steam_overlay_1") == "1" and os.environ.get("BOTTLE_STEAM_OVERLAY", "1") != "0" \
+        and "gameoverlayrenderer" not in os.environ.get("LD_PRELOAD", ""):
+    _r = os.path.join(os.environ.get("STEAM_COMPAT_CLIENT_INSTALL_PATH") or "/s", "ubuntu12_64", "gameoverlayrenderer.so")
+    if os.path.exists(_r):
+        _pre = [os.environ.get("LD_PRELOAD", "")]
+        # BOTTLE_OVERLAY_GL_TRACE=1 (steam.env): what the overlay draws in OpenGL programs, logged
+        # (guest/present-layer/bottle_gltrace.c; it has to come before the renderer)
+        _t = os.path.join(os.environ.get("HOME", ""), ".cache/steamos-bottle/kit/guest/present-layer/x86_64/libbottle_gltrace.so")
+        if os.environ.get("BOTTLE_OVERLAY_GL_TRACE") == "1" and os.path.exists(_t):
+            _pre.append(_t)
+        user_settings["LD_PRELOAD"] = ":".join(p for p in _pre + [_r] if p)
+# Per-game settings: KEY=VALUE lines in ~/.config/steamos-bottle/games/<appid>.env (yours) and
+# in the kit (guest/games/<appid>.env, for games the bottle knows need something); yours win, and
+# a setting in the launch options or steam.env wins over both (this launcher'"'"'s own defaults
+# don'"'"'t). What was applied is noted in ~/.cache/steamos-bottle/game-logs/settings-<appid>.txt.
+def _bottle_game_env():
+    import time, __main__
+    app = os.environ.get("SteamGameId", "")
+    if not app.isdigit():
+        return
+    env = __main__.g_session.env
+    home = os.environ["HOME"]
+    vals = {}
+    for d in (os.path.join(home, ".cache/steamos-bottle/kit/guest/games"), os.path.join(home, ".config/steamos-bottle/games")):
+        try:
+            with open(os.path.join(d, app + ".env")) as fh:
+                for line in fh:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        k, v = line.split("=", 1)
+                        vals[k.strip()] = v.strip()
+        except OSError:
+            pass
+    if not vals:
+        return
+    auto = set(os.environ.get("BOTTLE_AUTO_VARS", "").split(":"))
+    used = {k: v for k, v in vals.items() if k not in os.environ or k in auto}
+    # BOTTLE_GAME_ARGS: more for the game'"'"'s command line (bottle-whyquit'"'"'s DirectX 11 switch,
+    # say), after the launch options; Proton adds its cmdlineappend list at the end
+    extra = used.pop("BOTTLE_GAME_ARGS", "")
+    if extra:
+        import shlex
+        __main__.g_session.cmdlineappend.extend(shlex.split(extra.split("#")[0]))
+        used["(command line +)"] = extra.split("#")[0].strip()
+    env.update({k: v for k, v in used.items() if not k.startswith("(")})
+    try:
+        d = os.path.join(home, ".cache/steamos-bottle/game-logs")
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "settings-" + app + ".txt"), "w") as fh:
+            fh.write(time.strftime("%Y-%m-%d %H:%M:%S") + " applied: " + " ".join("%s=%s" % kv for kv in sorted(used.items())) + "\n")
+            skipped = sorted(set(vals) - set(used) - ({"BOTTLE_GAME_ARGS"} if extra else set()))
+            if skipped:
+                fh.write("left to the launch options / steam.env: " + " ".join(skipped) + "\n")
+    except OSError:
+        pass
+try:
+    _bottle_game_env()
+except Exception:
+    pass
+# A detailed log for a game that quit by itself within a minute last time
+def _bottle_detailed_log():
+    import re, time, __main__
+    app = os.environ.get("SteamGameId")
+    if os.environ.get("BOTTLE_LIGHT_LOG") != "1" or not app:
+        return
+    env = __main__.g_session.env
+    if env.get("WINEDEBUG") != os.environ.get("WINEDEBUG"):
+        return
+    f = os.path.join(env.get("PROTON_LOG_DIR", os.environ["HOME"]), "steam-" + app + ".log")
+    if time.time() - os.stat(f).st_mtime > 86400:
+        return
+    with open(f, "rb") as fh:
+        head = fh.read(400000)
+        fh.seek(0, 2)
+        fh.seek(max(0, fh.tell() - 400000))
+        tail = fh.read()
+    ts = re.compile(rb"^(\d+\.\d+):[0-9a-f]{4}:", re.M)
+    first, last = ts.search(head), ts.findall(tail)
+    if first and last and float(last[-1]) - float(first.group(1)) < 60:
+        env["WINEDEBUG"] = "+timestamp,+pid,+tid,+seh,+threadname,+debugstr,+loaddll,+mscoree"
+        env["BOTTLE_DETAILED_LOG"] = "%d" % (float(last[-1]) - float(first.group(1)))
+try:
+    _bottle_detailed_log()
+except Exception:
+    pass
+'
+proton_overlay_settings() {
+  local p f n=0
+  for p in "${STEAM}"/steamapps/common/*/proton "${STEAM}"/compatibilitytools.d/*/proton; do
+    [[ -f "$p" ]] || continue
+    f="${p%/proton}/user_settings.py"
+    if [[ -f "$f" ]] && ! grep -q "SteamOS Bottle" "$f"; then
+      log_info "Steam overlay: ${f#"${STEAM}"/} is someone's own; left as it is"
+      continue
+    fi
+    if [[ "$(cat "$f" 2>/dev/null)" != "$PROTON_OVERLAY_SETTINGS" ]]; then
+      printf '%s' "$PROTON_OVERLAY_SETTINGS" > "$f" && n=$((n + 1))
+    fi
+  done
+  (( n )) && log_info "Steam overlay: wrote user_settings.py for $n Proton install(s)"
+  return 0
+}
+
+install_steam_client_arm64() {
+  if [[ -d "${CLIENT_DIR}" ]]; then
+    log_info "Steam client already present."
+    return 0
+  fi
+  log_info "Downloading Steam client (arm64, publicbeta)…"
+  local manifest target_file zip_path="${STEAM}/linuxarm64.zip"
+  manifest=$(curl -fsSL "${STEAM_MANIFEST_URL}" | strings) || die "Failed to fetch the Steam client manifest."
+  target_file=$(grep -oP 'bins_linuxarm64_linuxarm64\.zip\.(?!vz\.)[^"]+' <<<"${manifest}" | head -n1)
+  [[ -n "$target_file" ]] || die "Couldn't find the arm64 client in the manifest (Valve may have moved it)."
+
+  wget -c -t 5 -O "${zip_path}" "${STEAM_CDN}/${target_file}" || die "Failed to download the Steam client."
+  unzip -oq "${zip_path}" -d "${STEAM}" || die "Failed to extract the Steam client."
+  rm -f "${zip_path}"
+  chmod +x "${CLIENT_DIR}/steam" || die "Steam client binary missing after extract."
+
+  mkdir -p "${STEAM}/package" "${STEAM_DOT}" "${STEAM}/compatibilitytools.d"
+  echo publicbeta > "${STEAM}/package/beta"
+}
+
+# The ~/.steam links Valve's steam.sh normally creates. Proton (x86_64 build, run
+# under FEX) loads ~/.steam/sdk64/steamclient.so; the overlay comes from bin32/bin64.
+link_dot_steam() {
+  local root
+  root="$(realpath "${STEAM}")"
+  mkdir -p "${STEAM_DOT}"
+  ln -sfn "$root"              "${STEAM_DOT}/steam"
+  ln -sfn "$root"              "${STEAM_DOT}/root"
+  ln -sfn "$root/linuxarm64"   "${STEAM_DOT}/sdkarm64"
+  ln -sfn "$root/linux32"      "${STEAM_DOT}/sdk32"
+  ln -sfn "$root/linux64"      "${STEAM_DOT}/sdk64"
+  ln -sfn "$root/ubuntu12_32"  "${STEAM_DOT}/bin32"
+  if [[ -d "$root/ubuntu12_64" ]]; then ln -sfn "$root/ubuntu12_64" "${STEAM_DOT}/bin64"
+  else ln -sfn "$root/linux64" "${STEAM_DOT}/bin64"; fi
+}
+
+# Steam's performance monitor (Oct 11): its bar is as tall as its tallest part, and in the ARM64
+# overlay UI the FPS graph's and the CPU core graph's height settings are often left unset (a
+# garbage number: 168656137 in The Witcher 3's launcher). The bar then grows to the window's
+# height: a dark band down the left side with the numbers pushed out of view, in games and in
+# launchers. Hidden parts don't count towards the height, so this turns both graphs off, once
+# per Steam user, before Steam starts (InGameOverlayShowFPSGraphFPS and ...GraphCPU "0" in the
+# block "system" of the user's localconfig.vdf; the first copy is kept next to it as
+# localconfig.vdf.bottle-before-perfgraphs). The numbers stay. Graphs turned back on in Steam's
+# settings stay on. BOTTLE_PERF_GRAPHS=1 leaves the setting alone.
+perf_graphs_off() {
+  [[ "${BOTTLE_PERF_GRAPHS:-0}" == 1 ]] && return 0
+  pgrep -x steam >/dev/null 2>&1 && return 0     # (Steam writes this file when it quits)
+  local mark="${HOME}/.config/steamos-bottle/perf-graphs-off"
+  mkdir -p "${mark%/*}"
+  python3 - "$mark" "${STEAM}"/userdata/*/config/localconfig.vdf <<'PY' || true
+import os, re, shutil, sys
+mark, files = sys.argv[1], [f for f in sys.argv[2:] if os.path.isfile(f)]
+done = set(open(mark).read().split()) if os.path.exists(mark) else set()
+want = {"InGameOverlayShowFPSGraphFPS": "0", "InGameOverlayShowFPSGraphCPU": "0"}
+for path in files:
+    user = path.split(os.sep)[-3]
+    if user in done:
+        continue
+    lines = open(path, encoding="utf-8", errors="surrogateescape").read().split("\n")
+    stack, prev, start, end = [], "", None, None
+    for i, line in enumerate(lines):
+        t = line.strip()
+        if t == "{":
+            stack.append(prev.strip('"'))
+            if stack == ["UserLocalConfigStore", "system"]:
+                start = i
+        elif t == "}":
+            if stack == ["UserLocalConfigStore", "system"] and start is not None and end is None:
+                end = i
+            stack and stack.pop()
+        if t:
+            prev = t
+    if start is None or end is None:
+        continue                      # (no such block yet: next time)
+    indent = re.match(r"\s*", lines[end]).group(0) + "\t"
+    left = dict(want)
+    for i in range(start + 1, end):
+        m = re.match(r'(\s*)"([^"]+)"(\s+)"', lines[i])
+        if m and m.group(2) in left:
+            lines[i] = f'{m.group(1)}"{m.group(2)}"\t\t"{left.pop(m.group(2))}"'
+    lines[end:end] = [f'{indent}"{k}"\t\t"{v}"' for k, v in left.items()]
+    bak = path + ".bottle-before-perfgraphs"
+    if not os.path.exists(bak):
+        shutil.copy2(path, bak)
+    with open(path + ".tmp", "w", encoding="utf-8", errors="surrogateescape") as f:
+        f.write("\n".join(lines))
+    os.replace(path + ".tmp", path)
+    done.add(user)
+    print(f"Performance monitor: graphs off for Steam user {user} (they made its bar as tall as the window)")
+open(mark, "w").write("\n".join(sorted(done)) + "\n")
+PY
+}
+
+# Every game as its Windows version through Proton Experimental (native Linux versions would
+# draw in software). Set up before Steam starts: Steam reads these settings only then.
+# See bottle-steamplay.
+steamplay_setup() {
+  [[ "${BOTTLE_STEAMPLAY:-1}" == 0 ]] && return 0
+  command -v bottle-steamplay >/dev/null || return 0
+  bottle-steamplay build || true
+  bottle-steamplay map || true
+}
+# Portalistic's game folders (folders on the Mac or a drive, which the Mac shares with the VM at
+# /mnt/portalistic/NAME) as Steam libraries, Steam's tools moved off them, and the default
+# library for new games: before Steam starts, since it reads (and writes back) these files then.
+# See bottle-libraries; `bottle library` on the Mac manages the list.
+libraries_setup() {
+  command -v bottle-libraries >/dev/null || return 0
+  bottle-libraries sync || true
+}
+# DXVK 2.6.2 next to each Windows game's .exe, inside every Proton and in every game's prefix:
+# Proton's own DXVK needs GPU features this one lacks (bottle-dxvk says more).
+dxvk_watch_pid=""
+start_dxvk_watch() {
+  [[ "${BOTTLE_DXVK:-1}" == 0 ]] && return 0
+  command -v bottle-dxvk >/dev/null || return 0
+  bottle-dxvk apply --quiet || true
+  # every 5 s, only games whose Steam manifest changed (an install or update finishing), so a
+  # game is covered before its first start; the full pass above ran at Steam's start
+  ( while sleep 5; do
+      bottle-dxvk apply --quiet --quick || true
+    done ) &
+  dxvk_watch_pid=$!
+}
+# Proton starts ~/steam-<appid>.log over on every launch; keep the earlier ones.
+logkeep_pid=""
+start_logkeep() {
+  command -v bottle-logkeep >/dev/null || return 0
+  bottle-logkeep </dev/null >/dev/null 2>&1 &
+  logkeep_pid=$!
+}
+stop_dxvk_watch() {
+  [[ -n "${dxvk_watch_pid}" ]] && kill "${dxvk_watch_pid}" 2>/dev/null
+  dxvk_watch_pid=""
+  [[ -n "${logkeep_pid}" ]] && kill "${logkeep_pid}" 2>/dev/null
+  logkeep_pid=""
+}
+trap stop_dxvk_watch EXIT
+
+SECONDS=0
+first_run=0
+[[ -d "${CLIENT_DIR}" ]] || first_run=1
+
+install_steam_runtime_arm64
+symlink_libraries
+install_steam_client_arm64
+overlay_ui_libs
+gpu_stats_lib
+link_dot_steam
+(( first_run )) && echo "$(date -Is) install: ${SECONDS}s" >> "${TIMING_LOG}"
+
+libraries_setup
+steamplay_setup
+perf_graphs_off
+proton_overlay_settings
+start_dxvk_watch
+start_logkeep
+# Steam stays on the screen the Mac app shows: Big Picture up and full screen (or the desktop
+# main window maximized), coming back when it's left, minimized or closed, and Steam itself
+# starting again if it quits (bottle-maximize-steam --keep). This start isn't a stop any more.
+rm -f "${HOME}/.cache/steamos-bottle/steam-stopped"
+# (without the GPU mode's settings: the Steam it may start again reads the mode itself)
+command -v bottle-maximize-steam >/dev/null && {
+  env -u MESA_LOADER_DRIVER_OVERRIDE -u LIBGL_KOPPER_DRI2 -u BOTTLE_STEAM_ZINK -u BOTTLE_PRESENT_DEBUG -u BOTTLE_FAKE_ZINK \
+      -u BOTTLE_GPU_UI_VARS -u BOTTLE_STEAM_GPU -u BOTTLE_STEAM_GPU_FAKE \
+    setsid -f bottle-maximize-steam --keep </dev/null >/dev/null 2>&1; }
+ui_args=()
+if [[ "$(cat "${LOG_DIR}/steam-ui" 2>/dev/null)" != desktop && " $* " != *" -gamepadui "* ]]; then
+  ui_args=(-gamepadui)
+fi
+run_env=(LD_LIBRARY_PATH="${STEAM}/lib/aarch64-linux-gnu/${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}")
+if (( steam_zink )); then
+  # (the shim's log: which web helper processes it put on the GPU)
+  K_LOG="${HOME}/.cache/steamos-bottle/kopper.log"
+  mkdir -p "${K_LOG%/*}"
+  [[ -f "$K_LOG" ]] && mv -f "$K_LOG" "$K_LOG.1"
+fi
+log_info "Starting Steam on DISPLAY=${DISPLAY} ${ui_args[*]} $*"
+SECONDS=0
+env "${run_env[@]}" "${CLIENT_DIR}/steam" "${ui_args[@]}" "$@"
+EXITCODE=$?
+echo "$(date -Is) session: ${SECONDS}s exit=${EXITCODE} args='$*'" >> "${TIMING_LOG}"
+
+stop_dxvk_watch
+if [[ ${EXITCODE} -eq 42 ]]; then
+  log_info "Steam asked to restart (self-update)."
+  exec "$0" "$@"
+fi
+exit "${EXITCODE}"

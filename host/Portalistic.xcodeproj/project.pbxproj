@@ -1,0 +1,216 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		B0771E000000000000000102 /* AppIcon.icns in Resources */ = {isa = PBXBuildFile; fileRef = B0771E000000000000000002 /* AppIcon.icns */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		B0771E000000000000000002 /* AppIcon.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; path = AppIcon.icns; sourceTree = "<group>"; };
+		B0771E000000000000000003 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		B0771E000000000000000004 /* Bottle.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Bottle.xcconfig; sourceTree = "<group>"; };
+		B0771E000000000000000005 /* Portalistic.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Portalistic.app; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		B0771E000000000000000006 /* Portalistic */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Portalistic;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		B0771E000000000000000201 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		B0771E000000000000000301 = {
+			isa = PBXGroup;
+			children = (
+				B0771E000000000000000006 /* Portalistic */,
+				B0771E000000000000000002 /* AppIcon.icns */,
+				B0771E000000000000000302 /* xcode */,
+				B0771E000000000000000303 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		B0771E000000000000000302 /* xcode */ = {
+			isa = PBXGroup;
+			children = (
+				B0771E000000000000000003 /* Info.plist */,
+				B0771E000000000000000004 /* Bottle.xcconfig */,
+			);
+			path = xcode;
+			sourceTree = "<group>";
+		};
+		B0771E000000000000000303 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				B0771E000000000000000005 /* Portalistic.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		B0771E000000000000000401 /* Portalistic */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B0771E000000000000000602 /* Build configuration list for PBXNativeTarget "Portalistic" */;
+			buildPhases = (
+				B0771E000000000000000202 /* Sources */,
+				B0771E000000000000000201 /* Frameworks */,
+				B0771E000000000000000203 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				B0771E000000000000000006 /* Portalistic */,
+			);
+			name = Portalistic;
+			packageProductDependencies = (
+			);
+			productName = Portalistic;
+			productReference = B0771E000000000000000005 /* Portalistic.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		B0771E000000000000000501 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2600;
+				LastUpgradeCheck = 2600;
+				TargetAttributes = {
+					B0771E000000000000000401 = {
+						CreatedOnToolsVersion = 15.0;
+					};
+				};
+			};
+			buildConfigurationList = B0771E000000000000000601 /* Build configuration list for PBXProject "Portalistic" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = B0771E000000000000000301;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = B0771E000000000000000303 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				B0771E000000000000000401 /* Portalistic */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		B0771E000000000000000203 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B0771E000000000000000102 /* AppIcon.icns in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		B0771E000000000000000202 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		B0771E000000000000000701 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = B0771E000000000000000004 /* Bottle.xcconfig */;
+			buildSettings = {
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = M9RH7ZG8W4;
+				ENABLE_TESTABILITY = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				ONLY_ACTIVE_ARCH = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		B0771E000000000000000702 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = B0771E000000000000000004 /* Bottle.xcconfig */;
+			buildSettings = {
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = M9RH7ZG8W4;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+			};
+			name = Release;
+		};
+		B0771E000000000000000703 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = M9RH7ZG8W4;
+				PROVISIONING_PROFILE_SPECIFIER = "";
+			};
+			name = Debug;
+		};
+		B0771E000000000000000704 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = M9RH7ZG8W4;
+				PROVISIONING_PROFILE_SPECIFIER = "";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		B0771E000000000000000601 /* Build configuration list for PBXProject "Portalistic" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B0771E000000000000000701 /* Debug */,
+				B0771E000000000000000702 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		B0771E000000000000000602 /* Build configuration list for PBXNativeTarget "Portalistic" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B0771E000000000000000703 /* Debug */,
+				B0771E000000000000000704 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = B0771E000000000000000501 /* Project object */;
+}

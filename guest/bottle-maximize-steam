@@ -1,0 +1,167 @@
+#!/usr/bin/env bash
+# bottle-maximize-steam: keep Steam on the screen the Mac app shows.
+#
+#   bottle-maximize-steam              Steam's desktop main window fills the screen, once, now
+#   bottle-maximize-steam --wait 180   the same, waiting up to 180 s for that window
+#   bottle-maximize-steam --keep       while the VM runs: keep Steam there (below)
+#
+# Steam's interface is Big Picture (the default) or its desktop windows, as chosen with
+# `bottle ui` (~/.config/steamos-bottle/steam-ui). --keep checks about twice a second:
+#
+# Big Picture: its window ("Steam Big Picture Mode") stays up and full screen. Left (Exit Big
+# Picture, or a Steam started without it), it opens again (steam://open/bigpicture); minimized,
+# it comes back. Steam itself quit (Exit Steam in its power menu, a crash) starts again, as on
+# SteamOS, unless the bottle stopped it (bottle steam / stop leave ~/.cache/steamos-bottle/
+# steam-stopped, which steam-arm64 removes when Steam starts).
+#
+# Desktop: Steam draws its own minimize, maximize and close buttons and the VM's desktop has no
+# taskbar, so a minimized main window (the big one titled "Steam"; its menus and dialogs carry
+# the same title and keep their size) comes back, an un-maximized one fills the screen again and
+# a closed one opens again (steam://open/main).
+#
+# Neither while a game runs (bringing Steam forward would cover it): that waits for the game to
+# end. One copy runs (a lock); steam-arm64 and bottle-desktop start it. What it does goes to
+# ~/.config/steamos-bottle/steam-window.log.
+export DISPLAY="${DISPLAY:-:1}"
+command -v wmctrl >/dev/null || exit 0
+
+# A window's id by title ("" when there's none); wmctrl -lG prints id desktop x y w h host title.
+# The desktop main window is the big one titled "Steam".
+window_titled() {
+  wmctrl -lG 2>/dev/null | awk -v want="$1" -v big="${2:-0}" '{
+    t = ""; for (i = 8; i <= NF; i++) t = t (i > 8 ? " " : "") $i
+    if (t == want && (!big || ($5 >= 1000 && $6 >= 600))) { print $1; exit } }'
+}
+main_window() { window_titled Steam 1; }
+bp_window() { window_titled "Steam Big Picture Mode"; }
+
+maximize() { wmctrl -i -r "$1" -b add,maximized_vert,maximized_horz 2>/dev/null; }
+
+case "${1:-}" in
+  --keep) ;;
+  --wait|"")
+    wait=0
+    [[ "${1:-}" == --wait ]] && wait="${2:-180}"
+    end=$(( SECONDS + wait ))
+    while :; do
+      id="$(main_window)"
+      if [[ -n "$id" ]]; then maximize "$id"; exit 0; fi
+      (( SECONDS >= end )) && exit 0
+      sleep 2
+    done ;;
+  *) echo "usage: bottle-maximize-steam [--wait SECONDS | --keep]" >&2; exit 2 ;;
+esac
+
+# --keep
+STATE="$HOME/.config/steamos-bottle"
+CACHE="$HOME/.cache/steamos-bottle"
+mkdir -p "$STATE" "$CACHE"
+LOG="$STATE/steam-window.log"
+exec 9>"$CACHE/steam-window.lock"
+command -v flock >/dev/null && { flock -n 9 || exit 0; }   # already running
+log() { echo "$(date '+%F %T') $*" >> "$LOG"; }
+
+ui_mode() { local m; m="$(cat "$STATE/steam-ui" 2>/dev/null)"; [[ "$m" == desktop ]] && echo desktop || echo bigpicture; }
+steam_pid() { pgrep -o -f "[s]teamrtarm64/steam" 2>/dev/null; }
+wrapper_running() { pgrep -f "[s]team-arm64" >/dev/null; }   # starting, or restarting after an update
+game_running() { pgrep -f "[r]eaper SteamLaunch" >/dev/null || pgrep -f "[w]ineserver" >/dev/null; }
+
+steam_url() {   # the running Steam opens a steam:// link
+  local S="$HOME/.local/share/Steam"
+  LD_LIBRARY_PATH="$S/lib/aarch64-linux-gnu" XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}" \
+    timeout 30 "$S/steamrtarm64/steam" "$1" </dev/null >/dev/null 2>&1 &
+}
+
+start_steam() {   # as bottle steam does (its output in steam.log)
+  local L="$STATE/steam.log"
+  [[ -f "$L" ]] && mv -f "$L" "$L.1"
+  setsid -f steam-arm64 </dev/null >"$L" 2>&1
+}
+
+log "keeping Steam on screen ($(ui_mode))"
+pid="" seen=0 gone=0 asked=-100 missing_since=0 restarted=-100 fixed=-10 said=""   # -100: long ago
+# Acts at most every 2 s (a window manager that won't do it doesn't get asked twice a second),
+# and logs each kind of fix once until something else happens.
+fix() {
+  (( SECONDS - fixed >= 2 )) || return 1
+  fixed=$SECONDS
+  [[ "$said" == "$1" ]] || { log "$1"; said="$1"; }
+}
+# The window ($1) is shown and full size ($2: maximized or fullscreen); else fixes that.
+keep_up() {
+  local id="$1" how="$2" st
+  game_running && return 0   # Steam stays where it is while a game runs (it'd cover the game)
+  st="$(xprop -id "$id" _NET_WM_STATE 2>/dev/null)"
+  if [[ "$st" == *_NET_WM_STATE_HIDDEN* ]]; then
+    if fix "$3 minimized: bringing it back"; then
+      wmctrl -i -a "$id" 2>/dev/null
+      [[ "$how" == maximized ]] && maximize "$id"
+    fi
+  elif [[ "$how" == maximized && ( "$st" != *_NET_WM_STATE_MAXIMIZED_VERT* || "$st" != *_NET_WM_STATE_MAXIMIZED_HORZ* ) ]]; then
+    fix "$3 not full size: maximizing it again" && maximize "$id"
+  elif [[ "$how" == fullscreen && "$st" != *_NET_WM_STATE_FULLSCREEN* ]]; then
+    fix "$3 not full screen: making it full screen again" && wmctrl -i -r "$id" -b add,fullscreen 2>/dev/null
+  else
+    said=""
+  fi
+}
+
+while :; do
+  sleep 0.5
+  mode="$(ui_mode)"
+  p="$(steam_pid)"
+  if [[ -z "$p" ]]; then
+    # Steam not running: starting, restarting after an update, or quit.
+    (( gone == 0 )) && gone=$SECONDS
+    if [[ -f "$CACHE/steam-stopped" || "$mode" == desktop ]]; then
+      if (( SECONDS - gone > 60 )); then log "Steam isn't running; stopping"; exit 0; fi
+    elif (( SECONDS - gone >= 10 && SECONDS - restarted >= 60 )) && ! wrapper_running; then
+      log "Steam quit: starting it again"
+      start_steam
+      restarted=$SECONDS
+    fi
+    continue
+  fi
+  gone=0
+  if [[ "$p" != "$pid" ]]; then   # a new Steam session (or this watcher just started)
+    pid="$p"; seen=0; missing_since=0; asked=-100
+    # Running for minutes already: its window was surely up once (closed before we came).
+    (( $(ps -o etimes= -p "$p" 2>/dev/null || echo 0) > 120 )) && seen=1
+  fi
+
+  if [[ "$mode" == bigpicture ]]; then
+    id="$(bp_window)"
+    if [[ -n "$id" ]]; then
+      seen=1 missing_since=0
+      keep_up "$id" fullscreen "Big Picture"
+      continue
+    fi
+    # Not in Big Picture: left it, or Steam started on its desktop windows. Once Steam has had
+    # time to start (or Big Picture was up before), ask for it again, at most every 15 s.
+    (( seen || $(ps -o etimes= -p "$p" 2>/dev/null || echo 0) > 30 )) || continue
+    (( missing_since == 0 )) && missing_since=$SECONDS
+    if (( SECONDS - missing_since >= 2 && SECONDS - asked >= 15 )) && ! game_running; then
+      said=""; log "not in Big Picture: opening it"
+      steam_url steam://open/bigpicture
+      asked=$SECONDS
+    fi
+    continue
+  fi
+
+  # desktop
+  id="$(main_window)"
+  if [[ -z "$id" ]]; then
+    # Closed (or not shown yet: Steam starting, signing in). Only one that was there comes
+    # back, a few seconds after it went, and not over a game or Big Picture.
+    (( seen )) || continue
+    (( missing_since == 0 )) && missing_since=$SECONDS
+    if (( SECONDS - missing_since >= 2 && SECONDS - asked >= 15 )) && ! game_running && [[ -z "$(bp_window)" ]]; then
+      said=""; log "main window closed: opening it again"
+      steam_url steam://open/main
+      asked=$SECONDS
+    fi
+    continue
+  fi
+  seen=1 missing_since=0
+  keep_up "$id" maximized "main window"
+done

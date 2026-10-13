@@ -1,0 +1,297 @@
+#!/usr/bin/env bash
+# bottle-tso: x86 memory ordering in hardware for the VM (Apple's TSO mode), so FEX can stop
+# doing it in software for every x86 game.
+#
+# FEX runs the games' x86 code on the Mac's Arm cores. x86 programs rely on x86's strict
+# memory ordering (TSO); Arm orders memory more loosely, so for any multithreaded x86 program
+# (every Windows game: Wine alone has several threads) FEX makes each memory access an ordered
+# one, which costs a lot of speed. Apple's cores can order memory the x86 way themselves (that
+# is how Rosetta runs fast), and since macOS 14.4 a Linux VM may turn that on: bottle_tso.ko
+# does it for every CPU of the VM. Then FEX_TSOENABLED=0 (set by steam-arm64) is safe.
+#
+#   sudo bottle-tso on       build the module for this kernel, test it, and if x86 ordering
+#                            holds with it, keep it on (also after a restart of the VM)
+#   sudo bottle-tso off      back to FEX's own ordering
+#   bottle-tso status        what's on
+#   bottle-tso check         (Steam's start) exit 0 when the hardware ordering is on and holds
+#                            right now (a quick test), else 1
+#   sudo bottle-tso build    (bottle update) rebuild the module for the running kernel if it's on
+#
+# Files: /usr/local/share/steamos-bottle/tso (module source, bottle-tso-check), the module in
+# /lib/modules/<kernel>/extra, /etc/modules-load.d + /etc/modprobe.d/bottle-tso.conf while on,
+# /var/lib/steamos-bottle/tso-verified (what the test found), log tso.log there.
+set -uo pipefail
+
+SHARE="${BOTTLE_TSO_SHARE:-/usr/local/share/steamos-bottle/tso}"
+CHECK="$SHARE/bottle-tso-check.x86_64"
+SYS="${BOTTLE_TSO_SYS:-/sys/kernel/bottle_tso}"
+KVER="$(uname -r)"
+MODDIR="${BOTTLE_TSO_MODDIR:-/lib/modules}"
+KO="$MODDIR/$KVER/extra/bottle_tso.ko"
+VAR="${BOTTLE_TSO_VAR:-/var/lib/steamos-bottle}"
+VERIFIED="$VAR/tso-verified"
+LOG="$VAR/tso.log"
+ETC="${BOTTLE_TSO_ETC:-/etc}"   # (the BOTTLE_TSO_* paths are for testing)
+LOAD_CONF="$ETC/modules-load.d/bottle-tso.conf"
+OPT_CONF="$ETC/modprobe.d/bottle-tso.conf"
+
+logline() { [[ -w "$VAR" ]] && echo "$(date '+%F %T') $*" >> "$LOG"; return 0; }
+say() { echo "$*"; logline "$*"; }
+need_root() { [[ $EUID -eq 0 ]] || { echo "bottle-tso $1: needs root (sudo)"; exit 2; }; }
+# the VM's user (FEX's settings are theirs)
+user_name() { echo "${SUDO_USER:-$(id -un)}"; }
+as_user() {
+  if [[ $EUID -eq 0 && -n "${SUDO_USER:-}" ]]; then
+    local rt
+    rt="/run/user/$(id -u "$SUDO_USER")"
+    runuser -u "$SUDO_USER" -- env ${rt:+XDG_RUNTIME_DIR="$rt"} "$@"
+  else
+    "$@"
+  fi
+}
+fex_bin() { command -v FEXInterpreter 2>/dev/null || command -v FEX 2>/dev/null; }
+
+# Steam's own FEX (the one games run through), to check it honours FEX_TSOENABLED too
+steam_fex() {
+  local h d f
+  h="$(getent passwd "$(user_name)" | cut -d: -f6)"
+  for d in "$h/.local/share/Steam/steamapps/common" /s/steamapps/common; do
+    [[ -d "$d" ]] || continue
+    f="$(find -L "$d" -maxdepth 5 -path '*FEX*' \( -name FEXInterpreter -o -name FEX \) -type f -perm -u+x 2>/dev/null | head -n 1)"
+    [[ -n "$f" ]] && { echo "$f"; return 0; }
+  done
+  return 1
+}
+
+# litmus FEX TSOENABLED MS: prints the violation count (or "error")
+litmus() {
+  local out n
+  out="$(as_user env FEX_TSOENABLED="$2" "$1" "$CHECK" litmus "$3" 2>&1)"
+  n="$(sed -n 's/^violations \([0-9]*\) .*/\1/p' <<<"$out")"
+  if [[ -z "$n" ]]; then
+    logline "  litmus ($1, FEX_TSOENABLED=$2) failed: $(tr '\n' ' ' <<<"$out" | cut -c1-300)"
+    echo error
+    return 0
+  fi
+  logline "  litmus ($1, FEX_TSOENABLED=$2): $(head -n 2 <<<"$out" | tr '\n' ' ')"
+  echo "$n"
+}
+
+# bench FEX TSOENABLED: best of 3, in ms
+bench() {
+  local best="" ms
+  for _ in 1 2 3; do
+    ms="$(as_user env FEX_TSOENABLED="$2" "$1" "$CHECK" bench 4 2>/dev/null | sed -n 's/^bench \([0-9]*\) ms.*/\1/p')"
+    [[ -n "$ms" ]] || continue
+    [[ -z "$best" || "$ms" -lt "$best" ]] && best="$ms"
+  done
+  echo "${best:-0}"
+}
+
+REBUILT=0
+build_module() {
+  local src_hash
+  src_hash="$(sha1sum < "$SHARE/bottle_tso.c" | cut -c1-16)"
+  if [[ -f "$KO" && "$(cat "$KO.src" 2>/dev/null)" == "$src_hash" ]]; then return 0; fi
+  REBUILT=1
+  if [[ ! -d "$MODDIR/$KVER/build" ]]; then
+    say "Getting the kernel's build files (kernel-devel-$KVER)…"
+    if ! dnf -y -q install "kernel-devel-$KVER" >>"$LOG" 2>&1; then
+      # an older kernel than the repository's newest: Fedora's build system keeps them all
+      local v r a url
+      v="$(cut -d- -f1 <<<"$KVER")"; r="$(cut -d- -f2 <<<"$KVER")"; a="${r##*.}"; r="${r%.*}"
+      url="https://kojipkgs.fedoraproject.org/packages/kernel/$v/$r/$a/kernel-devel-$v-$r.$a.rpm"
+      say "  not in the repositories; from $url"
+      dnf -y -q install "$url" >>"$LOG" 2>&1 || { say "Couldn't get kernel-devel-$KVER (see $LOG)."; return 1; }
+    fi
+  fi
+  command -v make >/dev/null && command -v gcc >/dev/null || dnf -y -q install make gcc >>"$LOG" 2>&1
+  local b
+  b="$(mktemp -d)"
+  cp "$SHARE/bottle_tso.c" "$b/"
+  echo "obj-m := bottle_tso.o" > "$b/Kbuild"
+  if ! make -C "$MODDIR/$KVER/build" M="$b" modules >>"$LOG" 2>&1; then
+    say "Building the module failed (see $LOG)."; rm -rf "$b"; return 1
+  fi
+  install -D -m 0644 "$b/bottle_tso.ko" "$KO"
+  echo "$src_hash" > "$KO.src"
+  depmod -a "$KVER" 2>/dev/null || true
+  rm -rf "$b"
+  say "Module built for kernel $KVER."
+}
+
+loaded() { [[ -d "$SYS" ]]; }
+
+# on/off switch the ordering off for a moment: never under a running Steam, whose games may
+# have been started with FEX_TSOENABLED=0 (bottle tso on|off on the Mac quits Steam first).
+steam_quiet() {
+  [[ "${BOTTLE_TSO_IGNORE_STEAM:-0}" == 1 ]] && return 0
+  if pgrep -f "[s]teamrtarm64/steam" >/dev/null || pgrep -x wineserver >/dev/null; then
+    echo "Steam or a game is running: quit it first (bottle tso on|off on the Mac does that by itself)."
+    exit 1
+  fi
+}
+
+cmd_on() {
+  need_root on
+  steam_quiet
+  install -d -m 0755 "$VAR"
+  : > "$LOG"
+  # an earlier success counts for nothing now: it's on again only if this test passes
+  rm -f "$LOAD_CONF" "$OPT_CONF" "$VERIFIED"
+  local fex sfex base_on base_off sbase hw hw_steam b_sw b_hw cpus
+  fex="$(fex_bin)" || { say "FEX isn't installed in the VM (bottle update)."; exit 1; }
+  [[ -x "$CHECK" ]] || { say "Missing $CHECK (bottle update)."; exit 1; }
+  [[ "$(uname -m)" == aarch64 ]] || { say "Not an Arm VM."; exit 1; }
+  build_module || exit 1
+  if (( REBUILT )) && loaded; then
+    echo 0 > "$SYS/enabled" 2>/dev/null || true
+    rmmod bottle_tso 2>>"$LOG" || true
+  fi
+
+  # 1. without the hardware ordering: FEX's own ordering holds (0), and with it off the test
+  #    must see Arm's looser order, or it couldn't tell whether the hardware ordering works.
+  if loaded && [[ "$(cat "$SYS/enabled" 2>/dev/null)" == 1 ]]; then
+    echo 0 > "$SYS/enabled" 2>/dev/null || true
+  fi
+  say "1. The x86 ordering test without the hardware's help:"
+  base_on="$(litmus "$fex" 1 300)"
+  base_off="$(litmus "$fex" 0 300)"
+  say "   FEX's ordering on: $base_on out-of-order reads; FEX's ordering off: $base_off"
+  if [[ "$base_on" != 0 ]]; then
+    say "The test saw out-of-order reads even with FEX's own ordering, so it can't be trusted here: left off."
+    exit 1
+  fi
+  # (on Apple cores about half of all reads come back out of order without it: thousands at least)
+  if [[ "$base_off" == error ]] || (( base_off < 20 )); then
+    say "The test can't see the Arm ordering clearly here, so it couldn't prove the hardware ordering works: left off."
+    exit 1
+  fi
+  sbase=""
+  if sfex="$(steam_fex)"; then
+    sbase="$(litmus "$sfex" 0 200)"
+    case "$sbase" in
+      error) say "   (Steam's FEX, $sfex, doesn't run on its own here: not tested; details in $LOG)"; sbase="" ;;
+      0)     say "   Steam's FEX ($sfex) keeps its own ordering even when told not to:"
+             say "Games wouldn't gain anything, so it stays off."
+             exit 1 ;;
+      *)     say "   Steam's FEX with its ordering off: $sbase (so it takes the setting)" ;;
+    esac
+  else
+    say "   (Steam's FEX isn't there yet; Steam downloads it with the first x86 game)"
+  fi
+
+  # 2. the module, with TSO on every CPU. A refused register would stop only this load (an
+  #    error in it shouldn't take the VM down).
+  say "2. Turning on Apple's x86 ordering (TSO) on every CPU of the VM:"
+  local poo
+  poo="$(cat /proc/sys/kernel/panic_on_oops 2>/dev/null || echo 0)"
+  echo 0 > /proc/sys/kernel/panic_on_oops 2>/dev/null || true
+  if ! loaded; then
+    modprobe bottle_tso >>"$LOG" 2>&1 || insmod "$KO" >>"$LOG" 2>&1 || true
+  fi
+  echo "$poo" > /proc/sys/kernel/panic_on_oops 2>/dev/null || true
+  if ! loaded; then
+    say "   The module didn't load: $(dmesg | grep -i bottle_tso | tail -n 2 | tr '\n' ' ')"
+    exit 1
+  fi
+  say "   $(cat "$SYS/info")"
+  if ! echo 1 > "$SYS/enabled" 2>>"$LOG"; then
+    say "   The VM's hypervisor didn't take the TSO bit: $(dmesg | grep -i bottle_tso | tail -n 1)"
+    say "Left off: FEX keeps its own ordering."
+    rmmod bottle_tso 2>/dev/null || true
+    exit 1
+  fi
+  cpus="$(grep -c ' on ' "$SYS/cpus")"
+  say "   on for $cpus of $(nproc) CPUs"
+
+  # 3. with it: x86 ordering must hold with FEX's own off, on every CPU pair
+  say "3. The test again, with the hardware ordering:"
+  hw="$(litmus "$fex" 0 1000)"
+  say "   FEX's ordering off: $hw out-of-order reads"
+  hw_steam=""
+  if [[ -n "$sbase" ]]; then
+    hw_steam="$(litmus "$sfex" 0 300)"
+    say "   Steam's FEX, its ordering off: $hw_steam"
+  fi
+  if [[ "$hw" != 0 || ( -n "$hw_steam" && "$hw_steam" != 0 ) || "$cpus" != "$(nproc)" ]]; then
+    echo 0 > "$SYS/enabled" 2>/dev/null || true
+    rmmod bottle_tso 2>/dev/null || true
+    say "The hardware ordering didn't hold: left off, FEX keeps its own."
+    exit 1
+  fi
+
+  # 4. what it's worth: the same x86 work with FEX's ordering and with the hardware's
+  say "4. Speed of a multithreaded x86 workload (4 threads, best of 3):"
+  b_sw="$(bench "$fex" 1)"
+  b_hw="$(bench "$fex" 0)"
+  say "   FEX's ordering: ${b_sw} ms; the hardware's: ${b_hw} ms$( ((b_hw > 0)) && awk -v a="$b_sw" -v b="$b_hw" 'BEGIN { printf " (%.2fx as fast)", a / b }')"
+
+  echo bottle_tso > "$LOAD_CONF"
+  echo "options bottle_tso enable=1" > "$OPT_CONF"
+  {
+    echo "kernel=$KVER"
+    echo "date=$(date -Is)"
+    echo "without=$base_off with=$hw steam_without=${sbase:-} steam_with=${hw_steam:-}"
+    echo "bench_fex_ordering_ms=$b_sw bench_hardware_ordering_ms=$b_hw"
+    cat "$SYS/info"
+  } > "$VERIFIED"
+  say "On: x86 games get the hardware ordering from Steam's next start (FEX_TSOENABLED=0)."
+}
+
+cmd_off() {
+  need_root off
+  steam_quiet
+  rm -f "$LOAD_CONF" "$OPT_CONF" "$VERIFIED"
+  if loaded; then
+    echo 0 > "$SYS/enabled" 2>/dev/null || true
+    rmmod bottle_tso 2>/dev/null || true
+  fi
+  say "Off: FEX does the x86 ordering itself again (from Steam's next start)."
+}
+
+cmd_status() {
+  if [[ -f "$LOAD_CONF" ]]; then echo "setting: on (bottle tso on)"; else echo "setting: off"; fi
+  if loaded; then
+    echo "module: loaded; $(cat "$SYS/info" 2>/dev/null)"
+    echo "every CPU has it: $([[ "$(cat "$SYS/enabled" 2>/dev/null)" == 1 ]] && echo yes || echo no)"
+  else
+    echo "module: not loaded"
+  fi
+  [[ -f "$VERIFIED" ]] && sed 's/^/tested: /' "$VERIFIED"
+  [[ -f "$KO" ]] || echo "(no module built for kernel $KVER)"
+  return 0
+}
+
+cmd_check() {
+  local fex n
+  # tested on this kernel (a module rebuilt for a new kernel waits for the next bottle tso on)
+  grep -qx "kernel=$KVER" "$VERIFIED" 2>/dev/null || return 1
+  loaded && [[ "$(cat "$SYS/enabled" 2>/dev/null)" == 1 ]] || return 1
+  fex="$(fex_bin)" || return 1
+  [[ -x "$CHECK" ]] || return 1
+  n="$(env FEX_TSOENABLED=0 "$fex" "$CHECK" litmus 50 2>/dev/null | sed -n 's/^violations \([0-9]*\) .*/\1/p')"
+  [[ "$n" == 0 ]]
+}
+
+cmd_build() {
+  need_root build
+  install -d -m 0755 "$VAR"
+  [[ -f "$LOAD_CONF" ]] || return 0      # only while it's on
+  build_module || return 1
+  # a newer module: swap it in (unloading leaves every CPU's bit set, and the new one sets it
+  # again at load, so x86 programs that are running keep the ordering throughout)
+  if (( REBUILT )) && loaded; then rmmod bottle_tso 2>>"$LOG" || true; fi
+  if ! loaded; then modprobe bottle_tso 2>>"$LOG" || true; fi
+  if loaded && [[ "$(cat "$SYS/enabled")" != 1 ]]; then echo 1 > "$SYS/enabled" 2>>"$LOG" || true; fi
+  return 0
+}
+
+case "${1:-status}" in
+  on)     cmd_on ;;
+  off)    cmd_off ;;
+  status) cmd_status ;;
+  check)  cmd_check ;;
+  build)  cmd_build ;;
+  *) echo "usage: bottle-tso on | off | status | check | build"; exit 2 ;;
+esac

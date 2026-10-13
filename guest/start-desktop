@@ -1,0 +1,136 @@
+#!/usr/bin/env bash
+# bottle-desktop: start the bottle's virtual X desktop (:1) with openbox and a localhost-only
+# VNC server on :5901, plus the screen server for the SteamOS Bottle app (:4720). Steam's main
+# window fills the screen (bottle-maximize-steam), so the Mac app looks like Steam itself.
+# Safe to run repeatedly.
+#
+# Prefers TigerVNC's Xvnc: an X server with VNC built in, so it sends whole frames
+# (no tearing), handles input promptly, and has a complete keyboard map. Falls back to
+# Xvfb + x11vnc, which scrapes the screen in strips (tears with full-screen motion).
+#
+# The host reaches it through Lima's port forward or an SSH tunnel (host/connect-vnc.sh).
+#
+# Env: DISPLAY_NUM (default 1), RES (default: the size the Mac window last asked for, kept by
+#      bottle-resolution in ~/.config/steamos-bottle/screen-size, else 1920x1080), XKB_LAYOUT (default us),
+#      BOTTLE_VNC=xvnc|x11vnc (default: xvnc when installed),
+#      BOTTLE_XTERM=1 (a terminal window on the desktop, as before)
+
+set -euo pipefail
+
+DISPLAY_NUM="${DISPLAY_NUM:-1}"
+VNC_PORT=5901
+ME="$(id -un)"
+STATE="$HOME/.config/steamos-bottle"
+if [[ -z "${RES:-}" ]]; then
+  RES="$(head -c 16 "$STATE/screen-size" 2>/dev/null | tr -cd '0-9x' || true)"
+  [[ "$RES" =~ ^[0-9]{3,4}x[0-9]{3,4}$ ]] || RES=1920x1080
+fi
+LOG="$STATE/desktop.log"
+mkdir -p "$STATE"
+
+MODE="${BOTTLE_VNC:-}"
+if [[ -z "$MODE" ]]; then
+  if command -v Xvnc >/dev/null; then MODE=xvnc; else MODE=x11vnc; fi
+fi
+
+# Detach everything from this shell so `limactl shell … bottle-desktop` returns.
+spawn() { setsid -f "$@" </dev/null >>"$LOG" 2>&1; }
+
+# VNC password (classic VNC format: works for both x11vnc and Xvnc).
+if [[ ! -f "$STATE/vnc.passwd" ]]; then
+  pw="$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"   # 8 chars, the VNC maximum
+  # Subshell: keep the private umask away from the programs started below.
+  ( umask 077
+    printf '%s\n' "$pw" > "$STATE/vnc-password"
+    if command -v x11vnc >/dev/null; then
+      x11vnc -storepasswd "$pw" "$STATE/vnc.passwd" >/dev/null 2>&1
+    else
+      printf '%s\n' "$pw" | vncpasswd -f > "$STATE/vnc.passwd"
+    fi )
+fi
+umask 022
+
+if ! pgrep -u "$ME" -f "(Xvnc|Xvfb) :$DISPLAY_NUM( |$)" >/dev/null; then
+  if [[ "$MODE" == xvnc ]]; then
+    spawn Xvnc ":$DISPLAY_NUM" -geometry "$RES" -depth 24 -nolisten tcp \
+          -rfbport "$VNC_PORT" -localhost -SecurityTypes VncAuth \
+          -PasswordFile "$STATE/vnc.passwd" -AlwaysShared -FrameRate 60 -s 0
+  else
+    spawn Xvfb ":$DISPLAY_NUM" -screen 0 "${RES}x24" -nolisten tcp -s 0
+  fi
+  for _ in $(seq 1 50); do
+    [[ -S "/tmp/.X11-unix/X$DISPLAY_NUM" ]] && break
+    sleep 0.1
+  done
+fi
+[[ -S "/tmp/.X11-unix/X$DISPLAY_NUM" ]] || { echo "The X server didn't start; see $LOG" >&2; exit 1; }
+export DISPLAY=":$DISPLAY_NUM"
+
+# A complete keyboard map, so every key a game might use exists before apps start.
+setxkbmap -model pc105 -layout "${XKB_LAYOUT:-us}" 2>/dev/null || true
+# Never blank the screen: by default X blanks it after 10 idle minutes, which in the Mac window
+# looks like the VM went to sleep (say, while Steam downloads). -s 0 above does it for new
+# servers; this for one already running.
+command -v xset >/dev/null && { xset s off s noblank -dpms 2>/dev/null || true; }
+
+# openbox with its normal settings. An earlier version added a rule maximizing every window
+# titled "Steam", which also caught Steam's right-click menus and dialogs (they're separate
+# windows with that title) and broke them: take that rule out again.
+OB_RC="$HOME/.config/openbox/rc.xml"
+ob_changed=0
+if grep -q steamos-bottle "$OB_RC" 2>/dev/null; then
+  rm -f "$OB_RC"   # it was ours: the system rc.xml plus that rule
+  ob_changed=1
+fi
+# The window manager: openbox (default) or xfwm4, as chosen with `bottle wm` (saved in
+# $STATE/wm). Steam's menus misbehave under some window managers (openbox sends a focus change
+# before each click); switching replaces the running one in place (--replace), windows stay.
+WM="$(cat "$STATE/wm" 2>/dev/null || echo openbox)"
+case "$WM" in
+  xfwm4) wm_cmd=(xfwm4 --compositor=off --replace) ;;   # compositing would cost every frame
+  *)     WM=openbox; wm_cmd=(openbox --replace) ;;
+esac
+if ! command -v "${wm_cmd[0]}" >/dev/null; then
+  echo "No $WM installed (bottle update installs it); using openbox." >&2
+  WM=openbox; wm_cmd=(openbox --replace)
+fi
+if pgrep -u "$ME" -x "$WM" >/dev/null; then
+  [[ "$WM" == openbox ]] && (( ob_changed )) && { openbox --reconfigure 2>/dev/null || true; }
+else
+  spawn "${wm_cmd[@]}"
+  for _ in $(seq 1 30); do pgrep -u "$ME" -x "$WM" >/dev/null && break; sleep 0.1; done
+  sleep 0.5
+fi
+for other in openbox xfwm4; do   # --replace makes the old one exit; make sure
+  [[ "$other" == "$WM" ]] || pkill -u "$ME" -x "$other" 2>/dev/null || true
+done
+# Steam's main window (only that one) fills the screen, and comes back when Steam's own buttons
+# minimize, close or shrink it (there's no taskbar to bring it back): bottle-maximize-steam
+# --keep, which steam-arm64 starts with Steam; started here too for a Steam already running.
+if command -v bottle-maximize-steam >/dev/null; then
+  bottle-maximize-steam || true
+  if pgrep -u "$ME" -f "[s]teamrtarm64/steam" >/dev/null; then
+    setsid -f bottle-maximize-steam --keep </dev/null >/dev/null 2>&1 || true
+  fi
+fi
+
+if pgrep -u "$ME" -f "Xvfb :$DISPLAY_NUM( |$)" >/dev/null && ! pgrep -u "$ME" -x x11vnc >/dev/null; then
+  # -threads: input on its own thread; xdamage on (no -noxdamage) to avoid full-screen polling
+  spawn x11vnc -display "$DISPLAY" -localhost -rfbport "$VNC_PORT" \
+        -rfbauth "$STATE/vnc.passwd" -forever -shared -threads -defer 10 -wait 10 -xkb
+fi
+
+if [[ "${BOTTLE_XTERM:-0}" == 1 ]]; then
+  pgrep -u "$ME" -x xterm >/dev/null || spawn xterm -geometry 120x35+40+40 -title "bottle"
+else
+  pkill -u "$ME" -f "^xterm .*-title bottle$" 2>/dev/null || true   # the one earlier versions opened
+fi
+
+# Screen server for the SteamOS Bottle app on the Mac (frames out, keyboard/mouse in; port 4720).
+SCREEN_PORT="${SCREEN_PORT:-4720}"
+if command -v bottle-screen >/dev/null && ! pgrep -u "$ME" -x bottle-screen >/dev/null; then
+  setsid -f bottle-screen -d "$DISPLAY" -p "$SCREEN_PORT" </dev/null >>"${LOG%/*}/screen.log" 2>&1
+fi
+
+server="$(pgrep -u "$ME" -a -f "(Xvnc|Xvfb) :$DISPLAY_NUM( |$)" | awk '{print $2}' | xargs -n1 basename | head -1)"
+echo "Desktop running on DISPLAY=$DISPLAY ($server), VNC on 127.0.0.1:$VNC_PORT, app screen on 127.0.0.1:$SCREEN_PORT (log: $LOG)"

@@ -1,0 +1,312 @@
+#!/usr/bin/env python3
+"""bottle-whyquit: why a game closed by itself at launch, in plain words.
+
+  bottle-whyquit LOG            what LOG (a game's ~/steam-<appid>.log) says: the launch's length,
+                                whether a picture ever showed, and the likely cause
+  bottle-whyquit --notify LOG   the launch that wrote LOG just ended: if it closed by itself at
+                                launch, tell the Mac window why (a notice for bottle-screen), and
+                                where a switch is known (Unreal and Unity games), start it once
+                                more in DirectX 11
+
+bottle-logkeep runs --notify once per launch, when the log has gone quiet and no game runs.
+
+A launch counts as "closed at launch" when it lasted under 90 s and no picture reached the screen
+(the present layer logs "first frame on screen"), or when it crashed within that time. The
+causes, checked in this order: anti-cheat (its files loaded: Easy Anti-Cheat, BattlEye, ...),
+DirectX 12 (vkd3d-proton came up, nothing was drawn), Direct3D 11 features (DXVK refused the
+GPU), the Mac's GPU driver stopping (device lost), a missing Windows library, a crash (an access
+violation: the detailed log the next launch gets shows it), the x86 translator (illegal
+instruction), memory. Otherwise: "closed after N s before showing anything", and the logs are
+saved for a closer look (the Mac's watcher saves them when a game ends).
+
+DirectX 11 retry: an Unreal Engine game takes -dx11, a Unity game -force-d3d11. This writes
+BOTTLE_GAME_ARGS=... into the game's own settings (~/.config/steamos-bottle/games/<appid>.env;
+steam-arm64's user_settings.py adds it to the game's command line) and starts the game again,
+once. If that launch closes as well, the setting is taken out again and the notice says so.
+"""
+import json
+import os
+import re
+import shlex
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+HOME = Path.home()
+STEAM = Path(os.environ.get("BOTTLE_STEAM_DIR", HOME / ".local/share/Steam"))
+NOTICES = HOME / ".cache/steamos-bottle/notices"
+STATE = HOME / ".cache/steamos-bottle/whyquit-state.json"
+GAMES = HOME / ".config/steamos-bottle/games"
+QUICK_SECS = 90
+
+ANTICHEAT = [
+    (r"EasyAntiCheat|start_protected_game|EAC(_| )?(Launcher|Setup)", "Easy Anti-Cheat"),
+    (r"BEClient|BEService|BattlEye", "BattlEye"),
+    (r"xigncode|x3\.xem", "XIGNCODE3"),
+    (r"GameGuard|nProtect", "nProtect GameGuard"),
+    (r"\bvgc\b|vgk\.sys|Vanguard", "Riot Vanguard"),
+    (r"ACE-Base|AntiCheatExpert|SGuard", "Anti-Cheat Expert"),
+    (r"mhyprot|HoYoKProtect", "HoYoverse's anti-cheat"),
+]
+
+
+def read_log(path):
+    with open(path, "rb") as f:
+        head = f.read(3_000_000)
+        f.seek(0, 2)
+        size = f.tell()
+        f.seek(max(len(head), size - 3_000_000))
+        tail = f.read()
+    return (head + b"\n" + tail).decode("utf-8", "replace"), size
+
+
+def app_info(appid):
+    """(name, install folder) from Steam's manifest."""
+    libs = [STEAM]
+    lf = STEAM / "steamapps/libraryfolders.vdf"
+    try:
+        libs += [Path(p) for p in re.findall(r'"path"\s+"([^"]+)"', lf.read_text(errors="replace"))]
+    except OSError:
+        pass
+    for lib in libs:
+        acf = lib / "steamapps" / f"appmanifest_{appid}.acf"
+        try:
+            t = acf.read_text(errors="replace")
+        except OSError:
+            continue
+        name = re.search(r'"name"\s+"([^"]*)"', t)
+        inst = re.search(r'"installdir"\s+"([^"]*)"', t)
+        return (name.group(1) if name else None,
+                lib / "steamapps/common" / inst.group(1) if inst else None)
+    return None, None
+
+
+def engine_switch(folder):
+    """The command-line switch that starts this game in Direct3D 11, if its engine has one."""
+    if not folder or not folder.is_dir():
+        return None
+    try:
+        top = list(folder.iterdir())
+    except OSError:
+        return None
+    names = {p.name.lower() for p in top}
+    if "unityplayer.dll" in names or any((p / "UnityPlayer.dll").is_file() for p in top if p.is_dir()):
+        return "-force-d3d11"
+    if "engine" in names and any(p.is_dir() and (p / "Binaries" / "Win64").is_dir() for p in top):
+        return "-dx11"
+    return None
+
+
+# Lines that look like trouble but aren't the game's: Proton's accessibility helper (Xalia, a
+# .NET program) fails without a screen reader's display; Wine reserving address space halves its
+# request until it fits ("out of memory for allocation").
+NOISE = re.compile(r"^.*(Xalia|xalia|No displays available|allocate_virtual_memory out of memory).*$", re.M)
+
+
+def diagnose(path):
+    text, size = read_log(path)
+    text = NOISE.sub("", text)
+    m = re.search(r"steam-(\d+)(?:-\d{8}-\d{6})?\.log$", str(path))   # (or a launch bottle-logkeep kept)
+    appid = m.group(1) if m else None
+    ts = re.findall(r"^(\d+\.\d+):[0-9a-f]{4}:", text, re.M)
+    secs = float(ts[-1]) - float(ts[0]) if len(ts) >= 2 else 0.0
+    frames = bool(re.search(r"bottle-present[^\]]*\] (first frame on screen|pacing: )", text))
+    detailed = "+seh" in (re.search(r"^Effective WINEDEBUG: (.*)$", text, re.M) or [None, ""])[1]
+    name, folder = app_info(appid) if appid else (None, None)
+    exe = re.search(r"^Command: \['([^']*)'", text, re.M)
+    d = {"appid": appid, "name": name or (Path(exe.group(1).replace("\\", "/")).stem if exe else "The game"),
+         "secs": round(secs), "frames": frames, "detailed_log": detailed, "log_bytes": size,
+         "quick": False, "cause": None, "title": None, "detail": None, "switch": None}
+    # an unhandled exception ends a program; an access violation alone is often caught by the
+    # game itself (copy protection, .NET), so it only counts when no picture ever showed
+    crash = re.search(r"Unhandled (page fault|exception)|wine: Unhandled|unhandled exception", text)
+    if not crash and not frames:
+        crash = re.search(r"EXCEPTION_ACCESS_VIOLATION", text)
+    ill = re.search(r"EXCEPTION_ILLEGAL_INSTRUCTION|SIGILL|Illegal instruction", text)
+    # the Mac side refusing the GPU's work: Venus reports it, DXVK throws, and Wine then says
+    # "Exception frame is not in stack limits" (DMC5, CS2, Witcher 3 on Oct 7-9)
+    lost = re.search(r"VK_ERROR_DEVICE_LOST|DEVICE_LOST|Device lost|MESA-VIRTIO|Exception frame is not in stack limits", text)
+    if not (secs < QUICK_SECS and (not frames or crash or ill or lost)):
+        return d
+    d["quick"] = True
+    who = d["name"]
+    gone = f"{who} closed after {d['secs']} s" if d["secs"] else f"{who} closed at launch"
+
+    def say(cause, title, detail):
+        d["cause"], d["title"], d["detail"] = cause, title, detail
+
+    loaded = "\n".join(re.findall(r"Loaded L\"([^\"]*)\"", text))
+    for pat, ac in ANTICHEAT:
+        if re.search(pat, loaded, re.I) or re.search(pat, text):
+            say("anticheat", f"{gone}: its anti-cheat ({ac}) stopped it",
+                "The bottle runs games through a translator in a virtual machine and doesn't hide that "
+                "from anti-cheat; this game's anti-cheat doesn't accept it. Games whose anti-cheat allows "
+                "Steam on Linux (Proton) may work: bottle anticheat installs Valve's runtime for those.")
+            return d
+    vkd3d = re.search(r"vkd3d-proton - build|vkd3d-proton:", text)
+    if vkd3d and not frames:
+        sw = engine_switch(folder)
+        d["switch"] = sw
+        errs = re.findall(r"err:vkd3d-proton:[^:\n]*: ([^\n]{0,120})", text)
+        why = f" (vkd3d-proton: {errs[0]})" if errs else ""
+        say("dx12", f"{gone}: its DirectX 12 start didn't get as far as a picture",
+            "Most likely it needs a DirectX 12 feature the Mac's GPU can't provide" + why + "."
+            + (" Its engine can also run in DirectX 11." if sw else ""))
+        return d
+    if re.search(r"(DxvkAdapter|DxvkInstance|D3D11CoreCreateDevice|D3D11InternalCreateDevice)[^\n]*(not supported|Failed|failed)|"
+                 r"Required (Vulkan )?(extension|feature)[^\n]*not supported", text):
+        say("dx11", f"{gone}: its Direct3D 11 start was refused",
+            "DXVK (Direct3D 11 on the Mac's GPU) found a feature it needs missing.")
+        return d
+    if lost:
+        say("gpu", f"{gone}: the Mac's GPU driver stopped it (device lost)",
+            "Usually a shader the Mac couldn't build. Starting it again often gets further (the shaders "
+            "built so far are kept).")
+        return d
+    dll = re.search(r"err:module:import_dll (?:Library|Loading library) (\S+) \(which is needed by L?\"?([^\")]*)", text)
+    if dll:
+        say("dll", f"{gone}: it needs {dll.group(1)}, which isn't there",
+            f"{Path(dll.group(2).replace(chr(92), '/')).name or 'The game'} asked for {dll.group(1)}; "
+            "Proton doesn't include it. Some games install it with their redistributables on first launch.")
+        return d
+    if re.search(r"err:mscoree|Could not load Mono|CLR (error|failed)", text):
+        say("dotnet", f"{gone}: it needs .NET, which didn't start", "Its .NET (Mono) runtime failed to load.")
+        return d
+    if ill:
+        say("fex", f"{gone}: the x86 translator met an instruction it couldn't run",
+            "FEX (which runs the game's x86 code on the Mac's ARM processor) stopped at an instruction.")
+        return d
+    if re.search(r"VK_ERROR_OUT_OF_(DEVICE|HOST)_MEMORY|E_OUTOFMEMORY|STATUS_NO_MEMORY|std::bad_alloc", text):
+        say("memory", f"{gone}: it ran out of memory",
+            "bottle memory shows the VM's memory and can give it more.")
+        return d
+    if crash:
+        say("crash", f"{gone}: it crashed while starting",
+            "An access violation in the game's own code (copy protection that doesn't run under the "
+            "translator does this too). The logs are saved for a closer look.")
+        return d
+    say("unknown", f"{gone} before showing anything",
+        "Its log doesn't say why" + ("" if detailed else "; the next launch writes a detailed one")
+        + ". The logs are saved for a closer look.")
+    return d
+
+
+def load_state():
+    try:
+        v = json.loads(STATE.read_text())
+        return v if isinstance(v, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_state(st):
+    STATE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = STATE.with_name(STATE.name + ".tmp")
+    tmp.write_text(json.dumps(st, indent=1))
+    os.replace(tmp, STATE)
+
+
+def set_game_args(appid, args):
+    """BOTTLE_GAME_ARGS in the game's own settings: args, or None to take it out."""
+    f = GAMES / f"{appid}.env"
+    try:
+        lines = f.read_text().splitlines()
+    except OSError:
+        lines = []
+    lines = [l for l in lines if not re.match(r"\s*BOTTLE_GAME_ARGS\s*=", l)]
+    if args:
+        lines.append(f"BOTTLE_GAME_ARGS={args}   # bottle-whyquit: its DirectX 12 start failed")
+    GAMES.mkdir(parents=True, exist_ok=True)
+    if lines:
+        f.write_text("\n".join(lines) + "\n")
+    elif f.exists():
+        f.unlink()
+
+
+def game_args(appid):
+    try:
+        for l in (GAMES / f"{appid}.env").read_text().splitlines():
+            m = re.match(r"\s*BOTTLE_GAME_ARGS\s*=\s*([^#]*)", l)
+            if m:
+                return m.group(1).strip()
+    except OSError:
+        pass
+    return ""
+
+
+def notice(kind, secs, title, detail):
+    NOTICES.mkdir(parents=True, exist_ok=True)
+    f = NOTICES / f"{int(time.time() * 1000)}.txt"
+    tmp = f.with_suffix(".tmp")
+    tmp.write_text(f"{kind} {secs}\n{title}\n{detail}\n")
+    os.replace(tmp, f)
+
+
+def start_game(appid):
+    exe = STEAM / "steamrtarm64/steam"
+    env = dict(os.environ, DISPLAY=os.environ.get("DISPLAY", ":1"),
+               LD_LIBRARY_PATH=str(STEAM / "lib/aarch64-linux-gnu"),
+               XDG_RUNTIME_DIR=os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}"))
+    subprocess.Popen([str(exe), f"steam://rungameid/{appid}"], env=env, stdin=subprocess.DEVNULL,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+
+
+def notify(path):
+    d = diagnose(path)
+    appid = d["appid"]
+    st = load_state()
+    mine = st.get(appid or "?", {})
+    args_now = game_args(appid) if appid else ""
+    if not d["quick"]:
+        if mine.get("retrying") and args_now:   # the DirectX 11 launch worked: it stays
+            notice(0, 12, f"{d['name']} runs in DirectX 11 now",
+                   f"Its DirectX 12 start had failed. From now on it starts with {args_now} "
+                   f"(settings: ~/.config/steamos-bottle/games/{appid}.env in the VM).")
+            mine.pop("retrying", None)
+            st[appid] = mine
+            save_state(st)
+        return 0
+    if mine.get("retrying"):
+        # the DirectX 11 try closed too: undo it
+        set_game_args(appid, None)
+        mine.pop("retrying", None)
+        st[appid] = mine
+        save_state(st)
+        notice(1, 25, d["title"], d["detail"] + f" Starting it in DirectX 11 ({args_now}) didn't help either,"
+               " so that setting is gone again.")
+        return 0
+    if d["cause"] == "dx12" and d["switch"] and not args_now and time.time() - mine.get("retried", 0) > 86400:
+        set_game_args(appid, d["switch"])
+        mine.update(retrying=True, retried=time.time())
+        st[appid] = mine
+        save_state(st)
+        notice(1, 20, d["title"], d["detail"] + " Starting it again in DirectX 11…")
+        time.sleep(3)
+        start_game(appid)
+        return 0
+    notice(1, 25, d["title"], d["detail"])
+    return 0
+
+
+def main():
+    a = sys.argv[1:]
+    if not a or a[0] in ("-h", "--help"):
+        print(__doc__)
+        return 0
+    if a[0] == "--notify" and len(a) == 2:
+        return notify(Path(a[1]))
+    d = diagnose(Path(a[0]))
+    if not d["quick"]:
+        print(f"{d['name']}: ran {d['secs']} s" + (", showed pictures" if d["frames"] else "")
+              + ": not a launch that closed by itself.")
+    else:
+        print(d["title"])
+        print(d["detail"])
+        if d["switch"]:
+            print(f"(DirectX 11 switch for its engine: {d['switch']})")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

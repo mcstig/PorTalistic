@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# bottle-resolution: the VM screen's size (X display :1, TigerVNC's Xvnc).
+#
+#   bottle-resolution            the size now
+#   bottle-resolution W H        make it W x H (8-pixel steps; 800x600 up to 3840x2400)
+#   bottle-resolution default    back to 1920x1080
+#
+# bottle-screen runs this when the SteamOS Bottle window asks for its own size (View >
+# Resolution on the Mac), never while a game runs. Xvnc takes any size as a new RandR mode
+# (xrandr --newmode, --addmode, --output --mode). The size is kept for the desktop's next start
+# (~/.config/steamos-bottle/screen-size, read by bottle-desktop). Steam's Big Picture follows
+# the new size by itself (it's a full-screen window; bottle-maximize-steam keeps it so).
+set -uo pipefail
+export DISPLAY="${DISPLAY:-:1}"
+KEEP=~/.config/steamos-bottle/screen-size
+command -v xrandr >/dev/null || { echo "bottle-resolution: no xrandr in the VM (bottle update installs it)" >&2; exit 1; }
+
+out="$(xrandr --query 2>/dev/null | awk '/ connected/ {print $1; exit}')"
+now="$(xrandr --query 2>/dev/null | sed -n 's/^Screen 0:.* current \([0-9]*\) x \([0-9]*\),.*/\1x\2/p')"
+if [[ $# -eq 0 ]]; then echo "${now:-unknown}"; exit 0; fi
+if [[ "$1" == default ]]; then set -- 1920 1080; fi
+[[ $# -eq 2 && "$1" =~ ^[0-9]+$ && "$2" =~ ^[0-9]+$ ]] || { echo "usage: bottle-resolution [W H | default]" >&2; exit 2; }
+w=$(( $1 / 8 * 8 )); h=$(( $2 / 8 * 8 ))
+(( w < 800 )) && w=800; (( h < 600 )) && h=600
+(( w > 3840 )) && w=3840; (( h > 2400 )) && h=2400
+mode="${w}x${h}"
+[[ -n "$out" ]] || { echo "bottle-resolution: no screen output (is this Xvnc?)" >&2; exit 1; }
+if [[ "$now" != "$mode" ]]; then
+  # a mode of that size for the output (Xvnc lists many; any size can be added)
+  if ! xrandr --query | awk -v o="$out" '$1 == o {f = 1; next} /^[^ ]/ {f = 0} f {print $1}' | grep -qx "$mode"; then
+    xrandr --newmode "$mode" 0 "$w" 0 0 0 "$h" 0 0 0 2>/dev/null || true   # (may exist, unattached)
+    xrandr --addmode "$out" "$mode" || { echo "bottle-resolution: the screen can't take $mode" >&2; exit 1; }
+  fi
+  xrandr --output "$out" --mode "$mode" || { echo "bottle-resolution: couldn't switch to $mode" >&2; exit 1; }
+fi
+mkdir -p "${KEEP%/*}" && echo "$mode" > "$KEEP"
+echo "$mode"

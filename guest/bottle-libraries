@@ -1,0 +1,542 @@
+#!/usr/bin/env python3
+"""bottle-libraries: Portalistic's game folders as Steam libraries.
+
+Games can live outside the VM's disk: in a folder on the Mac (~/Games/Portalistic by default) or
+on an external drive, as normal files there. The Mac shares each folder with the VM (a writable
+Lima mount at /mnt/portalistic/NAME, set up when the VM starts), and this script makes each one a
+Steam library. Steam then sees that drive's real free space, and an uninstalled game gives its
+space straight back to the Mac.
+
+  bottle-libraries sync      Steam must not be running (steam-arm64 runs this before it starts
+                             Steam; Steam keeps these files in memory and writes them back when
+                             it quits). For every shared folder:
+                               * a steamapps folder, its libraryfolder.vdf, and an entry in
+                                 Steam's libraryfolders.vdf, labelled as on the Mac;
+                               * Steam's own tools found there (Proton, the Steam Linux Runtimes,
+                                 FEX, redistributables) move to the VM's disk: they need a Linux
+                                 file system (the Mac's ignores upper/lower case, and the
+                                 runtimes have files that differ only in case);
+                             entries for folders the Mac no longer lists go (their games stay
+                             in the folder); and the default library for new games (Steam's
+                             "Make Default", LastInstallFolderIndex in each user's
+                             localconfig.vdf) is the Mac's choice, unless it was changed in Steam
+                             since then. A folder whose drive isn't connected keeps its entry
+                             (Steam shows it as unavailable); while it's away, the Mac folder
+                             (else the VM's disk) is the default.
+  bottle-libraries status [--json]
+                             each Steam library: where, free space, games, the default
+
+The Mac's list (written by `bottle library` on the Mac): ~/.config/steamos-bottle/libraries.json
+  {"default": "mac", "stamp": "1791826000",
+   "folders": [{"name": "mac", "label": "Mac", "path": "/Users/me/Games/Portalistic"}]}
+"default" may also be "vm" (the VM's disk). "stamp" changes each time the default is chosen on
+the Mac, which is how a choice made since then in Steam is told apart from an old one.
+"""
+import argparse
+import json
+import os
+import random
+import re
+import shutil
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+HOME = Path.home()
+STEAM = Path(os.environ.get("BOTTLE_STEAM_DIR", HOME / ".local/share/Steam"))
+MOUNT_ROOT = Path(os.environ.get("BOTTLE_LIBRARY_ROOT", "/mnt/portalistic"))
+CONF = HOME / ".config/steamos-bottle/libraries.json"
+STATE = HOME / ".config/steamos-bottle/libraries-state.json"
+TESTING = os.environ.get("BOTTLE_LIBRARIES_TEST") == "1"   # folders count as shared without a mount
+
+# Steam's own tools, runtimes and redistributables (as in bottle-steamplay).
+TOOL_APPIDS = {
+    "228980",                                     # Steamworks Common Redistributables
+    "1070560", "1391110", "1628350", "4185400",   # Steam Linux Runtime 1.0 / 2.0 / 3.0 / 4.0
+    "1493710", "2180100",                         # Proton Experimental, Proton Hotfix
+    "858280", "930400", "961940", "996510", "1054830", "1113280", "1245040", "1420170",
+    "1580130", "1887720", "2348590", "2805730", "3658110",  # Proton 3.7 ... 10.0
+    "250820", "1826330", "1161040",               # SteamVR, Proton EasyAntiCheat / BattlEye Runtime
+    "3127680", "4183110",                         # FEX (the ARM64 client's x86 translator)
+}
+SKIP_NAMES = re.compile(r"^(proton|steam linux runtime|steamworks common redistributables|steamvr|fex)", re.I)
+
+
+def say(*a):
+    print(*a, flush=True)
+
+
+# ------------------------------------------------------------------ VDF (Steam's text format)
+
+def vdf_tokens(text):
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        if c in " \t\r\n":
+            i += 1
+        elif text.startswith("//", i):
+            j = text.find("\n", i)
+            i = n if j < 0 else j + 1
+        elif c in "{}":
+            yield c
+            i += 1
+        elif c == '"':
+            # kept exactly as written (escapes included): what isn't changed goes back as it was
+            j = i + 1
+            while j < n and text[j] != '"':
+                j += 2 if text[j] == "\\" else 1
+            yield text[i + 1:j]
+            i = j + 1
+        else:
+            j = i
+            while j < n and text[j] not in ' \t\r\n{}"':
+                j += 1
+            yield text[i:j]
+            i = j
+
+
+def vdf_parse(text):
+    """A list of [key, value] pairs; a value is a string or another such list."""
+    toks = list(vdf_tokens(text))
+    pos = 0
+
+    def block():
+        nonlocal pos
+        items = []
+        while pos < len(toks):
+            k = toks[pos]
+            if k == "}":
+                pos += 1
+                return items
+            pos += 1
+            if pos < len(toks) and toks[pos] == "{":
+                pos += 1
+                items.append([k, block()])
+            elif pos < len(toks):
+                items.append([k, toks[pos]])
+                pos += 1
+        return items
+
+    return block()
+
+
+def vdf_esc(s):
+    return s.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def vdf_dump(items, depth=0):
+    out, tab = [], "\t" * depth
+    for k, v in items:
+        if isinstance(v, list):
+            out.append(f'{tab}"{k}"\n{tab}{{\n{vdf_dump(v, depth + 1)}{tab}}}\n')
+        else:
+            out.append(f'{tab}"{k}"\t\t"{v}"\n')
+    return "".join(out)
+
+
+def vdf_get(items, key):
+    for k, v in items:
+        if k.lower() == key.lower() and isinstance(v, list):
+            return v
+    return None
+
+
+def vdf_value(items, key):
+    for k, v in items or []:
+        if k.lower() == key.lower() and isinstance(v, str):
+            return v
+    return None
+
+
+def vdf_set(items, key, value):
+    for kv in items:
+        if kv[0].lower() == key.lower():
+            kv[1] = value
+            return
+    items.append([key, value])
+
+
+# ------------------------------------------------------------------ helpers
+
+def steam_running():
+    if TESTING:
+        return os.environ.get("BOTTLE_LIBRARIES_TEST_STEAM") == "1"
+    r = subprocess.run(["pgrep", "-f", "[s]teamrtarm64/steam( |$)"], capture_output=True)
+    return r.returncode == 0
+
+
+def shared(p):
+    """The Mac shares this folder with the VM right now (its drive is there)."""
+    if TESTING:
+        return p.is_dir() and (p / ".test-mounted").exists()
+    return os.path.ismount(p)
+
+
+def load_json(path, default):
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        return default
+
+
+def write_atomic(path, text, backup_suffix=None):
+    if backup_suffix and path.is_file():
+        b = path.with_name(path.name + backup_suffix)
+        if not b.exists():
+            shutil.copy2(path, b)
+    tmp = path.with_name(path.name + ".bottle-tmp")
+    tmp.write_text(text, encoding="utf-8", errors="surrogateescape")
+    os.replace(tmp, path)
+
+
+def gb(n):
+    return f"{n / 1e9:.1f} GB"
+
+
+def acf_info(acf):
+    try:
+        st = vdf_get(vdf_parse(acf.read_text(errors="replace")), "AppState") or []
+    except OSError:
+        return None
+    return {"appid": vdf_value(st, "appid") or "", "name": vdf_value(st, "name") or "?",
+            "installdir": vdf_value(st, "installdir") or "",
+            "size": int(vdf_value(st, "SizeOnDisk") or 0)}
+
+
+def is_tool(info, common):
+    d = common / info["installdir"] if info["installdir"] else None
+    return (info["appid"] in TOOL_APPIDS or bool(SKIP_NAMES.match(info["name"]))
+            or (d is not None and ((d / "toolmanifest.vdf").is_file()
+                                   or (d / "compatibilitytool.vdf").is_file())))
+
+
+# ------------------------------------------------------------------ Steam's library list
+
+class Libraries:
+    """steamapps/libraryfolders.vdf (and its copy in config/, which Steam keeps the same)."""
+
+    def __init__(self):
+        self.main = STEAM / "steamapps/libraryfolders.vdf"
+        self.copy = STEAM / "config/libraryfolders.vdf"
+        src = self.main if self.main.is_file() else self.copy
+        text = src.read_text(errors="replace") if src.is_file() else ""
+        self.root = vdf_parse(text) if text else []
+        self.block = vdf_get(self.root, "libraryfolders")
+        if self.block is None:
+            self.block = []
+            self.root.append(["libraryfolders", self.block])
+        self.before = vdf_dump(self.root)
+
+    def entries(self):
+        """[(index, block)] in order: the numbered entries."""
+        return [(int(k), v) for k, v in self.block if k.isdigit() and isinstance(v, list)]
+
+    def path_of(self, e):
+        return vdf_value(e, "path") or ""
+
+    def find(self, path):
+        want = os.path.realpath(str(path))
+        for i, e in self.entries():
+            if os.path.realpath(self.path_of(e) or "/nonexistent") == want:
+                return i, e
+        return None, None
+
+    def add(self, path, label, contentid):
+        n = max([i for i, _ in self.entries()] + [-1]) + 1
+        e = [["path", str(path)], ["label", vdf_esc(label)], ["contentid", contentid],
+             ["totalsize", "0"], ["update_clean_bytes_tally", "0"],
+             ["time_last_update_verified", "0"], ["apps", []]]
+        self.block.append([str(n), e])
+        return n
+
+    def remove(self, index):
+        self.block[:] = [kv for kv in self.block if kv[0] != str(index)]
+
+    def renumber(self):
+        """Steam numbers its libraries 0, 1, 2...: after a removal, close the gap.
+        Returns {old index: new index}."""
+        mapping, n = {}, 0
+        for kv in self.block:
+            if kv[0].isdigit() and isinstance(kv[1], list):
+                mapping[int(kv[0])] = n
+                kv[0] = str(n)
+                n += 1
+        return mapping
+
+    def save(self):
+        text = vdf_dump(self.root)
+        if text == self.before:
+            return False
+        for f in (self.main, self.copy):
+            if f.parent.is_dir():
+                write_atomic(f, text, ".bottle-before-libraries")
+        self.before = text
+        return True
+
+
+# ------------------------------------------------------------------ the default for new games
+
+LIC_RE = re.compile(r'^\t"LastInstallFolderIndex"\t\t"(-?\d+)"\s*$')
+
+
+def localconfigs():
+    out = []
+    for f in sorted((STEAM / "userdata").glob("*/config/localconfig.vdf")):
+        out.append((f.parts[-3], f))
+    return out
+
+
+def read_default(path):
+    """LastInstallFolderIndex at the top level of a localconfig.vdf (None: not set = 0)."""
+    try:
+        for line in path.read_text(encoding="utf-8", errors="surrogateescape").split("\n"):
+            m = LIC_RE.match(line)
+            if m:
+                return int(m.group(1))
+    except OSError:
+        pass
+    return None
+
+
+def write_default(path, index):
+    lines = path.read_text(encoding="utf-8", errors="surrogateescape").split("\n")
+    new = f'\t"LastInstallFolderIndex"\t\t"{index}"'
+    for i, line in enumerate(lines):
+        if LIC_RE.match(line):
+            if lines[i] == new:
+                return False
+            lines[i] = new
+            break
+    else:
+        # right inside "UserLocalConfigStore" { (the top level)
+        for i, line in enumerate(lines):
+            if line.strip() == '"UserLocalConfigStore"':
+                j = i + 1
+                while j < len(lines) and lines[j].strip() != "{":
+                    j += 1
+                if j >= len(lines):
+                    return False
+                lines.insert(j + 1, new)
+                break
+        else:
+            return False
+    write_atomic(path, "\n".join(lines), ".bottle-before-libraries")
+    return True
+
+
+# ------------------------------------------------------------------ sync
+
+def ensure_library_folder(root, label):
+    """steamapps/ and libraryfolder.vdf in a shared folder; returns its contentid."""
+    (root / "steamapps").mkdir(parents=True, exist_ok=True)
+    lf = root / "libraryfolder.vdf"
+    cid = None
+    if lf.is_file():
+        cid = vdf_value(vdf_get(vdf_parse(lf.read_text(errors="replace")), "libraryfolder") or [], "contentid")
+    if not cid:
+        cid = str(random.randrange(10 ** 18, 9 * 10 ** 18))
+        write_atomic(lf, vdf_dump([["libraryfolder", [["contentid", cid], ["label", vdf_esc(label)]]]]))
+    return cid
+
+
+def move_tools(libs, root):
+    """Steam's tools installed in a shared folder go to the VM's disk (library 0)."""
+    src_apps, dst_apps = root / "steamapps", STEAM / "steamapps"
+    moved = 0
+    for acf in sorted(src_apps.glob("appmanifest_*.acf")):
+        info = acf_info(acf)
+        if not info or not is_tool(info, src_apps / "common"):
+            continue
+        name = f"{info['name']} ({info['appid']})"
+        if (dst_apps / acf.name).exists():
+            say(f"  {name} is in {root} and on the VM's disk; leaving the copy in {root} to Steam")
+            continue
+        need = info["size"] * 1.1 + 1e9
+        if shutil.disk_usage(dst_apps).free < need:
+            say(f"  {name}: not enough room on the VM's disk to move it there ({gb(need)})")
+            continue
+        say(f"  {name}: moving it from {root} to the VM's disk (Steam's tools need a Linux file system)…")
+        try:
+            if info["installdir"] and (src_apps / "common" / info["installdir"]).exists():
+                (dst_apps / "common").mkdir(exist_ok=True)
+                shutil.move(str(src_apps / "common" / info["installdir"]),
+                            str(dst_apps / "common" / info["installdir"]))
+            dl = src_apps / "downloading" / info["appid"]
+            if dl.exists():
+                (dst_apps / "downloading").mkdir(exist_ok=True)
+                shutil.move(str(dl), str(dst_apps / "downloading" / info["appid"]))
+            shutil.move(str(acf), str(dst_apps / acf.name))
+        except OSError as e:
+            say(f"  {name}: couldn't move it ({e}); Steam may install it again")
+            continue
+        moved += 1
+        # Steam's cached app lists: from that library to the VM's disk
+        apps = vdf_get(libs.find(root)[1] or [], "apps")
+        if apps is not None:
+            apps[:] = [kv for kv in apps if kv[0] != info["appid"]]
+        apps = vdf_get(libs.find(STEAM)[1] or [], "apps")
+        if apps is not None and not any(k == info["appid"] for k, _ in apps):
+            apps.append([info["appid"], str(info["size"])])
+    return moved
+
+
+def wanted_default(conf, libs):
+    """The library index new games should go to, from the Mac's choice and what's there now."""
+    order = [conf.get("default") or "mac", "mac"]
+    for name in order:
+        if name == "vm":
+            return 0, "the VM's disk"
+        f = next((f for f in conf.get("folders", []) if f.get("name") == name), None)
+        if not f:
+            continue
+        mp = MOUNT_ROOT / name
+        i, _ = libs.find(mp)
+        if i is not None and shared(mp):
+            return i, f.get("label") or name
+    return 0, "the VM's disk"
+
+
+def cmd_sync(args):
+    if steam_running() and not args.force:
+        say("bottle-libraries: Steam is running (it would write its own list back when it quits); not changing anything.")
+        return 2
+    if not STEAM.is_dir():
+        say("bottle-libraries: no Steam folder yet.")
+        return 0
+    conf = load_json(CONF, {"folders": []})
+    state = load_json(STATE, {})
+    folders = [f for f in conf.get("folders", []) if re.fullmatch(r"[a-z0-9][a-z0-9-]*", f.get("name", ""))]
+    names = {f["name"] for f in folders}
+    libs = Libraries()
+
+    # folders the Mac no longer lists: their entries go (the games stay in the folder)
+    for i, e in libs.entries():
+        p = Path(libs.path_of(e))
+        if p.parent == MOUNT_ROOT and p.name not in names:
+            libs.remove(i)
+            say(f"Steam library {p} removed from Steam's list (its games stay in the folder on the Mac)")
+    mapping = libs.renumber()
+
+    # shared folders: a Steam library each
+    for f in folders:
+        mp = MOUNT_ROOT / f["name"]
+        label = f.get("label") or f["name"]
+        if not shared(mp):
+            if libs.find(mp)[0] is not None:
+                say(f"{label} ({f.get('path', '?')}): not connected; Steam shows it as unavailable until it's back")
+            continue
+        try:
+            cid = ensure_library_folder(mp, label)
+        except OSError as e:
+            say(f"{label}: can't write to {mp} ({e}); not a Steam library this time")
+            continue
+        i, e = libs.find(mp)
+        if e is None:
+            i = libs.add(mp, label, cid)
+            say(f"Steam library {i}: {label} ({f.get('path', mp)}) added")
+        else:
+            vdf_set(e, "label", vdf_esc(label))
+            vdf_set(e, "contentid", cid)
+        move_tools(libs, mp)
+    libs.save()
+
+    # The default for new games. Portalistic sets it when the Mac's choice is new (its stamp
+    # changed), when the user's value is still the one it wrote last (so a drive coming back
+    # gets its default back), or when the value points at a library that went. A default
+    # picked in Steam since then stays.
+    if not CONF.is_file():
+        return 0
+    want, want_label = wanted_default(conf, libs)
+    stamp = str(conf.get("stamp", ""))
+    # (indexes from before the renumbering above, in today's numbers; gone: None)
+    written = {u: mapping.get(v) for u, v in state.get("written", {}).items() if isinstance(v, int)}
+    out, told = {}, False
+    for user, path in localconfigs():
+        cur = read_default(path)
+        cur_n = mapping.get(cur) if cur is not None else 0
+        mine = cur is None or cur_n is None or stamp != state.get("stamp") or written.get(user) == cur_n
+        target = want if mine else cur_n
+        if (cur is None and target != 0) or (cur is not None and cur != target):
+            if write_default(path, target) and mine and not told:
+                say(f"New games install to {want_label} by default (Steam > Settings > Storage changes it)")
+                told = True
+        out[user] = target if mine else written.get(user)
+    state = {"stamp": stamp, "written": {u: v for u, v in out.items() if v is not None}}
+    STATE.parent.mkdir(parents=True, exist_ok=True)
+    write_atomic(STATE, json.dumps(state))
+    return 0
+
+
+# ------------------------------------------------------------------ status
+
+def library_rows():
+    conf = load_json(CONF, {"folders": []})
+    labels = {MOUNT_ROOT / f.get("name", ""): (f.get("label") or f.get("name"), f.get("path", ""))
+              for f in conf.get("folders", [])}
+    libs = Libraries()
+    defaults = [read_default(p) for _, p in localconfigs() if p.parts[-3] != "0"] or \
+               [read_default(p) for _, p in localconfigs()]
+    default = next((d for d in defaults if d is not None), 0)
+    rows = []
+    for i, e in libs.entries():
+        p = Path(libs.path_of(e))
+        kind = "vm" if p.resolve() == STEAM.resolve() else ("mac" if p.parent == MOUNT_ROOT else "other")
+        label, mac_path = labels.get(p, (None, ""))
+        here = shared(p) if kind == "mac" else p.is_dir()
+        row = {"index": i, "path": str(p), "kind": kind, "connected": here, "default": i == default,
+               "label": label or ("VM disk" if kind == "vm" else vdf_value(e, "label") or p.name),
+               "mac_path": mac_path, "games": 0, "games_bytes": 0, "tools": 0}
+        if here:
+            du = shutil.disk_usage(p)
+            row.update(free=du.free, total=du.total)
+            apps = p / "steamapps"
+            for acf in apps.glob("appmanifest_*.acf"):
+                info = acf_info(acf)
+                if not info:
+                    continue
+                if is_tool(info, apps / "common"):
+                    row["tools"] += 1
+                else:
+                    row["games"] += 1
+                    row["games_bytes"] += info["size"]
+        rows.append(row)
+    return rows
+
+
+def cmd_status(args):
+    if not STEAM.is_dir():
+        say("No Steam folder yet.")
+        return 0
+    rows = library_rows()
+    if args.json:
+        print(json.dumps(rows))
+        return 0
+    say("Steam's libraries in the VM:")
+    for r in rows:
+        where = r["mac_path"] or r["path"]
+        if not r["connected"]:
+            space = "not connected (its drive isn't there, or the VM started before it was)"
+        elif r["kind"] == "vm":
+            space = "on the VM's disk"
+        else:
+            space = f"{gb(r['free'])} free of {gb(r['total'])}"
+        games = f"{r['games']} game{'s' if r['games'] != 1 else ''}" + (f", {gb(r['games_bytes'])}" if r["games"] else "")
+        say(f"  {r['index']}  {r['label']}{'  (default for new games)' if r['default'] else ''}")
+        say(f"       {where}: {space}; {games}" + (f"; {r['tools']} Steam tools" if r["tools"] else ""))
+    return 0
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    s = sub.add_parser("sync")
+    s.add_argument("--force", action="store_true", help=argparse.SUPPRESS)
+    s = sub.add_parser("status")
+    s.add_argument("--json", action="store_true")
+    args = ap.parse_args()
+    return {"sync": cmd_sync, "status": cmd_status}[args.cmd](args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

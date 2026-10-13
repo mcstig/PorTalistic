@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# bottle-log: game log summaries inside the VM (the Mac runs it through `bottle log`).
+#
+#   bottle-log [game]     the newest Proton log (~/steam-<appid>.log, needs PROTON_LOG=1:
+#                         bottle steam --debug)
+#   bottle-log prev [N]   the Nth earlier launch kept by bottle-logkeep (1 = the last one,
+#                         e.g. the launch that crashed before the one that worked)
+#   bottle-log list       the earlier launches kept
+set -uo pipefail
+
+K="${BOTTLE_LOGKEEP_DIR:-$HOME/.cache/steamos-bottle/game-logs}"
+NOISE='install_bpf|winebth|steam_api64|EDID|colorimetry|openxr|fixme:'
+
+summary() {
+  local L=$1
+  echo "== $L ($(du -h "$L" | cut -f1), last written $(date -r "$L" '+%a %H:%M:%S'))"
+  echo "== graphics (count, line)"
+  grep -aE "info:  (DXVK: v|Device : |D3D11InternalCreateDevice: Using)|vkd3d-proton - build|Skipping:|reporting as supported|stand-in active|Failed to init|bottle-present\] swapchain" "$L" \
+    | sed -E "s/^[0-9.]+:[0-9a-f]+:[0-9a-f]+://" | sort | uniq -c | sort -rn | head -12
+  echo "== frame rate"
+  grep -aE "bottle-present\] [0-9.]+ fps" "$L" | tail -2 | cut -c1-220
+  echo "== errors"
+  grep -aE "^err:|[0-9a-f]{4}:err:|Unhandled|Failed to map|DEVICE_LOST|Device lost|VK_ERROR|DxvkError|page fault|wine: |Assertion|terminate called|Segmentation|EXCEPTION_WINE_ASSERTION|MESA-VIRTIO" "$L" \
+    | grep -avE "$NOISE" | tail -12 | cut -c1-220
+  if command -v bottle-whyquit >/dev/null; then
+    echo "== why it ended (bottle-whyquit)"
+    bottle-whyquit "$L" 2>/dev/null | head -4 | cut -c1-300
+  fi
+  echo "== how it ended (last lines)"
+  grep -avE "$NOISE" "$L" | tail -n 12 | cut -c1-220
+}
+
+kept() {  # newest first
+  # shellcheck disable=SC2012  # plain file names
+  ls -1t "$K"/steam-*-*.log 2>/dev/null
+}
+
+case "${1:-game}" in
+  game)
+    L="$(ls -t "$HOME"/steam-*.log 2>/dev/null | head -1)"
+    if [[ -z "$L" ]]; then
+      echo "No game log. Start Steam with logging on: bottle steam --debug, then play."
+    else
+      summary "$L"
+    fi
+    n="$(kept | wc -l)"
+    (( n > 0 )) && echo "== $n earlier launch(es) kept: bottle log list / bottle log prev"
+    ;;
+  prev)
+    N="${2:-1}"
+    [[ "$N" =~ ^[0-9]+$ && "$N" -ge 1 ]] || { echo "usage: bottle log prev [N]"; exit 1; }
+    L="$(kept | sed -n "${N}p")"
+    if [[ -z "$L" ]]; then echo "No earlier launch kept yet (they're kept from the next bottle steam on)."; exit 0; fi
+    summary "$L"
+    ;;
+  list)
+    i=0
+    while read -r L; do
+      i=$((i + 1))
+      printf '%2d  %s  %6s  %s\n' "$i" "$(date -r "$L" '+%a %H:%M:%S')" "$(du -h "$L" | cut -f1)" "${L##*/}"
+    done < <(kept)
+    (( i > 0 )) || echo "No earlier launch kept yet."
+    ;;
+  *) echo "usage: bottle log [game | prev [N] | list | steam]"; exit 1 ;;
+esac

@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+# bottle-bench: baseline report for the SteamOS-bottle proof of concept.
+# Run as the normal user inside the VM:  bottle-bench
+# Writes to /tmp/lima/steamos-bottle-results/ (visible on the Mac at the same path).
+
+set -uo pipefail
+
+OUT_DIR=/tmp/lima/steamos-bottle-results
+[[ -d /tmp/lima && -w /tmp/lima ]] || OUT_DIR="$HOME/steamos-bottle-results"
+mkdir -p "$OUT_DIR"
+REPORT="$OUT_DIR/guest-$(date +%Y%m%d-%H%M%S).txt"
+DISPLAY_NUM="${DISPLAY_NUM:-1}"
+
+section() { printf '\n## %s\n' "$*"; }
+have()    { command -v "$1" >/dev/null 2>&1; }
+verdict() { printf '  -> %s\n' "$*"; }
+
+{
+  echo "# Guest report  $(date)"
+
+  section "System"
+  echo "kernel:    $(uname -r) ($(uname -m))"
+  echo "fedora:    $(cat /etc/fedora-release 2>/dev/null)"
+  echo "page size: $(getconf PAGESIZE)"
+  echo "vCPUs:     $(nproc)"
+  free -h | sed 's/^/  /'
+  df -h / | sed 's/^/  /'
+
+  section "Mesa"
+  rpm -q mesa-vulkan-drivers mesa-dri-drivers 2>/dev/null | sed 's/^/  /'
+  dnf versionlock list 2>/dev/null | grep -i mesa | sed 's/^/  locked: /'
+
+  section "Vulkan device (Venus)"
+  vk_summary="$(vulkaninfo --summary 2>&1)"
+  grep -E 'apiVersion|driverVersion|deviceName|driverName|deviceType' <<<"$vk_summary" | sed 's/^ */  /'
+  if grep -qi 'venus' <<<"$vk_summary"; then
+    verdict "PASS: Venus GPU visible"
+  elif grep -qi 'llvmpipe' <<<"$vk_summary"; then
+    verdict "FAIL: only llvmpipe (software). Venus Mesa isn't active."
+  else
+    verdict "FAIL: no usable Vulkan device. Raw output follows:"; echo "$vk_summary" | head -40
+  fi
+
+  section "Vulkan features DXVK / VKD3D-Proton care about"
+  # DXVK (D3D9-11) needs geometryShader, tessellationShader, robustness2, transform feedback, depthClip.
+  # VKD3D-Proton (D3D12) additionally leans on descriptor indexing, buffer device address, sparse, mutable descriptors.
+  # Only the Venus driver: with llvmpipe loaded too, every feature appears twice.
+  venus_icd="$(ls /usr/share/vulkan/icd.d/virtio_icd*.json 2>/dev/null | head -n1)"
+  echo "  (Venus ICD only: ${venus_icd:-not found})"
+  vk_full="$( [[ -n "$venus_icd" ]] && VK_DRIVER_FILES="$venus_icd" vulkaninfo 2>/dev/null)"
+  feats='geometryShader|tessellationShader|shaderFloat64|shaderInt64|multiDrawIndirect|depthClamp|depthBiasClamp|fillModeNonSolid|logicOp|dualSrcBlend|independentBlend|samplerAnisotropy|textureCompressionBC|occlusionQueryPrecise|pipelineStatisticsQuery|robustBufferAccess2|robustImageAccess2|nullDescriptor|transformFeedback|geometryStreams|depthClipEnable|customBorderColors|descriptorIndexing|bufferDeviceAddress|timelineSemaphore|dynamicRendering|sparseBinding|sparseResidencyBuffer|sparseResidencyImage2D|mutableDescriptorType|shaderDemoteToHelperInvocation'
+  grep -E "^[[:space:]]+(${feats})[[:space:]]+= " <<<"$vk_full" | sed 's/^ */  /' | sort -u
+  for ext in VK_EXT_robustness2 VK_EXT_transform_feedback VK_EXT_depth_clip_enable \
+             VK_EXT_custom_border_color VK_EXT_mutable_descriptor_type VK_KHR_maintenance5 \
+             VK_KHR_synchronization2 VK_KHR_swapchain; do
+    if grep -qw "$ext" <<<"$vk_full"; then echo "  ext $ext: yes"; else echo "  ext $ext: NO"; fi
+  done
+  if [[ -z "$vk_full" ]]; then
+    verdict "skipped: no Vulkan device to inspect"
+  elif grep -qE '^[[:space:]]+geometryShader[[:space:]]+= true' <<<"$vk_full"; then
+    verdict "geometryShader present on Venus: DXVK has a chance"
+  else
+    verdict "geometryShader MISSING: expect most D3D10/11 games to fail under DXVK"
+  fi
+
+  section "OpenGL (needs the desktop running)"
+  if [[ -S "/tmp/.X11-unix/X$DISPLAY_NUM" ]] && have glxinfo; then
+    echo "  default:"
+    DISPLAY=":$DISPLAY_NUM" glxinfo -B 2>&1 | grep -E 'OpenGL (renderer|version)' | sed 's/^/    /'
+    echo "  zink (GL over Venus):"
+    DISPLAY=":$DISPLAY_NUM" MESA_LOADER_DRIVER_OVERRIDE=zink glxinfo -B 2>&1 \
+      | grep -iE 'OpenGL (renderer|version)|error|fail|zink' | head -n 8 | sed 's/^/    /'
+  else
+    echo "  skipped (run bottle-desktop first, and install glx-utils)"
+  fi
+
+  section "vkmark (GPU throughput through Venus -> MoltenVK -> Metal)"
+  if have vkmark; then
+    if out="$(timeout 300 vkmark --winsys headless 2>&1)"; then
+      echo "$out" | tail -n 25 | sed 's/^/  /'
+    elif [[ -S "/tmp/.X11-unix/X$DISPLAY_NUM" ]]; then
+      echo "  headless winsys unavailable, running windowed on :$DISPLAY_NUM"
+      DISPLAY=":$DISPLAY_NUM" timeout 300 vkmark 2>&1 | tail -n 25 | sed 's/^/  /'
+    else
+      echo "  headless failed and no desktop running:"; echo "$out" | tail -5 | sed 's/^/  /'
+    fi
+  else
+    echo "  vkmark not installed"
+  fi
+
+  section "FEX (x86-64 Linux emulation)"
+  if have FEXBash; then
+    arch="$(FEXBash 'uname -m' 2>&1 | tail -n1)"
+    echo "  FEXBash uname -m: $arch"
+    [[ "$arch" == x86_64 ]] && verdict "PASS: FEX runs x86-64 binaries" || verdict "FAIL: FEX not working (check ~/.fex-emu/Config.json RootFS)"
+
+    # Crude CPU-translation cost: same shell loop native vs under FEX.
+    loop='i=0; while [ $i -lt 300000 ]; do i=$((i+1)); done'
+    t0=$(date +%s.%N); bash -c "$loop"; t1=$(date +%s.%N)
+    FEXBash "$loop" >/dev/null 2>&1; t2=$(date +%s.%N)
+    awk -v a="$t0" -v b="$t1" -v c="$t2" 'BEGIN{n=b-a; f=c-b; printf "  shell loop: native %.2fs, FEX %.2fs, FEX/native %.1fx\n", n, f, f/n}'
+
+    echo "  x86 Vulkan view (what x86 Linux games will see, thunks off):"
+    FEXBash 'command -v vulkaninfo >/dev/null && vulkaninfo --summary 2>&1 | grep -E "deviceName|driverName" || echo "    vulkaninfo not in x86 rootfs"' 2>&1 | sed 's/^/    /'
+  else
+    echo "  FEX not installed"
+  fi
+
+  section "Steam"
+  if [[ -d "$HOME/.local/share/Steam/steamrtarm64" ]]; then
+    echo "  client installed: $(du -sh "$HOME/.local/share/Steam" 2>/dev/null | cut -f1)"
+    for d in "$HOME"/.local/share/Steam/compatibilitytools.d/* "$HOME"/.local/share/Steam/steamapps/common/*; do
+      case "${d##*/}" in *[Pp]roton*|*FEX*|*Fex*) echo "  tool: ${d##*/}" ;; esac
+    done
+    [[ -f "$HOME/.config/steamos-bottle/steam-timing.log" ]] && sed 's/^/  /' "$HOME/.config/steamos-bottle/steam-timing.log"
+  else
+    echo "  not installed yet (run steam-arm64 in the desktop)"
+  fi
+} 2>&1 | tee "$REPORT"
+
+echo
+echo "Saved: $REPORT"

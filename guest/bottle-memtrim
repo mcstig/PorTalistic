@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# bottle-memtrim: keep the VM's file cache from taking the Mac's memory.
+#
+# NOT USED (Oct 9, 17:10): within minutes of it running, The Witcher 3 crashed on every launch
+# (the Mac side refusing a GPU submission), where it had played for minutes before; update-guest.sh
+# turns it off again. The VM's memory size (bottle memory on the Mac) caps its use of the Mac's
+# memory instead. Kept for reference.
+#
+# Every page the VM touches is real memory on the Mac (krunkit's). Linux keeps the files it
+# read in its cache for as long as nothing else wants the memory, and inside an 18 GB VM nothing
+# does: after a few minutes of an open-world game streaming its data the cache held 12.5 GB
+# (The Witcher 3, Oct 9), all of it held on the Mac too, next to the game's GPU memory (which
+# also lives in the Mac's memory) and everything else running there. The game then ran fine
+# for two minutes and fell from ~55 to ~15 fps, with macOS's shader compiler service dropping
+# out as under memory pressure.
+#
+# This loop (a systemd service, bottle-memtrim.service) keeps the file cache near a budget:
+# above it, it asks the kernel to reclaim the excess (cgroup v2 memory.reclaim, coldest pages
+# first, at most 1 GB per round, no swapping). Pages freed that way go back to the Mac: the
+# VM's balloon device reports free memory to krunkit (free page reporting), which releases it.
+# What the game touches often stays cached.
+#
+#   bottle-memtrim            the loop (the service runs it)
+#   bottle-memtrim status     cache and budget now, and the last lines of the log
+#
+# Settings (/etc/steamos-bottle/memtrim.conf, KEY=value): CACHE_MB (default 3072),
+# EVERY (seconds, default 5), REPORT_ORDER (free page reporting granularity, 2^n pages;
+# default 5 = 128 KB, so freed cache is handed back in smaller pieces; empty = kernel default).
+set -uo pipefail
+
+CONF=/etc/steamos-bottle/memtrim.conf
+LOG="${BOTTLE_MEMTRIM_LOG:-/var/log/bottle-memtrim.log}"
+MEMINFO="${BOTTLE_MEMTRIM_MEMINFO:-/proc/meminfo}"   # (the BOTTLE_MEMTRIM_* are for testing)
+R="${BOTTLE_MEMTRIM_RECLAIM:-/sys/fs/cgroup/memory.reclaim}"
+CACHE_MB=3072
+EVERY=5
+REPORT_ORDER=5
+# shellcheck disable=SC1090
+[[ -f "$CONF" ]] && . "$CONF"
+
+file_cache_kb() {  # the file pages on the LRU lists (not shared memory, which is swap-backed)
+  awk '/^Active\(file\):/ {a = $2} /^Inactive\(file\):/ {i = $2} END {print a + i}' "$MEMINFO"
+}
+mem_line() {
+  awk '/^MemTotal:/ {t = $2} /^MemFree:/ {f = $2} /^Active\(file\):/ {a = $2} /^Inactive\(file\):/ {i = $2}
+       /^AnonPages:/ {n = $2} END {printf "free %d MB, file cache %d MB, programs %d MB of %d MB", f / 1024, (a + i) / 1024, n / 1024, t / 1024}' "$MEMINFO"
+}
+log() { echo "$(date '+%F %T') $*" >> "$LOG"; }
+
+if [[ "${1:-}" == status ]]; then
+  echo "budget for the file cache: ${CACHE_MB} MB; now: $(mem_line)"
+  echo "free page reporting: $(cat /sys/module/page_reporting/parameters/page_reporting_order 2>/dev/null || echo '?') (order)"
+  tail -n 8 "$LOG" 2>/dev/null
+  exit 0
+fi
+
+[[ $EUID -eq 0 || -n "${BOTTLE_MEMTRIM_RECLAIM:-}" ]] || { echo "bottle-memtrim: runs as root (its service)"; exit 2; }
+if [[ ! -w "$R" ]]; then
+  log "no $R (cgroup v2 memory.reclaim, Linux 5.19+): nothing to do"
+  exec sleep infinity
+fi
+if [[ -n "$REPORT_ORDER" && -w /sys/module/page_reporting/parameters/page_reporting_order ]]; then
+  echo "$REPORT_ORDER" > /sys/module/page_reporting/parameters/page_reporting_order 2>/dev/null \
+    && log "free page reporting order set to $REPORT_ORDER"
+fi
+# "swappiness=0": reclaim cache only, never push the game's own memory out. Kernels without
+# that key answer "Invalid argument"; they get the amount alone.
+swap_arg=" swappiness=0"
+if [[ "$( { echo "1K${swap_arg}" > "$R"; } 2>&1 )" == *"nvalid argument"* ]]; then
+  swap_arg=""
+  log "this kernel's memory.reclaim has no swappiness key: plain reclaim"
+fi
+budget=$((CACHE_MB * 1024))
+log "started: budget ${CACHE_MB} MB; $(mem_line)"
+last_log=0 freed=0
+while sleep "$EVERY"; do
+  have="$(file_cache_kb)"
+  over=$((have - budget))
+  if (( over > 131072 )); then           # more than 128 MB over
+    (( over > 1048576 )) && over=1048576  # at most 1 GB a round: never a long stall
+    # (an error = it couldn't free all of it this round: fine)
+    echo "${over}K${swap_arg}" > "$R" 2>/dev/null || true
+    freed=$((freed + have - $(file_cache_kb)))
+  fi
+  now="$(date +%s)"
+  if (( now - last_log >= 60 && freed > 0 )); then
+    log "freed $((freed / 1024)) MB of file cache in the last minute; $(mem_line)"
+    freed=0 last_log=$now
+  fi
+done

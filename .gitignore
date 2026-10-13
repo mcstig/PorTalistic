@@ -1,0 +1,17 @@
+.DS_Store
+xcuserdata/
+*.xcuserstate
+__pycache__/
+
+# made on the development Mac
+build/
+logs/
+host/xcode/Team.xcconfig
+guest/prebuilt/aarch64.new/
+host/.bottle.new
+
+# development-only checks (not part of Portalistic)
+host/tests/
+host/swift-check/
+guest/tests/dx12-venus/libs/
+guest/tests/dx12-venus/tests/

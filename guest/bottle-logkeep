@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+# bottle-logkeep: keep the Proton logs of earlier game launches.
+#
+# With PROTON_LOG=1 (bottle steam --debug) Proton writes ~/steam-<appid>.log, but it starts
+# that file over on every launch, so the log of a launch that crashed is gone as soon as
+# the game is tried again. steam-arm64 runs this watcher next to Steam: every 2 s it copies
+# the start and the end of each log, and when a new launch starts the file over it files
+# the copy as ~/.cache/steamos-bottle/game-logs/steam-<appid>-<date-time>.log (the newest
+# 8 per game are kept). See them with `bottle log list` / `bottle log prev` on the Mac.
+# When a launch's log has gone quiet and no game is running any more, it asks bottle-whyquit
+# once whether the game closed by itself at launch (and why: the Mac window then says so).
+#
+#   bottle-logkeep          watch until killed
+#   bottle-logkeep --once   one pass (tests)
+set -uo pipefail
+
+D="${BOTTLE_LOGKEEP_DIR:-$HOME/.cache/steamos-bottle/game-logs}"
+SRC="${BOTTLE_LOGKEEP_SRC:-$HOME}"
+KEEP=8
+HEAD_B=300000      # bytes kept from the start of a big log (versions, GPU, DXVK setup)
+TAIL_B=1500000     # bytes kept from its end (how it ended)
+# From the part left out of a big log: the first errors and faults (often where trouble
+# started) and the thread names (which thread is which).
+TROUBLE=':err:|handle_syscall_fault|EXCEPTION_WINE|Unhandled|Assertion|MESA-VIRTIO|aborting|terminate called'
+MID_B=300000
+mkdir -p "$D"
+shopt -s nullglob
+
+declare -A size mark told quiet
+WHY="${BOTTLE_WHYQUIT:-bottle-whyquit}"
+game_running() { pgrep -f "[r]eaper SteamLaunch" >/dev/null || pgrep -f "[w]ineserver" >/dev/null; }
+
+middle() {  # $1 = log, $2 = its size: the bytes between the kept start and end
+  tail -c +$(( HEAD_B + 1 )) "$1" 2>/dev/null | head -c $(( $2 - HEAD_B - TAIL_B ))
+}
+
+snapshot() {  # $1 = log, $2 = its size; writes $D/<name>.snap
+  local f=$1 s=$2 out
+  out="$D/$(basename "$f" .log).snap"
+  if (( s > HEAD_B + TAIL_B )); then
+    { head -c "$HEAD_B" "$f"
+      printf '\n[... %d bytes left out by bottle-logkeep; from that part: ...]\n' $(( s - HEAD_B - TAIL_B ))
+      echo "[... thread names ...]"
+      middle "$f" "$s" | grep -a -m 400 "Thread renamed" | head -c 60000
+      echo "[... the first errors and faults, with the lines before them ...]"
+      middle "$f" "$s" | grep -a -m 40 -B 8 -A 3 -E "$TROUBLE" | head -c "$MID_B"
+      printf '\n[... end of the part left out ...]\n'
+      tail -c "$TAIL_B" "$f"; } > "$out.tmp" 2>/dev/null
+  else
+    cat "$f" > "$out.tmp" 2>/dev/null
+  fi
+  mv -f "$out.tmp" "$out"
+}
+
+file_away() {  # $1 = name (steam-<appid>): the snapshot becomes a kept log
+  local b=$1 snap="$D/$1.snap" t
+  [[ -s "$snap" ]] || return 0
+  t="$(date -r "$snap" +%Y%m%d-%H%M%S)"
+  mv -f "$snap" "$D/$b-$t.log"
+  # shellcheck disable=SC2012  # plain file names
+  ls -1t "$D/$b"-*.log 2>/dev/null | tail -n +$(( KEEP + 1 )) | xargs -r rm -f
+}
+
+# The first bytes identify a launch: Wine's lines carry timestamps and process ids, so a
+# new launch has a different start even when the file has grown past the old length.
+# $2 = how many bytes to compare (at most 8192).
+start_mark() { head -c "$2" "$1" 2>/dev/null | cksum | cut -d' ' -f1; }
+
+while :; do
+  for f in "$SRC"/steam-*.log; do
+    b="$(basename "$f" .log)"
+    s="$(stat -c %s "$f" 2>/dev/null)" || continue
+    prev="${size[$b]:-}"
+    # a log from before this watcher started has been looked at already
+    [[ -z "${told[$b]+x}" ]] && told[$b]="$(start_mark "$f" 8192)"
+    if [[ -n "$prev" ]]; then
+      # A new launch: the file got shorter, or its start no longer matches the old start
+      # (compared over the old length, up to 8 KB).
+      n=$(( prev < 8192 ? prev : 8192 ))
+      if (( s < prev )) || [[ "$(start_mark "$f" "$n")" != "${mark[$b]}" ]]; then
+        file_away "$b"
+        prev=""
+      fi
+    fi
+    [[ "$s" != "$prev" ]] && snapshot "$f" "$s"
+    if [[ "$s" == "$prev" ]]; then quiet[$b]=$(( ${quiet[$b]:-0} + 1 )); else quiet[$b]=0; fi
+    size[$b]=$s
+    mark[$b]="$(start_mark "$f" 8192)"
+    # the launch is over (quiet for 6 s, no game running): why it ended, once
+    if (( ${quiet[$b]} >= 3 )) && [[ "${told[$b]}" != "${mark[$b]}" ]] && ! game_running; then
+      told[$b]="${mark[$b]}"
+      command -v "$WHY" >/dev/null && { "$WHY" --notify "$f" >/dev/null 2>&1 & }
+    fi
+  done
+  [[ "${1:-}" == --once ]] && break
+  sleep 2
+done

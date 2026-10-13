@@ -1,0 +1,51 @@
+{
+  "file_format_version": "1.2.0",
+  "layer": {
+    "name": "VK_LAYER_BOTTLE_cpu_present",
+    "type": "GLOBAL",
+    "library_path": "@LIBRARY_PATH@",
+    "api_version": "1.3.0",
+    "implementation_version": "1",
+    "description": "X11 swapchain by CPU copy for GPUs without VK_KHR_swapchain (Venus on macOS hosts), plus DXVK feature stand-ins",
+    "functions": {
+      "vkGetInstanceProcAddr": "bp_GetInstanceProcAddr",
+      "vkGetDeviceProcAddr": "bp_GetDeviceProcAddr",
+      "vkNegotiateLoaderLayerInterfaceVersion": "vkNegotiateLoaderLayerInterfaceVersion"
+    },
+    "device_extensions": [
+      {
+        "name": "VK_KHR_swapchain",
+        "spec_version": "70",
+        "entrypoints": [
+          "vkCreateSwapchainKHR",
+          "vkDestroySwapchainKHR",
+          "vkGetSwapchainImagesKHR",
+          "vkAcquireNextImageKHR",
+          "vkQueuePresentKHR",
+          "vkAcquireNextImage2KHR",
+          "vkGetDeviceGroupPresentCapabilitiesKHR",
+          "vkGetDeviceGroupSurfacePresentModesKHR"
+        ]
+      },
+      {
+        "name": "VK_EXT_transform_feedback",
+        "spec_version": "1",
+        "entrypoints": [
+          "vkCmdBindTransformFeedbackBuffersEXT",
+          "vkCmdBeginTransformFeedbackEXT",
+          "vkCmdEndTransformFeedbackEXT",
+          "vkCmdBeginQueryIndexedEXT",
+          "vkCmdEndQueryIndexedEXT",
+          "vkCmdDrawIndirectByteCountEXT"
+        ]
+      },
+      {
+        "name": "VK_KHR_load_store_op_none",
+        "spec_version": "1"
+      }
+    ],
+    "disable_environment": {
+      "DISABLE_BOTTLE_PRESENT": "1"
+    }
+  }
+}

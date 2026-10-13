@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# bottle-busy: what is Steam doing? The Mac (bottle's keep-awake loop) asks every minute and
+# keeps itself from sleeping to match, since a sleeping Mac freezes the VM.
+#
+#   game      a game is running (Steam's game launcher, or Wine)
+#   download  Steam wrote download or update data in the last 3 minutes
+#   idle      neither
+set -uo pipefail
+
+if pgrep -f "[r]eaper SteamLaunch" >/dev/null || pgrep -f "[w]ineserver" >/dev/null; then
+  echo game
+  exit 0
+fi
+
+STEAM="${BOTTLE_STEAM_DIR:-$HOME/.local/share/Steam}"
+libs=("$STEAM")
+vdf="$STEAM/steamapps/libraryfolders.vdf"
+if [[ -f "$vdf" ]]; then
+  while IFS= read -r p; do libs+=("$p"); done \
+    < <(sed -n 's/^[[:space:]]*"path"[[:space:]]*"\(.*\)"[[:space:]]*$/\1/p' "$vdf")
+fi
+for lib in "${libs[@]}"; do
+  for d in "$lib/steamapps/downloading" "$lib/steamapps/temp"; do
+    [[ -d "$d" ]] || continue
+    if [[ -n "$(find "$d" -type f -mmin -3 -print -quit 2>/dev/null)" ]]; then
+      echo download
+      exit 0
+    fi
+  done
+done
+echo idle

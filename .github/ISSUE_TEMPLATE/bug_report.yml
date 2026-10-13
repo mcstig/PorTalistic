@@ -1,0 +1,60 @@
+name: "Bug report"
+description: Report a problem with Portalistic.
+title: "[bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ### Thanks for taking the time to create a bug report. Please search existing issues before submitting, as the issue may have already been addressed.
+
+  - type: textarea
+    id: bug-description
+    attributes:
+      label: Describe the bug
+      description: A clear and concise description of what the bug is. If you intend to submit a PR for this issue, describe how in the description.
+      placeholder: Description of happened and what you expected to happen.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: How to reproduce
+      description: A step-by-step description of how to reproduce the bug.
+      placeholder: |
+        1. Go to '...'
+        2. Click on '....'
+        3. See error
+    validations:
+      required: true
+
+  - type: textarea
+    id: system-information
+    attributes:
+      label: Mac & App Information
+      description: Help us understand the environment of the bug by providing information about your system and the app.
+      placeholder: |
+        - Model: MacBook Pro M4 Pro, 24 GB
+        - macOS: 26.6
+        - Portalistic: 0.7.0
+        - Game (if it's about one): name, and whether it's the Windows or Linux version
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: "Bottle > Save Logs saves them and shows the file in Finder: drag the .tgz file here. Paste anything Portalistic said in a message here too."
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Before submitting
+      description: By submitting this issue, you confirm you did the following things.
+      options:
+        - label: I've made research efforts
+          required: true
+        - label: I've searched for existing issues
+          required: true

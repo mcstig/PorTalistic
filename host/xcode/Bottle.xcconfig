@@ -1,0 +1,41 @@
+// Build settings for host/Portalistic.xcodeproj (the Portalistic app).
+//
+// Your signing team goes in Team.xcconfig next to this file (`bottle xcode` writes it from your
+// Apple Development certificate; one line: DEVELOPMENT_TEAM = ABCDE12345). It isn't part of the
+// kit, so kit updates never touch it. Choosing a team in Xcode's Signing & Capabilities works
+// too.
+#include? "Team.xcconfig"
+
+PRODUCT_NAME = Portalistic
+PRODUCT_BUNDLE_IDENTIFIER = io.github.mcstig.portalistic
+INFOPLIST_FILE = xcode/Info.plist
+GENERATE_INFOPLIST_FILE = NO
+MARKETING_VERSION = 0.7.0
+CURRENT_PROJECT_VERSION = 4
+
+SDKROOT = macosx
+// macOS 26: KosmicKrisp, the Mac side of the VM's GPU, needs it
+MACOSX_DEPLOYMENT_TARGET = 26.0
+ARCHS = arm64
+SUPPORTED_PLATFORMS = macosx
+
+SWIFT_VERSION = 5.0
+SWIFT_STRICT_CONCURRENCY = minimal
+SWIFT_EMIT_LOC_STRINGS = NO
+LD_RUNPATH_SEARCH_PATHS = $(inherited) @executable_path/../Frameworks
+COPY_PHASE_STRIP = NO
+ENABLE_DEBUG_DYLIB = NO
+ENABLE_STRICT_OBJC_MSGSEND = YES
+ALWAYS_SEARCH_USER_PATHS = NO
+
+// Signed with your team (Apple Development), hardened runtime; no App Sandbox: the app runs the
+// kit's bottle command (bash, Lima) and talks to the VM on 127.0.0.1.
+CODE_SIGN_STYLE = Automatic
+CODE_SIGN_IDENTITY = Apple Development
+ENABLE_HARDENED_RUNTIME = YES
+ENABLE_APP_SANDBOX = NO
+
+// Where the kit is, and the PATH for its bottle command (Info.plist: BottleKitDir, BottlePath).
+// The bottle command passes both when it builds; from Xcode the kit is the folder above host/.
+BOTTLE_KIT_DIR = $(SRCROOT)/..
+BOTTLE_PATH =

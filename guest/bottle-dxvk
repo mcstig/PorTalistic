@@ -1,0 +1,651 @@
+#!/usr/bin/env python3
+"""bottle-dxvk: give Windows games DXVK 2.6.2 instead of Proton's own DXVK.
+
+The build is Ph42oN's dxvk-gplasync 2.6.2-1 when it's there (update-guest.sh fetches it):
+DXVK 2.6.2 plus asynchronous pipeline compiling. With DXVK_ASYNC=1 (steam-arm64 sets it) a
+draw whose shaders aren't compiled yet is skipped for a frame or two instead of freezing the
+game until the Mac has compiled them; without it, it behaves like plain 2.6.2. Plain 2.6.2
+is the fallback.
+
+Proton's own DXVK (3.x) needs VK_KHR_maintenance5 and VK_KHR_maintenance6, which the
+bottle's GPU (Venus on KosmicKrisp) doesn't have yet: it finds no GPU and the game (or its
+launcher) quits. DXVK 2.6.2 goes in three places:
+  - next to each Windows game's .exe (Wine loads a program's own DLLs first). Files we add
+    are listed in a marker file in each folder, so `remove` takes out only ours;
+  - into every Proton (its files/lib/wine/dxvk), keeping Proton's originals as
+    <dll>.bottle-orig, so prefixes Proton sets up or upgrades get 2.6.2;
+  - into every game's Proton prefix (system32 / syswow64), where Proton put its DXVK: that
+    covers programs outside the game's folder, such as launchers installed into the prefix
+    (The Witcher 3's REDlauncher lives in AppData and crashed in Proton's DXVK 3.1, Oct 9).
+After a Proton update the watcher (steam-arm64, every 5 s) puts 2.6.2 back.
+
+DirectX 12 the same way: Proton's vkd3d-proton 3.1 (d3d12.dll, d3d12core.dll) also requires
+maintenance5/6 ("maintenance5 and/or maintenance6 not supported by this implementation. This is
+required for correct operation", The Witcher 3, Oct 10: "Support for DirectX 12 is required").
+vkd3d-proton 3.0.1 doesn't, and runs on the Mac's GPU (its own test suite through FEX, Oct 10).
+It goes into every Proton (files/lib/wine/vkd3d-proton) and every game's prefix, Proton's
+originals kept as <dll>.bottle-orig; games ship no d3d12.dll of their own, so not game folders.
+
+  bottle-dxvk status              list Windows games and their DXVK state
+  bottle-dxvk apply [APPID|all]   add DXVK 2.6.2 (default: all). Skipped when the GPU
+                                  has maintenance5+6 (then Proton's DXVK works), unless --force
+  bottle-dxvk remove [APPID|all]  take our copies out again
+
+Env: BOTTLE_DXVK_DIR (where the DLLs are; default the gplasync build, else plain 2.6.2)
+"""
+import argparse
+import fcntl
+import glob
+import hashlib
+import json
+import os
+import re
+import shutil
+import struct
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+VERSION = "2.6.2"
+SHARE = Path("/usr/local/share/steamos-bottle")
+ASYNC_DIR = SHARE / "dxvk-gplasync-2.6.2-1"
+
+
+def pick_cache():
+    if os.environ.get("BOTTLE_DXVK_DIR"):
+        return Path(os.environ["BOTTLE_DXVK_DIR"])
+    if (ASYNC_DIR / "x64/d3d11.dll").is_file() and (ASYNC_DIR / "x32/d3d11.dll").is_file():
+        return ASYNC_DIR
+    return SHARE / f"dxvk-{VERSION}"
+
+
+CACHE = pick_cache()
+# what the files are called in messages and markers: "2.6.2" or "2.6.2-gplasync"
+BUILD = VERSION + ("-gplasync" if "gplasync" in CACHE.name else "")
+DLLS = ["d3d8.dll", "d3d9.dll", "d3d10core.dll", "d3d11.dll", "dxgi.dll"]
+MARKER = ".bottle-dxvk.json"
+STEAM = Path(os.environ.get("BOTTLE_STEAM_DIR", Path.home() / ".local/share/Steam"))
+NEED_CACHE = Path.home() / ".cache/steamos-bottle/dxvk-need"
+SEEN = Path.home() / ".cache/steamos-bottle/dxvk-seen.json"   # --quick: manifest stamps already done
+
+# Tools, not games: Proton itself, runtimes, redistributables.
+SKIP_APPS = re.compile(r"^(proton|steam linux runtime|steamworks common redistributables|steamvr)", re.I)
+# Helper executables and installer folders that never load Direct3D.
+SKIP_EXES = re.compile(
+    r"^(unitycrashhandler|crashreport|crashpad|crash_?handler|unins|vc_?redist|vcredist|dxsetup|dotnet|"
+    r"ue4prereq|ueprereq|oalinst|physx|easyanticheat|battleye|be_service|setup|installer|createdump)", re.I)
+SKIP_DIRS = re.compile(r"^(_commonredist|__installer|redist|redistributables?|directx|vcredist|dotnet|"
+                       r"prereq|prerequisites|easyanticheat|battleye|support)$", re.I)
+MAX_DEPTH = 4
+ORIG = ".bottle-orig"
+# Proton's DXVK folders: (path in a Proton install, arch). Newer Protons keep both archs under
+# files/lib/wine/dxvk/{x86_64,i386}-windows; older ones lib64 (x64) and lib (x32).
+PROTON_DXVK = [("files/lib/wine/dxvk/x86_64-windows", "x64"), ("files/lib/wine/dxvk/i386-windows", "x32"),
+               ("files/lib64/wine/dxvk", "x64"), ("files/lib/wine/dxvk", "x32")]
+PREFIX_DIRS = [("pfx/drive_c/windows/system32", "x64"), ("pfx/drive_c/windows/syswow64", "x32")]
+
+# vkd3d-proton (DirectX 12): update-guest.sh fetches the release into SHARE
+VKD3D_VERSION = "3.0.1"
+VKD3D_CACHE = SHARE / f"vkd3d-proton-{VKD3D_VERSION}"
+VKD3D_BUILD = f"vkd3d-proton-{VKD3D_VERSION}"
+VKD3D_DLLS = ["d3d12.dll", "d3d12core.dll"]
+VKD3D_ARCH = {"x64": "x64", "x32": "x86"}   # the release's folder names
+PROTON_VKD3D = [("files/lib/wine/vkd3d-proton/x86_64-windows", "x64"), ("files/lib/wine/vkd3d-proton/i386-windows", "x32"),
+                ("files/lib64/wine/vkd3d-proton", "x64"), ("files/lib/wine/vkd3d-proton", "x32")]
+
+
+def vkd3d_src(arch, dll):
+    return VKD3D_CACHE / VKD3D_ARCH[arch] / dll
+
+
+def sha256(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def pe_arch(path):
+    """'x64', 'x32' or None for a Windows executable."""
+    try:
+        with open(path, "rb") as f:
+            head = f.read(64)
+            if len(head) < 64 or head[:2] != b"MZ":
+                return None
+            f.seek(struct.unpack_from("<I", head, 0x3C)[0])
+            pe = f.read(6)
+    except OSError:
+        return None
+    if len(pe) < 6 or pe[:4] != b"PE\0\0":
+        return None
+    return {0x8664: "x64", 0x14C: "x32"}.get(struct.unpack_from("<H", pe, 4)[0])
+
+
+def library_dirs():
+    """steamapps folders of every Steam library."""
+    seen, out = set(), []
+    candidates = [STEAM]
+    vdf = STEAM / "steamapps/libraryfolders.vdf"
+    if vdf.is_file():
+        candidates += [Path(p) for p in re.findall(r'"path"\s+"([^"]+)"', vdf.read_text(errors="replace"))]
+    for lib in candidates:
+        apps = lib / "steamapps"
+        try:
+            real = apps.resolve()
+        except OSError:
+            continue
+        if apps.is_dir() and real not in seen:
+            seen.add(real)
+            out.append(apps)
+    return out
+
+
+def installed_games():
+    games = []
+    for apps in library_dirs():
+        for acf in sorted(apps.glob("appmanifest_*.acf")):
+            text = acf.read_text(errors="replace")
+            appid = re.search(r'"appid"\s+"(\d+)"', text)
+            name = re.search(r'"name"\s+"([^"]*)"', text)
+            installdir = re.search(r'"installdir"\s+"([^"]*)"', text)
+            if not (appid and installdir):
+                continue
+            name = name.group(1) if name else installdir.group(1)
+            if SKIP_APPS.match(name):
+                continue
+            path = apps / "common" / installdir.group(1)
+            if path.is_dir():
+                games.append({"appid": appid.group(1), "name": name, "path": path,
+                              "stamp": f"{acf.stat().st_mtime_ns}"})
+    return games
+
+
+def exe_dirs(game_dir):
+    """{folder: arch} for every folder holding a game .exe (arch of its biggest .exe)."""
+    best = {}
+    for root, dirs, files in os.walk(game_dir):
+        rel = os.path.relpath(root, game_dir)
+        depth = 0 if rel == "." else rel.count(os.sep) + 1
+        dirs[:] = [d for d in dirs if not SKIP_DIRS.match(d)] if depth < MAX_DEPTH else []
+        for f in files:
+            if not f.lower().endswith(".exe") or SKIP_EXES.match(f):
+                continue
+            p = Path(root) / f
+            arch = pe_arch(p)
+            if not arch:
+                continue
+            size = p.stat().st_size
+            if root not in best or size > best[root][0]:
+                best[root] = (size, arch)
+    return {Path(d): v[1] for d, v in best.items()}
+
+
+def read_marker(folder):
+    try:
+        return json.loads((folder / MARKER).read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+# DLLs that must come from the same DXVK build: if the game ships its own copy of one
+# (ReShade, Special K, ...), mixing versions breaks, so the whole group is left alone.
+GROUPS = [["d3d10core.dll", "d3d11.dll", "dxgi.dll"], ["d3d8.dll", "d3d9.dll"]]
+
+
+def apply_folder(folder, arch):
+    """Returns (changed, notes)."""
+    src_dir = CACHE / arch
+    ours = set(read_marker(folder).get("files", []))
+    owned, changed, notes = [], False, []
+    for group in GROUPS:
+        plan = []
+        foreign = []
+        for dll in group:
+            src, dst = src_dir / dll, folder / dll
+            if not src.is_file():
+                continue
+            want = sha256(src)
+            if dst.exists():
+                if sha256(dst) == want:
+                    plan.append((dll, None))       # identical: ours already, or a manual copy to adopt
+                elif dll in ours:
+                    plan.append((dll, src))        # our older copy: refresh
+                else:
+                    foreign.append(dll)
+            else:
+                plan.append((dll, src))
+        if foreign:
+            notes.append(f"the game ships its own {', '.join(foreign)}: left {', '.join(group)} alone")
+            owned += [d for d in group if d in ours]   # keep tracking what we added earlier
+            continue
+        for dll, src in plan:
+            if src is not None:
+                tmp = folder / (dll + ".bottle-tmp")
+                shutil.copyfile(src, tmp)
+                os.replace(tmp, folder / dll)
+                changed = True
+            elif dll not in ours:
+                changed = True
+            owned.append(dll)
+    if changed or set(owned) != ours:
+        (folder / MARKER).write_text(json.dumps({"dxvk": BUILD, "arch": arch, "files": owned}) + "\n")
+    return changed, notes
+
+
+def marker_dirs(game_dir):
+    for root, dirs, files in os.walk(game_dir):
+        if MARKER in files:
+            yield Path(root)
+
+
+def remove_folder(folder):
+    marker = read_marker(folder)
+    removed = 0
+    for dll in marker.get("files", []):
+        try:
+            (folder / dll).unlink()
+            removed += 1
+        except FileNotFoundError:
+            pass
+    try:
+        (folder / MARKER).unlink()
+    except FileNotFoundError:
+        pass
+    return removed
+
+
+def gpu_needs_old_dxvk(force_check=False):
+    """True when Venus lacks maintenance5/6 (so Proton's DXVK 3.x can't run). Cached for 6 h."""
+    try:
+        if not force_check and time.time() - NEED_CACHE.stat().st_mtime < 6 * 3600:
+            return NEED_CACHE.read_text().strip() == "1"
+    except OSError:
+        pass
+    icds = sorted(glob.glob("/usr/share/vulkan/icd.d/virtio_icd*.json"))
+    env = dict(os.environ)
+    if icds:
+        env["VK_DRIVER_FILES"] = icds[0]
+        env["VK_ICD_FILENAMES"] = icds[0]
+    try:
+        out = subprocess.run(["vulkaninfo"], capture_output=True, text=True, env=env, timeout=60).stdout
+        need = not ("VK_KHR_maintenance5" in out and "VK_KHR_maintenance6" in out and "Venus" in out)
+    except (OSError, subprocess.SubprocessError):
+        need = True
+    try:
+        NEED_CACHE.parent.mkdir(parents=True, exist_ok=True)
+        NEED_CACHE.write_text("1\n" if need else "0\n")
+    except OSError:
+        pass
+    return need
+
+
+# ------------------------------------------------- Proton installs and game prefixes
+
+def proton_tools():
+    """Every Proton install: steamapps/common/* and compatibilitytools.d/* with a proton script."""
+    roots = [apps / "common" for apps in library_dirs()] + [STEAM / "compatibilitytools.d"]
+    seen = set()
+    for r in roots:
+        try:
+            entries = sorted(r.iterdir())
+        except OSError:
+            continue
+        for d in entries:
+            try:
+                real = d.resolve()
+            except OSError:
+                continue
+            if (d / "proton").is_file() and real not in seen:
+                seen.add(real)
+                yield d
+
+
+def proton_dxvk_dirs(tool):
+    out = []
+    for rel, arch in PROTON_DXVK:
+        d = tool / rel
+        if not d.is_dir():
+            continue
+        if rel == "files/lib/wine/dxvk" and (d / "x86_64-windows").is_dir():
+            continue   # the newer layout: its two subfolders above
+        if any((d / dll).is_file() for dll in DLLS):
+            out.append((d, arch))
+    return out
+
+
+def prefix_dll_dirs():
+    for apps in library_dirs():
+        try:
+            prefixes = sorted((apps / "compatdata").iterdir())
+        except OSError:
+            continue
+        for pfx in prefixes:
+            for rel, arch in PREFIX_DIRS:
+                d = pfx / rel
+                if d.is_dir():
+                    yield pfx.name, d, arch
+
+
+def stamp(path):
+    st = path.stat()
+    return f"{st.st_size}:{st.st_mtime_ns}"
+
+
+def is_ours(path, src, stamps, build=None):
+    """path holds the current build's copy of src. stamps (path -> "size:mtime|build" of
+    copies we made) spare hashing on every pass of the watcher."""
+    build = build or BUILD
+    try:
+        here = stamp(path)
+        if stamps.get(str(path)) == f"{here}|{build}":
+            return True
+        if path.stat().st_size != src.stat().st_size:
+            return False
+        if sha256(path) == sha256(src):
+            stamps[str(path)] = f"{here}|{build}"
+            return True
+    except OSError:
+        pass
+    return False
+
+
+_KNOWN = None
+
+
+def was_ours(path, stamps):
+    """path is a copy of any DXVK build the bottle has put in place (an earlier one included,
+    e.g. plain 2.6.2 before the gplasync build): replace it without keeping it as Proton's."""
+    global _KNOWN
+    try:
+        rec = stamps.get(str(path), "")
+        if rec and rec.split("|")[0] == stamp(path):
+            return True
+        if _KNOWN is None:
+            _KNOWN = set()
+            for f in glob.glob(str(SHARE / "dxvk-*" / "x*" / "*.dll")) + glob.glob(str(SHARE / "vkd3d-proton-*" / "x*" / "*.dll")):
+                try:
+                    _KNOWN.add(sha256(f))
+                except OSError:
+                    pass
+        return sha256(path) in _KNOWN
+    except OSError:
+        return False
+
+
+def is_dxvk_build(path):
+    """A DXVK DLL (not Wine's own builtin one, which Proton puts there for PROTON_USE_WINED3D)."""
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return False
+    if data[0x40:0x50] == b"Wine builtin DLL":
+        return False
+    return b"DXVK" in data or b"dxvk" in data
+
+
+def put(src, dst, stamps, build=None):
+    tmp = dst.with_name(dst.name + ".bottle-tmp")
+    shutil.copyfile(src, tmp)
+    os.replace(tmp, dst)
+    stamps[str(dst)] = f"{stamp(dst)}|{build or BUILD}"
+
+
+def is_vkd3d_build(path):
+    """vkd3d-proton's d3d12 (not Wine's own builtin d3d12.dll)."""
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return False
+    if data[0x40:0x50] == b"Wine builtin DLL":
+        return False
+    return b"vkd3d" in data
+
+
+def proton_vkd3d_dirs(tool):
+    out = []
+    for rel, arch in PROTON_VKD3D:
+        d = tool / rel
+        if not d.is_dir():
+            continue
+        if rel == "files/lib/wine/vkd3d-proton" and (d / "x86_64-windows").is_dir():
+            continue   # the newer layout: its two subfolders above
+        if any((d / dll).is_file() for dll in VKD3D_DLLS):
+            out.append((d, arch))
+    return out
+
+
+def apply_vkd3d(stamps, builtin, quiet):
+    """vkd3d-proton 3.0.1 into every Proton and every game's prefix (Proton's own kept as
+    <dll>.bottle-orig in Proton's folders). Returns how many folders changed."""
+    if not (VKD3D_CACHE / "x64/d3d12core.dll").is_file():
+        if not quiet:
+            print(f"vkd3d-proton {VKD3D_VERSION} isn't in {VKD3D_CACHE} (run bottle update): DirectX 12 left to Proton")
+        return 0
+    changed = 0
+    for tool in proton_tools():
+        for d, arch in proton_vkd3d_dirs(tool):
+            done = []
+            for dll in VKD3D_DLLS:
+                src, dst = vkd3d_src(arch, dll), d / dll
+                if not src.is_file() or not dst.is_file() or dst.is_symlink() or is_ours(dst, src, stamps, VKD3D_BUILD):
+                    continue
+                if not was_ours(dst, stamps) or not (d / (dll + ORIG)).is_file():
+                    shutil.copy2(dst, d / (dll + ORIG))   # Proton's (again after a Proton update)
+                put(src, dst, stamps, VKD3D_BUILD)
+                done.append(dll)
+            if done:
+                changed += 1
+                print(f"{VKD3D_BUILD} [{arch}] -> {tool.name} ({', '.join(done)})")
+            elif not quiet:
+                print(f"ok: {tool.name} [{arch}] DirectX 12")
+    for appid, d, arch in prefix_dll_dirs():
+        done = []
+        for dll in VKD3D_DLLS:
+            src, dst = vkd3d_src(arch, dll), d / dll
+            if not src.is_file() or not dst.is_file() or dst.is_symlink() or is_ours(dst, src, stamps, VKD3D_BUILD):
+                continue
+            if builtin.get(str(dst)) == stamp(dst):
+                continue
+            if not is_vkd3d_build(dst):
+                builtin[str(dst)] = stamp(dst)
+                continue   # Wine's own builtin d3d12: leave it
+            put(src, dst, stamps, VKD3D_BUILD)
+            done.append(dll)
+        if done:
+            changed += 1
+            print(f"{VKD3D_BUILD} [{arch}] -> prefix {appid} {d.name} ({', '.join(done)})")
+    return changed
+
+
+def apply_proton(stamps, quiet):
+    """2.6.2 into every Proton's DXVK folder, Proton's own DLLs kept as <dll>.bottle-orig."""
+    changed = 0
+    for tool in proton_tools():
+        for d, arch in proton_dxvk_dirs(tool):
+            done = []
+            for dll in DLLS:
+                src, dst = CACHE / arch / dll, d / dll
+                if not src.is_file() or not dst.is_file() or dst.is_symlink() or is_ours(dst, src, stamps):
+                    continue
+                if not was_ours(dst, stamps) or not (d / (dll + ORIG)).is_file():
+                    shutil.copy2(dst, d / (dll + ORIG))   # Proton's (again after a Proton update)
+                put(src, dst, stamps)
+                done.append(dll)
+            if done:
+                changed += 1
+                print(f"DXVK {BUILD} [{arch}] -> {tool.name} ({', '.join(done)})")
+            elif not quiet:
+                print(f"ok: {tool.name} [{arch}]")
+    return changed
+
+
+def apply_prefixes(stamps, builtin, quiet):
+    """2.6.2 in place of the DXVK DLLs Proton put into each game's prefix. builtin: path ->
+    size:mtime of Wine's own DLLs seen there (not read again until they change)."""
+    changed = 0
+    for appid, d, arch in prefix_dll_dirs():
+        done = []
+        for dll in DLLS:
+            src, dst = CACHE / arch / dll, d / dll
+            if not src.is_file() or not dst.is_file() or dst.is_symlink() or is_ours(dst, src, stamps):
+                continue
+            if builtin.get(str(dst)) == stamp(dst):
+                continue
+            if not is_dxvk_build(dst):
+                builtin[str(dst)] = stamp(dst)
+                continue   # Wine's own builtin (the game runs WineD3D): leave it
+            put(src, dst, stamps)
+            done.append(dll)
+        if done:
+            changed += 1
+            print(f"DXVK {BUILD} [{arch}] -> prefix {appid} {d.name} ({', '.join(done)})")
+    return changed
+
+
+def remove_proton_and_prefixes(stamps):
+    originals = {}   # (arch, dll) -> a Proton original, to put back into prefixes
+    for tool in proton_tools():
+        for d, arch in proton_dxvk_dirs(tool):
+            for dll in DLLS:
+                orig, dst = d / (dll + ORIG), d / dll
+                if orig.is_file():
+                    originals.setdefault((arch, dll), dst)
+                    if not dst.exists() or is_ours(dst, CACHE / arch / dll, stamps) or was_ours(dst, stamps):
+                        os.replace(orig, dst)
+                        print(f"Proton's own {dll} back in {tool.name} [{arch}]")
+    for tool in proton_tools():
+        for d, arch in proton_vkd3d_dirs(tool):
+            for dll in VKD3D_DLLS:
+                orig, dst = d / (dll + ORIG), d / dll
+                if orig.is_file():
+                    originals.setdefault((arch, dll), dst)
+                    if not dst.exists() or is_ours(dst, vkd3d_src(arch, dll), stamps, VKD3D_BUILD) or was_ours(dst, stamps):
+                        os.replace(orig, dst)
+                        print(f"Proton's own {dll} back in {tool.name} [{arch}]")
+    for appid, d, arch in prefix_dll_dirs():
+        for dll in DLLS:
+            dst, src = d / dll, originals.get((arch, dll))
+            if src and dst.is_file() and (is_ours(dst, CACHE / arch / dll, stamps) or was_ours(dst, stamps)):
+                put(src, dst, {})
+                print(f"Proton's {dll} back in prefix {appid} {d.name}")
+        for dll in VKD3D_DLLS:
+            dst, src = d / dll, originals.get((arch, dll))
+            if src and dst.is_file() and (is_ours(dst, vkd3d_src(arch, dll), stamps, VKD3D_BUILD) or was_ours(dst, stamps)):
+                put(src, dst, {})
+                print(f"Proton's {dll} back in prefix {appid} {d.name}")
+
+
+def pick(games, target):
+    if target in (None, "all"):
+        return games
+    sel = [g for g in games if g["appid"] == target or g["name"].lower() == target.lower()]
+    if not sel:
+        sys.exit(f"bottle-dxvk: no installed game matches '{target}' (try: bottle-dxvk status)")
+    return sel
+
+
+def main():
+    ap = argparse.ArgumentParser(description="DXVK 2.6.2 drop-in for Windows games in the bottle")
+    ap.add_argument("command", choices=["status", "apply", "remove"])
+    ap.add_argument("target", nargs="?", help="APPID, exact game name, or 'all' (default)")
+    ap.add_argument("--force", action="store_true", help="apply even if the GPU could run Proton's DXVK")
+    ap.add_argument("--quiet", action="store_true", help="only print changes")
+    ap.add_argument("--quick", action="store_true",
+                    help="apply: only games whose Steam manifest changed since they were last done "
+                         "(cheap enough to run every few seconds)")
+    args = ap.parse_args()
+
+    # One pass at a time: Steam's start and a watcher left over from the Steam before it could
+    # otherwise both copy Proton's DLLs, and one could keep a bottle build as Proton's original.
+    if args.command in ("apply", "remove"):
+        lock = Path.home() / ".cache/steamos-bottle/dxvk.lock"
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        lock_fd = open(lock, "w")
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+
+    games = pick(installed_games(), args.target)
+
+    if args.command == "status":
+        need = gpu_needs_old_dxvk()
+        print(f"GPU needs DXVK {VERSION} drop-in: {'yes' if need else 'no (Proton DXVK should work)'}")
+        print(f"DLL cache: {CACHE} {'(ok)' if (CACHE / 'x64/d3d11.dll').is_file() else '(MISSING: run bottle update)'}")
+        stamps = {}
+        for tool in proton_tools():
+            for d, arch in proton_dxvk_dirs(tool):
+                mine = [dll for dll in DLLS if (d / dll).is_file() and is_ours(d / dll, CACHE / arch / dll, stamps)]
+                there = [dll for dll in DLLS if (d / dll).is_file()]
+                print(f"  {tool.name} [{arch}]: {'DXVK ' + BUILD if mine and len(mine) == len(there) else 'Proton DXVK'}")
+            for d, arch in proton_vkd3d_dirs(tool):
+                mine = [dll for dll in VKD3D_DLLS if (d / dll).is_file() and is_ours(d / dll, vkd3d_src(arch, dll), stamps, VKD3D_BUILD)]
+                print(f"  {tool.name} [{arch}]: {VKD3D_BUILD if mine else 'Proton vkd3d-proton'} (DirectX 12)")
+        for g in games:
+            dirs = exe_dirs(g["path"])
+            if not dirs:
+                continue
+            states = []
+            for d, arch in dirs.items():
+                m = read_marker(d)
+                st = f"DXVK {m.get('dxvk')}" if m.get("files") else "Proton DXVK"
+                states.append(f"{os.path.relpath(d, g['path'])} [{arch}]: {st}")
+            print(f"{g['appid']:>9}  {g['name']}")
+            for s in states:
+                print(f"           {s}")
+        return
+
+    if args.command == "apply":
+        if not (CACHE / "x64/d3d11.dll").is_file():
+            sys.exit(f"bottle-dxvk: DXVK {BUILD} isn't in {CACHE}; run 'bottle update' on the Mac.")
+        if not args.force and not gpu_needs_old_dxvk():
+            if not args.quiet:
+                print("The GPU has maintenance5+6, so Proton's own DXVK can run; nothing to do (use --force to apply anyway).")
+            return
+        try:
+            seen = json.loads(SEEN.read_text())
+        except (OSError, ValueError):
+            seen = {}
+        stamps = seen.setdefault("_files", {})
+        if args.target in (None, "all"):
+            # every pass (stat only, unless something changed): a Proton update brings its
+            # DXVK back, and Proton copies its DLLs into a game's prefix when it sets it up
+            apply_proton(stamps, args.quiet)
+            apply_prefixes(stamps, seen.setdefault("_builtin", {}), args.quiet)
+            apply_vkd3d(stamps, seen.setdefault("_builtin", {}), args.quiet)
+        for g in games:
+            if args.quick and seen.get(g["appid"]) == g["stamp"]:
+                continue   # installed or updated before, and done since
+            seen[g["appid"]] = g["stamp"]
+            for d, arch in exe_dirs(g["path"]).items():
+                changed, notes = apply_folder(d, arch)
+                rel = os.path.relpath(d, g["path"])
+                if changed:
+                    print(f"DXVK {BUILD} [{arch}] -> {g['name']} ({g['appid']}) {rel}")
+                elif not args.quiet:
+                    print(f"ok: {g['name']} ({g['appid']}) {rel}")
+                for n in notes:
+                    if not args.quiet:
+                        print(f"   note: {n}")
+        try:
+            SEEN.parent.mkdir(parents=True, exist_ok=True)
+            SEEN.write_text(json.dumps(seen) + "\n")
+        except OSError:
+            pass
+        return
+
+    if args.command == "remove":
+        if args.target in (None, "all"):
+            try:
+                seen = json.loads(SEEN.read_text())
+            except (OSError, ValueError):
+                seen = {}
+            remove_proton_and_prefixes(seen.get("_files", {}))
+        for g in games:
+            for d in marker_dirs(g["path"]):
+                n = remove_folder(d)
+                if n:
+                    print(f"removed {n} DLL(s): {g['name']} ({g['appid']}) {os.path.relpath(d, g['path'])}")
+
+
+if __name__ == "__main__":
+    main()

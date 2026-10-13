@@ -1,0 +1,625 @@
+#!/usr/bin/env python3
+"""bottle-steamplay: every game in the bottle runs as its Windows version, through Proton
+Experimental (bottle-dxvk gives each one DXVK 2.6.2). No fallbacks:
+
+  * BOTTLE_STEAMPLAY_TOOL=bottle (in steam.env) instead sets games to an own Steam Play tool,
+    "SteamOS Bottle" (Proton Experimental with DXVK 2.6.2 built in). Off by default: Steam's
+    ARM64 client fails to start it ("Compatibility tool failed"), likely because it runs
+    Proton through FEX only for Valve's own Proton installs. Without it the tool is removed.
+
+
+  * Native Linux versions of games use OpenGL, and the bottle has no GPU OpenGL (only Vulkan,
+    through Venus), so they draw in software at a few fps (Rocket League did). Every game in
+    the library is therefore set to the SteamOS Bottle tool, which makes Steam install and run
+    its Windows version.
+  * Proton's own DXVK (3.x) needs Vulkan features the bottle's GPU lacks. The tool is Proton
+    Experimental with DXVK 2.6.2 in place of its DXVK, so every game gets it from its very
+    first launch (bottle-dxvk's drop-in next to the .exe stays as a second line).
+
+The tool lives in compatibilitytools.d as links to Proton Experimental's files, with a real
+folder only where DXVK's DLLs are swapped; it's rebuilt when Proton Experimental updates.
+
+  bottle-steamplay build    make or refresh the SteamOS Bottle tool
+  bottle-steamplay map      set every installed game (never a tool) to Proton Experimental
+                            (Steam must not be running: it keeps its settings in memory and
+                            writes them back when it quits)
+  bottle-steamplay status   what's set up
+
+  bottle-steamplay version GAME linux|windows
+                            run GAME (app ID or part of its name) as its Linux version or as its
+                            Windows version (Proton); applies from Steam's next start (bottle
+                            version restarts Steam)
+
+Games to leave on their native Linux version: their app IDs in
+~/.config/steamos-bottle/native-apps (one per line).
+
+Steam's own setting wins: when a game's Properties > Compatibility setting differs from what
+this script last set (Steam writes it back when it quits), that's the player's choice and it is
+kept from then on (steamplay-choices.json), until they change it again or use `version`. So
+unticking "Force the use of a specific Steam Play compatibility tool" for a game with a Linux
+version (Counter-Strike 2: Valve's anti-cheat only accepts its Linux build here) sticks.
+"""
+import json
+import argparse
+import hashlib
+import os
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+TOOL = "steamos_bottle"
+USE_TOOL = os.environ.get("BOTTLE_STEAMPLAY_TOOL", "") == "bottle"
+PROTON = "proton_experimental"
+TOOL_NAME = "SteamOS Bottle (Proton Experimental, DXVK 2.6.2)"
+DXVK = Path(os.environ.get("BOTTLE_DXVK_DIR", "/usr/local/share/steamos-bottle/dxvk-2.6.2"))
+STEAM = Path(os.environ.get("BOTTLE_STEAM_DIR", Path.home() / ".local/share/Steam"))
+NATIVE_LIST = Path.home() / ".config/steamos-bottle/native-apps"
+SET_FILE = Path.home() / ".config/steamos-bottle/steamplay-set.json"          # what this script set last
+CHOICES_FILE = Path.home() / ".config/steamos-bottle/steamplay-choices.json"  # the player's own, kept
+PROTON_DIRS = ("Proton - Experimental",)
+# Steam's own tools, runtimes and redistributables: never mapped.
+TOOL_APPIDS = {
+    "228980",   # Steamworks Common Redistributables
+    "1070560", "1391110", "1628350", "4185400",   # Steam Linux Runtime 1.0 / 2.0 / 3.0 / 4.0
+    "1493710", "2180100",                         # Proton Experimental, Proton Hotfix
+    "858280", "930400", "961940", "996510", "1054830", "1113280", "1245040", "1420170",
+    "1580130", "1887720", "2348590", "2805730", "3658110",  # Proton 3.7 ... 10.0
+    "250820", "1826330",                          # SteamVR, Proton EasyAntiCheat Runtime
+    "1161040",                                    # Proton BattlEye Runtime
+}
+SKIP_NAMES = re.compile(r"^(proton|steam linux runtime|steamworks common redistributables|steamvr|fex)", re.I)
+# Steam's ARM64 client runs every x86 game through FEX (tool 3127680): set to Proton by an
+# earlier version of this script, FEX broke and every game failed ("Compatibility tool failed").
+TOOL_APPIDS |= {"3127680", "4183110"}
+
+
+def say(*a):
+    if not ARGS.quiet:
+        print(*a)
+
+
+# ------------------------------------------------------------------ VDF (Steam's text format)
+
+def vdf_tokens(text):
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        if c in " \t\r\n":
+            i += 1
+        elif text.startswith("//", i):
+            j = text.find("\n", i)
+            i = n if j < 0 else j + 1
+        elif c in "{}":
+            yield c
+            i += 1
+        elif c == '"':
+            # Kept exactly as written (escapes included): what we don't change goes back to
+            # Steam byte for byte.
+            j = i + 1
+            while j < n and text[j] != '"':
+                j += 2 if text[j] == "\\" else 1
+            yield text[i + 1:j]
+            i = j + 1
+        else:   # unquoted token; [$CONDITIONALS] are kept as plain tokens
+            j = i
+            while j < n and text[j] not in ' \t\r\n{}"':
+                j += 1
+            yield text[i:j]
+            i = j
+
+
+def vdf_parse(text):
+    """A list of [key, value] pairs; a value is a string or another such list (keeps order and
+    duplicate keys)."""
+    toks = list(vdf_tokens(text))
+    pos = 0
+
+    def block():
+        nonlocal pos
+        items = []
+        while pos < len(toks):
+            k = toks[pos]
+            if k == "}":
+                pos += 1
+                return items
+            pos += 1
+            if pos < len(toks) and toks[pos] == "{":
+                pos += 1
+                items.append([k, block()])
+            elif pos < len(toks):
+                items.append([k, toks[pos]])
+                pos += 1
+        return items
+
+    return block()
+
+
+def vdf_quote(s):
+    return '"' + s + '"'   # strings are kept escaped as in the file; ours need no escaping
+
+
+def vdf_dump(items, depth=0):
+    out, tab = [], "\t" * depth
+    for k, v in items:
+        if isinstance(v, list):
+            out.append(f"{tab}{vdf_quote(k)}\n{tab}{{\n{vdf_dump(v, depth + 1)}{tab}}}\n")
+        else:
+            out.append(f"{tab}{vdf_quote(k)}\t\t{vdf_quote(v)}\n")
+    return "".join(out)
+
+
+def vdf_get(items, key, create=False):
+    """The block under key (case-insensitive, like Steam)."""
+    for kv in items:
+        if kv[0].lower() == key.lower() and isinstance(kv[1], list):
+            return kv[1]
+    if not create:
+        return None
+    new = []
+    items.append([key, new])
+    return new
+
+
+def vdf_value(items, key):
+    for k, v in items:
+        if k.lower() == key.lower() and isinstance(v, str):
+            return v
+    return None
+
+
+# ------------------------------------------------------------------ Steam libraries and apps
+
+def library_dirs():
+    seen, out = set(), []
+    candidates = [STEAM]
+    lf = STEAM / "steamapps/libraryfolders.vdf"
+    if lf.is_file():
+        for _k, lib in vdf_get(vdf_parse(lf.read_text(errors="replace")), "libraryfolders") or []:
+            if isinstance(lib, list) and vdf_value(lib, "path"):
+                candidates.append(Path(vdf_value(lib, "path")))
+    for lib in candidates:
+        apps = lib / "steamapps"
+        try:
+            key = apps.resolve()
+        except OSError:
+            continue
+        if apps.is_dir() and key not in seen:
+            seen.add(key)
+            out.append(apps)
+    return out
+
+
+def installed_apps():
+    """appid -> {name, native (installed as its Linux version), tool, acf}"""
+    apps = {}
+    for lib in library_dirs():
+        for acf in lib.glob("appmanifest_*.acf"):
+            try:
+                st = vdf_get(vdf_parse(acf.read_text(errors="replace")), "AppState") or []
+            except OSError:
+                continue
+            appid, name = vdf_value(st, "appid"), vdf_value(st, "name") or "?"
+            if not appid:
+                continue
+            src = None
+            for block in ("UserConfig", "MountedConfig"):
+                src = src or vdf_value(vdf_get(st, block) or [], "platform_override_source")
+            d = lib / "common" / (vdf_value(st, "installdir") or "-")
+            # A Steam Play tool (Proton, runtimes, FEX...) has a toolmanifest.vdf: never a game.
+            tool = (appid in TOOL_APPIDS or bool(SKIP_NAMES.match(name))
+                    or (d / "toolmanifest.vdf").is_file() or (d / "compatibilitytool.vdf").is_file())
+            apps[appid] = {"name": name, "native": src is None, "tool": tool, "acf": acf,
+                           "installdir": vdf_value(st, "installdir") or ""}
+    return apps
+
+
+def repair_tool_manifests(apps):
+    """Undo a "Windows version" switch Steam recorded for a tool (FEX) when it was set to Proton:
+    platform_override_* in its manifest. Steam must not be running."""
+    fixed = []
+    for appid, a in apps.items():
+        if not a["tool"]:
+            continue
+        text = a["acf"].read_text(errors="replace")
+        if "platform_override" not in text:
+            continue
+        root = vdf_parse(text)
+        st = vdf_get(root, "AppState") or []
+        for block in ("UserConfig", "MountedConfig"):
+            b = vdf_get(st, block)
+            if b is not None:
+                b[:] = [kv for kv in b if not kv[0].lower().startswith("platform_override")]
+        bak = a["acf"].with_name(a["acf"].name + ".bottle-backup")
+        if not bak.exists():
+            shutil.copy2(a["acf"], bak)
+        tmp = a["acf"].with_name(a["acf"].name + ".bottle-tmp")
+        tmp.write_text(vdf_dump(root))
+        os.replace(tmp, a["acf"])
+        fixed.append(a["name"])
+    return fixed
+
+
+def library_appids():
+    """Every app in the library that Steam has cached artwork for (owned games, installed or not)."""
+    ids = set()
+    cache = STEAM / "appcache/librarycache"
+    if cache.is_dir():
+        for e in cache.iterdir():
+            m = re.match(r"^(\d+)", e.name)
+            if m:
+                ids.add(m.group(1))
+    return ids
+
+
+def native_wanted():
+    try:
+        return {l.split("#")[0].strip() for l in NATIVE_LIST.read_text().splitlines()} - {""}
+    except OSError:
+        return set()
+
+
+def read_json(path):
+    try:
+        v = json.loads(path.read_text())
+        return v if isinstance(v, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def write_json(path, value):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(value, indent=1, sort_keys=True) + "\n")
+    os.replace(tmp, path)
+
+
+def write_native(ids):
+    NATIVE_LIST.parent.mkdir(parents=True, exist_ok=True)
+    keep = []
+    try:   # comments and order stay
+        for line in NATIVE_LIST.read_text().splitlines():
+            a = line.split("#")[0].strip()
+            if not a or a in ids:
+                keep.append(line)
+                ids = ids - {a}
+    except OSError:
+        pass
+    keep += sorted(ids, key=lambda a: int(a) if a.isdigit() else 0)
+    NATIVE_LIST.write_text("".join(l + "\n" for l in keep))
+
+
+def game_running():
+    return subprocess.run(["pgrep", "-f", "[w]ineserver"], capture_output=True).returncode == 0
+
+
+def steam_running():
+    r = subprocess.run(["pgrep", "-f", "[s]teamrtarm64/steam( |$)"], capture_output=True)
+    return r.returncode == 0
+
+
+# ------------------------------------------------------------------ the tool
+
+def find_proton():
+    for lib in library_dirs():
+        for d in PROTON_DIRS:
+            p = lib / "common" / d
+            if (p / "proton").is_file() and (p / "toolmanifest.vdf").is_file():
+                return p
+    return None
+
+
+def dxvk_dirs(proton):
+    """Proton's DXVK DLL folders by architecture, e.g. files/lib/wine/dxvk/x86_64-windows."""
+    out = {}
+    for d in sorted(proton.glob("files/lib*/wine/dxvk/*")):
+        if (d / "d3d11.dll").is_file():
+            out[d.relative_to(proton)] = "x64" if "x86_64" in d.name else "x32"
+    return out
+
+
+def sha(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def tool_dir():
+    return STEAM / "compatibilitytools.d" / "SteamOS-Bottle"
+
+
+def stamp_of(proton):
+    v = proton / "version"
+    return f"{proton} {v.read_text(errors='replace').strip() if v.is_file() else '?'} {int(v.stat().st_mtime) if v.is_file() else 0}"
+
+
+def mirror(real, ours, overrides, top=True):
+    """ours/ = links to every entry of real/, except the paths in overrides, which become real
+    folders mirrored the same way (deeper overrides) or, at the leaves, DXVK folders."""
+    ours.mkdir(parents=True, exist_ok=True)
+    heads = {}
+    for rel, arch in overrides.items():
+        heads.setdefault(rel.parts[0], {})[Path(*rel.parts[1:]) if len(rel.parts) > 1 else Path()] = arch
+    for entry in real.iterdir():
+        dst = ours / entry.name
+        if entry.name in heads:
+            sub = heads[entry.name]
+            if Path() in sub:   # a DXVK folder: our DLLs, links for the rest
+                dst.mkdir(exist_ok=True)
+                src_dxvk = DXVK / sub[Path()]
+                for f in entry.iterdir():
+                    mine = src_dxvk / f.name
+                    if mine.is_file():
+                        shutil.copy2(mine, dst / f.name)
+                    else:
+                        (dst / f.name).symlink_to(f)
+                for mine in src_dxvk.glob("*.dll"):   # DLLs Proton's DXVK lacks (e.g. d3d8)
+                    if not (dst / mine.name).exists():
+                        shutil.copy2(mine, dst / mine.name)
+            else:
+                mirror(entry, dst, sub, top=False)
+        elif top and entry.name == "proton":
+            shutil.copy2(entry, dst)   # a copy, so Proton takes this folder as its home
+        elif top and entry.name == "compatibilitytool.vdf":
+            continue
+        else:
+            dst.symlink_to(entry)
+
+
+def build():
+    if not USE_TOOL:
+        td = tool_dir()
+        if td.exists():
+            shutil.rmtree(td, ignore_errors=True)
+            say(f"Removed the {TOOL_NAME} tool (games use Proton Experimental; BOTTLE_STEAMPLAY_TOOL=bottle brings it back)")
+        return 0
+    proton = find_proton()
+    if not proton:
+        say("No Proton Experimental installed yet: Steam installs it with the first Windows game.")
+        return 1
+    if not (DXVK / "x64/d3d11.dll").is_file():
+        say(f"No DXVK 2.6.2 in {DXVK} (bottle update installs it).")
+        return 1
+    dirs = dxvk_dirs(proton)
+    if not dirs:
+        say(f"Can't find Proton's DXVK in {proton}; leaving the tool as it is.")
+        return 1
+    td = tool_dir()
+    stamp = stamp_of(proton) + " " + sha(DXVK / "x64/d3d11.dll")[:12]
+    if (td / ".bottle-stamp").is_file() and (td / ".bottle-stamp").read_text() == stamp and check(td, dirs):
+        say(f"Up to date: {TOOL_NAME}")
+        return 0
+    if ARGS.if_idle and game_running():
+        say("Proton Experimental changed; the tool is rebuilt once no game is running.")
+        return 0
+    tmp = td.with_name(td.name + ".new")
+    shutil.rmtree(tmp, ignore_errors=True)
+    mirror(proton, tmp, dirs)
+    (tmp / "compatibilitytool.vdf").write_text(vdf_dump([["compatibilitytools", [["compat_tools", [[TOOL, [
+        ["install_path", "."], ["display_name", TOOL_NAME],
+        ["from_oslist", "windows"], ["to_oslist", "linux"]]]]]]]]))
+    (tmp / ".bottle-stamp").write_text(stamp)
+    if not check(tmp, dirs):
+        shutil.rmtree(tmp, ignore_errors=True)
+        say("The new tool didn't check out; keeping the old one.")
+        return 1
+    shutil.rmtree(td, ignore_errors=True)
+    tmp.rename(td)
+    say(f"Built {TOOL_NAME} in {td}")
+    return 0
+
+
+def check(td, dirs):
+    if not (td / "proton").is_file() or not (td / "toolmanifest.vdf").exists():
+        return False
+    for rel, arch in dirs.items():
+        ours, mine = td / rel / "d3d11.dll", DXVK / arch / "d3d11.dll"
+        if not ours.is_file() or ours.is_symlink() or sha(ours) != sha(mine):
+            return False
+    return True
+
+
+# ------------------------------------------------------------------ mapping games to the tool
+
+def map_apps():
+    """Installed games (not tools) -> Proton Experimental. Steam's own defaults for everything
+    else: Windows-only games already get Proton; a game with a Linux version would get that."""
+    if steam_running():
+        say("Steam is running; it would undo this when it quits. Quit Steam first (bottle steam does it).")
+        return 1
+    tool = TOOL if USE_TOOL and (tool_dir() / "compatibilitytool.vdf").is_file() else PROTON
+    cfg = STEAM / "config/config.vdf"
+    if not cfg.is_file():
+        say("No Steam config yet (Steam hasn't run); nothing to set.")
+        return 0
+    root = vdf_parse(cfg.read_text(errors="replace"))
+    store = vdf_get(root, "InstallConfigStore", create=True)
+    steam = vdf_get(vdf_get(vdf_get(store, "Software", True), "Valve", True), "Steam", True)
+    mapping = vdf_get(steam, "CompatToolMapping", create=True)
+
+    # Entries that were there before this script ever changed the file are the user's: kept.
+    users = {}
+    backup = cfg.with_name("config.vdf.bottle-backup")
+    if backup.is_file():
+        bsteam = vdf_get(vdf_get(vdf_get(vdf_get(vdf_parse(backup.read_text(errors="replace")),
+                 "InstallConfigStore") or [], "Software") or [], "Valve") or [], "Steam") or []
+        users = {k: vdf_value(v, "name") for k, v in vdf_get(bsteam, "CompatToolMapping") or [] if isinstance(v, list)}
+
+    apps = installed_apps()
+    keep_native = native_wanted()
+    # The player's own choices in Steam (Properties > Compatibility): a game whose setting is no
+    # longer what this script set last time was changed in Steam, and keeps that from now on.
+    current = {k: (vdf_value(v, "name") or "") for k, v in mapping if isinstance(v, list)}
+    was_set, choices = read_json(SET_FILE), read_json(CHOICES_FILE)
+    noticed = []
+    for appid, info in apps.items():
+        if info["tool"] or appid in keep_native:
+            continue
+        cur = current.get(appid, "")
+        if appid in choices:
+            if cur == choices[appid]:
+                continue
+            if cur == tool:            # set back to Proton in Steam: ours again
+                del choices[appid]
+                continue
+            choices[appid] = cur       # changed again in Steam
+            noticed.append(appid)
+        elif appid in was_set and cur != was_set[appid]:
+            choices[appid] = cur
+            noticed.append(appid)
+    wanted = {a for a, info in apps.items() if not info["tool"]} - keep_native - set(choices)
+
+    changed, redownload, removed = 0, [], 0
+    # ours from earlier runs (every app in the library, the default "0", FEX...): out again
+    kept = []
+    for k, v in mapping:
+        ours = isinstance(v, list) and vdf_value(v, "name") in (PROTON, TOOL) and users.get(k) != vdf_value(v, "name")
+        if ours and k not in wanted and k not in choices:
+            removed += 1
+            continue
+        kept.append([k, v])
+    mapping[:] = kept
+    by_id = {k: v for k, v in mapping if isinstance(v, list)}
+    for appid in sorted(wanted, key=lambda a: int(a) if a.isdigit() else 0):
+        entry = by_id.get(appid)
+        if entry is None:
+            entry = []
+            mapping.append([appid, entry])
+            by_id[appid] = entry
+        if vdf_value(entry, "name") == tool:
+            continue
+        if appid in users and users[appid] not in (PROTON, TOOL, None):
+            continue   # the user picked another tool for this game
+        for key, val in (("name", tool), ("config", ""), ("priority", "250")):
+            for kv in entry:
+                if kv[0].lower() == key:
+                    kv[1] = val
+                    break
+            else:
+                entry.append([key, val])
+        changed += 1
+        if apps[appid]["native"]:
+            redownload.append(apps[appid]["name"])
+    if changed or removed:
+        if not backup.exists():
+            shutil.copy2(cfg, backup)
+        tmp = cfg.with_name("config.vdf.bottle-tmp")
+        tmp.write_text(vdf_dump(root))
+        if vdf_parse(tmp.read_text()) != root:   # never hand Steam a file it can't read back
+            tmp.unlink()
+            say("Couldn't write Steam's config safely; left it alone.")
+            return 1
+        os.replace(tmp, cfg)
+    write_json(SET_FILE, {a: tool for a in wanted})
+    write_json(CHOICES_FILE, choices)
+    fixed = repair_tool_manifests(apps)
+    say(f"Installed games set to {TOOL_NAME if tool == TOOL else tool}: {len(wanted)} "
+        f"({changed} changed now{f', {removed} older entries taken out' if removed else ''})")
+    for name in redownload:
+        say(f"  {name}: was its Linux version; Steam now downloads its Windows version")
+    for name in fixed:
+        say(f"  repaired the tool {name} (it had been set to a Windows version)")
+    if keep_native:
+        say(f"  left on their own setting (native-apps): {', '.join(sorted(keep_native))}")
+    for appid in noticed:
+        how = choices[appid] or "no forced tool (its Linux version, if it has one)"
+        say(f"  {apps[appid]['name']}: set in Steam to {how}; kept")
+    if choices:
+        say(f"  kept as set in Steam: {', '.join(apps[a]['name'] if a in apps else a for a in sorted(choices))}")
+    return 0
+
+
+def game_names(info):
+    """The ways a player may write a game: its name and its folder's name, squeezed (lower case,
+    letters and digits only: "counterstrike2"), and their initials ("Counter-Strike 2" -> "cs2",
+    "Counter-Strike Global Offensive" -> "csgo"), with and without a leading "The"."""
+    out = set()
+    for text in (info["name"], info.get("installdir", "")):
+        words = re.findall(r"[a-z0-9]+", text.lower())
+        if not words:
+            continue
+        for w in (words, words[1:] if words[0] == "the" and len(words) > 1 else None):
+            if w:
+                out.add("".join(w))
+                out.add("".join(x if x.isdigit() else x[0] for x in w))
+    return out
+
+
+def find_games(query, apps):
+    """App IDs matching QUERY: the app ID, then a name or initials written exactly, then a part
+    of a name (letters and digits only, so "counter strike" finds "Counter-Strike 2")."""
+    if query in apps:
+        return [query]
+    q = "".join(re.findall(r"[a-z0-9]+", query.lower()))
+    if not q:
+        return []
+    exact = [a for a, i in apps.items() if q in game_names(i)]
+    if exact:
+        return exact
+    return [a for a, i in apps.items() if any(q in n for n in game_names(i))]
+
+
+def version():
+    """GAME linux|windows|steam: the player's pick, applied from Steam's next start."""
+    query, want = ARGS.game, ARGS.want
+    apps = {a: i for a, i in installed_apps().items() if not i["tool"]}
+    hits = find_games(query, apps)
+    if not hits:
+        say(f"No installed game matches '{query}'.")
+        return 2
+    if len(hits) > 1:
+        say(f"'{query}' matches several games: " + "; ".join(f"{apps[a]['name']} ({a})" for a in sorted(hits)))
+        return 2
+    appid, name = hits[0], apps[hits[0]]["name"]
+    native, choices, was_set = native_wanted(), read_json(CHOICES_FILE), read_json(SET_FILE)
+    choices.pop(appid, None)
+    if want == "linux":
+        write_native(native | {appid})
+        msg = f"{name}: its Linux version from Steam's next start (Steam downloads it first)"
+    else:
+        write_native(native - {appid})   # write_native keeps only these ids
+        was_set.pop(appid, None)
+        msg = f"{name}: its Windows version through Proton from Steam's next start"
+    write_json(CHOICES_FILE, choices)
+    write_json(SET_FILE, was_set)
+    say(msg)
+    return 0
+
+
+def status():
+    proton = find_proton()
+    print(f"Proton Experimental: {proton or 'not installed'}")
+    cfg = STEAM / "config/config.vdf"
+    mapped = {}
+    if cfg.is_file():
+        steam = vdf_get(vdf_get(vdf_get(vdf_get(vdf_parse(cfg.read_text(errors="replace")),
+                "InstallConfigStore") or [], "Software") or [], "Valve") or [], "Steam") or []
+        mapped = {k: vdf_value(v, "name") for k, v in vdf_get(steam, "CompatToolMapping") or [] if isinstance(v, list)}
+    choices, native = read_json(CHOICES_FILE), native_wanted()
+    for appid, a in sorted(installed_apps().items(), key=lambda kv: kv[1]["name"].lower()):
+        kind = "tool" if a["tool"] else ("Linux version" if a["native"] else "Windows version")
+        why = " (kept as set in Steam)" if appid in choices else (" (native-apps)" if appid in native else "")
+        print(f"  {a['name']} ({appid}): {kind}, Steam Play: {mapped.get(appid, 'Steam default')}{why}")
+    return 0
+
+
+def main():
+    global ARGS
+    ap = argparse.ArgumentParser(description="Every game through the SteamOS Bottle Steam Play tool.")
+    ap.add_argument("cmd", choices=["build", "map", "status", "version"])
+    ap.add_argument("game", nargs="?", help="version: the game's app ID or part of its name")
+    ap.add_argument("want", nargs="?", choices=["linux", "windows"], help="version: which build")
+    ap.add_argument("--quiet", action="store_true")
+    ap.add_argument("--if-idle", action="store_true", help="build: don't rebuild while a game runs")
+    ARGS = ap.parse_args()
+    if ARGS.cmd == "version" and not (ARGS.game and ARGS.want):
+        ap.error("version needs a game and linux or windows")
+    return {"build": build, "map": map_apps, "status": status, "version": version}[ARGS.cmd]()
+
+
+ARGS = None
+if __name__ == "__main__":
+    sys.exit(main())
