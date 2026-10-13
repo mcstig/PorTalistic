@@ -46,6 +46,9 @@ extension AppDelegate {
         main.addItem(appItem)
         let appMenu = NSMenu()
         appMenu.addItem(withTitle: "About Portalistic", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        let update = NSMenuItem(title: "Check for Updates…", action: #selector(checkForUpdatesNow(_:)), keyEquivalent: "")
+        update.target = self
+        appMenu.addItem(update)
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Hide Portalistic", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
         appMenu.addItem(withTitle: "Quit Portalistic", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
@@ -121,6 +124,10 @@ extension AppDelegate: NSMenuItemValidation {
             return !busy
         }
         if item.action == #selector(steamSettings(_:)) { return !busy && view.connected }
+        if item.action == #selector(checkForUpdatesNow(_:)) {
+            item.title = AppDelegate.availableUpdate.map { "Update to \($0)…" } ?? "Check for Updates…"
+            return !activity.busy
+        }
         if item.action == #selector(toggleSharp(_:)) {
             item.state = (UserDefaults.standard.object(forKey: sharpKey) as? Bool ?? true) ? .on : .off
             return view.renderer != nil

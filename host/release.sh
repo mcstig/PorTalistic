@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Publish a Portalistic release on GitHub: the notarized app and the Linux image it downloads on
-# first launch, with the sources the GPL asks for. On the development Mac, after bottle prebuild,
-# host/build-image.sh, and pushing this version's source to the repository:
+# first launch, with the sources the GPL asks for. On the development Mac, after pushing this
+# version's source to the repository (host/push-source.sh):
 #
 #   host/release.sh OWNER/REPO [--notary PROFILE] [--draft]
 #     OWNER/REPO  the GitHub repository (made, public, if it doesn't exist)
@@ -10,10 +10,15 @@
 #                 NAME --apple-id … --team-id …, which asks for an app-specific password)
 #     --draft     leave the release as a draft (published by hand on GitHub)
 #
+# The Linux image: host/image.env names it. One built for this version (host/build-image.sh, after
+# bottle prebuild) goes into this release; an earlier one stays where it is, in the release it came
+# with, and the app downloads it from there (the VM brings itself up to the app's kit when it
+# starts, so the image only has to change when the VM's base system should).
 # Steps: the image's address goes into host/image.env (the app carries it), the app is packaged
-# and notarized (host/package-app.sh), then release v<version> gets: Portalistic-<version>.zip,
-# the image (in parts under 2 GB) with its SHA-256 and packages list, LICENSES.md, and the
-# source of libkrunfw and of the Linux kernel it's built from. The release stays a draft until
+# and notarized (host/package-app.sh), then release v<version> gets: Portalistic-<version>.zip
+# (the app updates itself from it), a new image (in parts under 2 GB) with its SHA-256 and
+# packages list, LICENSES.md, and the source of libkrunfw and of the Linux kernel it's built
+# from. The release stays a draft until
 # every file is up, so nobody downloads an app whose image isn't there yet; if an upload stops,
 # running this again carries on with the draft (files already up are kept).
 # Needs GitHub's command-line tool, signed in: brew install gh && gh auth login
@@ -56,14 +61,18 @@ info "Notarizing with the keychain profile \"$NOTARY\""
 # shellcheck disable=SC1091
 . "$KIT/host/image.env"
 VERSION="$(sed -n 's/^MARKETING_VERSION *= *//p' "$KIT/host/xcode/Bottle.xcconfig")"
-[[ "$PORTALISTIC_IMAGE_VERSION" == "$VERSION" ]] || die "The image is for $PORTALISTIC_IMAGE_VERSION, the app is $VERSION: host/build-image.sh again."
 TAG="v$VERSION"
+IMG_TAG="v$PORTALISTIC_IMAGE_VERSION"
 IMGDIR="$KIT/build/image"
-PKGLIST="$IMGDIR/portalistic-linux-$VERSION.packages.txt"
-for f in ${PORTALISTIC_IMAGE_PARTS:-$PORTALISTIC_IMAGE_FILE}; do
-  [[ -f "$IMGDIR/$f" ]] || die "Missing $IMGDIR/$f: host/build-image.sh again."
-done
-[[ -f "$PKGLIST" ]] || die "Missing $PKGLIST: host/build-image.sh again."
+PKGLIST="$IMGDIR/portalistic-linux-$PORTALISTIC_IMAGE_VERSION.packages.txt"
+NEW_IMAGE=0
+if [[ "$IMG_TAG" == "$TAG" ]]; then
+  NEW_IMAGE=1
+  for f in ${PORTALISTIC_IMAGE_PARTS:-$PORTALISTIC_IMAGE_FILE}; do
+    [[ -f "$IMGDIR/$f" ]] || die "Missing $IMGDIR/$f: host/build-image.sh again."
+  done
+  [[ -f "$PKGLIST" ]] || die "Missing $PKGLIST: host/build-image.sh again."
+fi
 
 if ! gh repo view "$REPO" >/dev/null 2>&1; then
   info "Making the public repository $REPO…"
@@ -79,9 +88,22 @@ REMOTE_VERSION="$(gh api -H "Accept: application/vnd.github.raw" "repos/$REPO/co
 
 STATE="$(gh release view "$TAG" --repo "$REPO" --json isDraft --jq 'if .isDraft then "draft" else "published" end' 2>/dev/null || echo none)"
 [[ "$STATE" == published ]] && die "$REPO already has a release $TAG: raise MARKETING_VERSION in host/xcode/Bottle.xcconfig."
+if (( ! NEW_IMAGE )); then
+  # an earlier release's image: it has to be there, whole
+  HAVE="$(gh release view "$IMG_TAG" --repo "$REPO" --json isDraft,assets \
+    --jq 'if .isDraft then empty else (.assets[] | "\(.name) \(.size)") end' 2>/dev/null || true)"
+  [[ -n "$HAVE" ]] || die "The image is for $PORTALISTIC_IMAGE_VERSION, but $REPO has no published release $IMG_TAG with it: host/build-image.sh for $VERSION, or publish $IMG_TAG first."
+  TOTAL=0
+  for f in ${PORTALISTIC_IMAGE_PARTS:-$PORTALISTIC_IMAGE_FILE}; do
+    s="$(awk -v n="$f" '$1 == n {print $2}' <<<"$HAVE")"
+    [[ -n "$s" ]] || die "Release $IMG_TAG on $REPO doesn't have $f (part of the image)."
+    TOTAL=$(( TOTAL + s ))
+  done
+  (( TOTAL == PORTALISTIC_IMAGE_SIZE )) || die "Release $IMG_TAG's image files add up to $TOTAL bytes, host/image.env says $PORTALISTIC_IMAGE_SIZE."
+fi
 
-info "The app will download its Linux system from github.com/$REPO, release $TAG"
-URL="https://github.com/$REPO/releases/download/$TAG"
+info "The app will download its Linux system from github.com/$REPO, release $IMG_TAG"
+URL="https://github.com/$REPO/releases/download/$IMG_TAG"
 sed -i '' "s#^PORTALISTIC_IMAGE_URL=.*#PORTALISTIC_IMAGE_URL=$URL#" "$KIT/host/image.env"
 grep -q '^PORTALISTIC_IMAGE_URL=' "$KIT/host/image.env" || echo "PORTALISTIC_IMAGE_URL=$URL" >> "$KIT/host/image.env"
 
@@ -104,18 +126,21 @@ KMAJ="$(echo "$KVER" | sed -n 's/^linux-\([0-9]*\)\..*/\1/p')"
 echo "  libkrunfw $KFW_VER, $KVER"
 
 NOTES="$KIT/build/release-notes.md"
+if (( NEW_IMAGE )); then IMAGE_WHERE="the \`portalistic-linux\` files below"
+else IMAGE_WHERE="from release [$IMG_TAG](https://github.com/$REPO/releases/tag/$IMG_TAG)"; fi
 cat > "$NOTES" <<EOF
-Portalistic $VERSION: Steam on an Apple Silicon Mac (macOS 26 or newer, 16 GB of memory or more).
+Portalistic $VERSION: Steam on an Apple Silicon Mac (macOS 26 or newer, 4 GB of memory or more).
 
 Download **Portalistic-$VERSION.zip**, unzip it and move Portalistic to Applications. On its first
-launch it downloads its Linux system ($(awk -v b="$PORTALISTIC_IMAGE_SIZE" 'BEGIN {printf "%.1f", b / 1e9}') GB, the \`portalistic-linux\` files below: you don't
-need to download those yourself), then Steam installs itself and asks you to sign in.
+launch it downloads its Linux system ($(awk -v b="$PORTALISTIC_IMAGE_SIZE" 'BEGIN {printf "%.1f", b / 1e9}') GB, $IMAGE_WHERE: you don't need to download
+it yourself), then Steam installs itself and asks you to sign in. Portalistic 0.7.1 and later
+update themselves: they offer a new version when there is one.
 
 Portalistic isn't affiliated with Valve. Third-party software and licenses: LICENSES.md; the
-Linux kernel's source (libkrunfw-$KFW_VER-source.tar.gz, $KVER.tar.xz) and the image's package
-list are attached.
+Linux kernel's source (libkrunfw-$KFW_VER-source.tar.gz, $KVER.tar.xz) is attached, and the
+image's package list is with the image.
 
-Image SHA-256: \`$PORTALISTIC_IMAGE_SHA256\`
+Linux image $PORTALISTIC_IMAGE_VERSION, SHA-256: \`$PORTALISTIC_IMAGE_SHA256\`
 EOF
 
 if [[ "$STATE" == none ]]; then
@@ -136,12 +161,16 @@ upload() {
   info "  uploading $name ($(( size / 1048576 )) MB)…"
   gh release upload "$TAG" --repo "$REPO" --clobber "$f"
 }
-for f in "$ZIP" "$KIT/LICENSES.md" "$IMGDIR/$PORTALISTIC_IMAGE_FILE.sha256" "$PKGLIST" "$KFW_TGZ" "$KTAR"; do
+for f in "$ZIP" "$KIT/LICENSES.md" "$KFW_TGZ" "$KTAR"; do
   upload "$f"
 done
-for f in ${PORTALISTIC_IMAGE_PARTS:-$PORTALISTIC_IMAGE_FILE}; do
-  upload "$IMGDIR/$f"
-done
+if (( NEW_IMAGE )); then
+  upload "$IMGDIR/$PORTALISTIC_IMAGE_FILE.sha256"
+  upload "$PKGLIST"
+  for f in ${PORTALISTIC_IMAGE_PARTS:-$PORTALISTIC_IMAGE_FILE}; do
+    upload "$IMGDIR/$f"
+  done
+fi
 
 if (( KEEP_DRAFT )); then
   info "Done: the draft is at https://github.com/$REPO/releases (publish it there)"

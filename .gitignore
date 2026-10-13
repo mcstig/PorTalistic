@@ -8,7 +8,7 @@ build/
 logs/
 host/xcode/Team.xcconfig
 guest/prebuilt/aarch64.new/
-host/.bottle.new
+host/.*.new
 
 # development-only checks (not part of Portalistic)
 host/tests/

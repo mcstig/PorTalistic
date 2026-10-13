@@ -60,8 +60,9 @@
 #   bottle disk grow [GB]     make the VM's disk bigger (default 200 GB; stops and restarts the VM)
 #   bottle disk clean         clear package caches, old system logs, crash dumps, huge game logs
 #   bottle memory [GB]        the VM's memory (restarts the VM); no argument: how much it has, and
-#                             what's suggested (a third of the Mac's, 8-16 GB: the VM's file cache
-#                             and the games' GPU memory both live in the Mac's memory)
+#                             what's suggested (half the Mac's under 24 GB, 2-8 GB; a third from
+#                             24 GB, 8-16 GB: the VM's file cache and the games' GPU memory both
+#                             live in the Mac's memory)
 #   bottle vnc                open the desktop again: TigerVNC Viewer when installed
 #                             (whole frames, no tearing; brew install --cask tigervnc-viewer),
 #                             else macOS Screen Sharing. bottle vnc --screen-sharing forces the latter.
@@ -96,6 +97,10 @@
 #   bottle setup [IMAGE]      first launch: download Portalistic's ready-made Linux system
 #                             (host/image.env), make the VM from it, start it, install Steam
 #                             (the app does this when there's no VM); IMAGE: a local image file
+#   bottle app-update [check|install]
+#                             Portalistic.app's newest version on GitHub: check prints "update
+#                             VERSION URL" or "current VERSION"; install downloads it, checks its
+#                             signature and swaps it in (the app offers this itself)
 #   bottle prebuild           build the VM's own programs (C) in the VM, into the kit's
 #                             guest/prebuilt/aarch64: VMs then install those instead of compiling
 #                             them (the packaged app's VMs have no build tools). Run it after
@@ -1603,15 +1608,18 @@ disk_guard() {  # $1 = what Steam does: game, download, idle
 # A Mac without the VM gets Portalistic's ready-made Linux image (host/build-image.sh made it;
 # host/image.env says where it is, how big, and its checksum). Lima makes the VM from it; then the
 # VM starts as it always does, and its first start brings it up to this kit (for its new user)
-# and installs Steam. The VM: a third of the Mac's memory (8-16 GB), its performance cores, a
+# and installs Steam. The VM: its share of the Mac's memory (memory_suggested_gb: 2 GB on a 4 GB
+# Mac, 8 GB on a 16 GB one), its performance cores, a
 # 200 GB disk that takes Mac space only as it fills, no Mac folders shared but the game folder
 # ~/Games/Portalistic (bottle library). Downloads resume where they stopped.
 #   bottle setup [IMAGE]   IMAGE: a local image file instead of the download (development)
 IMAGE_ENV="$KIT_DIR/host/image.env"
 mac_perf_cores() {
-  local n
+  local n all
   n="$(sysctl -n hw.perflevel0.physicalcpu 2>/dev/null || sysctl -n hw.physicalcpu 2>/dev/null || echo 4)"
+  all="$(sysctl -n hw.ncpu 2>/dev/null || echo "$n")"
   (( n < 4 )) && n=4
+  (( n > all )) && n=$all   # (never more than the Mac has)
   echo "$n"
 }
 # A file from the image's release, with its progress every few seconds: $1 = URL, $2 = file,
@@ -1637,8 +1645,13 @@ cmd_setup() {
     return
   fi
   [[ -f "$IMAGE_ENV" ]] || die "This copy of Portalistic doesn't say where its Linux system is (host/image.env)."
-  # the VM takes 8 GB at least: with less than 16 GB, macOS and the VM would both be short of memory
-  (( $(mac_memory_gb) >= 16 )) || die "Portalistic needs a Mac with 16 GB of memory or more; this one has $(mac_memory_gb) GB."
+  # the VM gets 2 GB at least, and macOS keeps as much (memory_suggested_gb)
+  (( $(mac_memory_gb) >= MAC_MEMORY_MIN_GB )) \
+    || die "Portalistic needs a Mac with ${MAC_MEMORY_MIN_GB} GB of memory or more; this one has $(mac_memory_gb) GB."
+  # krunkit runs the VM with macOS's Hypervisor, which a Mac that is itself a virtual machine doesn't offer
+  [[ "$(sysctl -n kern.hv_support 2>/dev/null)" != 0 ]] \
+    || die "This Mac can't run virtual machines: macOS's Hypervisor isn't available here, as happens when macOS itself runs in a virtual machine. Portalistic runs Steam in one."
+
   # shellcheck disable=SC1090
   . "$IMAGE_ENV"
   mkdir -p "$dl"
@@ -1706,6 +1719,88 @@ EOF
   info "Starting it for the first time (it sets itself up, then installs Steam)…"
   cmd_up
   info "Portalistic is set up. Sign in to Steam in the window."
+}
+
+# ---- updating the app (Portalistic.app) from its GitHub releases ----
+# Each release (host/release.sh) is a tag v<version> with Portalistic-<version>.zip, and GitHub's
+# releases/latest leads to the newest. The app looks at launch and once a day and offers it
+# (AppDelegate+Updates.swift); installing it:
+#   1. downloads the zip into ~/Library/Caches/Portalistic/update and unpacks it;
+#   2. checks the new copy: a valid signature from the same developer (team) for the same app,
+#      accepted by Gatekeeper (notarized), and a newer version: else nothing changes;
+#   3. moves this copy aside and the new one into its place. The running app carries on from the
+#      old files until it opens the new copy, which closes it. The VM, Steam and a game keep
+#      running; the VM takes the new kit at its next start (or Bottle > Update the Bottle).
+# Overrides (tests): BOTTLE_APP_RELEASES (the releases' address), BOTTLE_APP_LATEST (a version).
+APP_RELEASES="${BOTTLE_APP_RELEASES:-https://github.com/mcstig/PorTalistic/releases}"
+app_version_of() { /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$1/Contents/Info.plist" 2>/dev/null; }
+app_sign_field() { codesign -dv "$1" 2>&1 | sed -n "s/^$2=//p" | head -1; }   # $2: TeamIdentifier, Identifier
+# $1 newer than $2? (dotted numbers: 0.7.10 > 0.7.9)
+version_newer() {
+  local IFS=. i x y
+  local -a a b
+  read -r -a a <<<"$1"
+  read -r -a b <<<"$2"
+  for i in 0 1 2 3; do
+    x="${a[i]:-0}"; y="${b[i]:-0}"
+    x="${x%%[!0-9]*}"; y="${y%%[!0-9]*}"
+    (( 10#${x:-0} > 10#${y:-0} )) && return 0
+    (( 10#${x:-0} < 10#${y:-0} )) && return 1
+  done
+  return 1
+}
+# the newest release's version: where releases/latest leads (…/releases/tag/v0.7.2)
+app_latest() {
+  local u
+  if [[ -n "${BOTTLE_APP_LATEST:-}" ]]; then echo "$BOTTLE_APP_LATEST"; return 0; fi
+  u="$(curl -fsS -o /dev/null -w '%{redirect_url}' --connect-timeout 15 --max-time 30 "$APP_RELEASES/latest")" || return 1
+  [[ "$u" == */tag/v* ]] || return 1
+  echo "${u##*/tag/v}"
+}
+cmd_app_update() {
+  local what="${1:-check}" cur latest dir zip new old team
+  [[ -n "$APP_BUNDLE" ]] || die "Only Portalistic.app updates itself; this is the kit (host/package-app.sh makes the app)."
+  case "$what" in check|install) ;; *) die "usage: bottle app-update [check|install]" ;; esac
+  cur="$(app_version_of "$APP_BUNDLE")"
+  latest="$(app_latest)" || die "Couldn't reach GitHub to see Portalistic's newest version."
+  if [[ "$what" == check ]]; then
+    if version_newer "$latest" "$cur"; then echo "update $latest $APP_RELEASES/tag/v$latest"; else echo "current $cur"; fi
+    return 0
+  fi
+  version_newer "$latest" "$cur" || { info "Portalistic $cur is the newest version."; return 0; }
+  case "$APP_BUNDLE" in
+    */AppTranslocation/*)
+      die "Portalistic is running from where it was downloaded. Move it to the Applications folder, open it from there, then update." ;;
+  esac
+  [[ -w "$APP_BUNDLE" && -w "$(dirname "$APP_BUNDLE")" ]] \
+    || die "Portalistic can't replace itself in $(dirname "$APP_BUNDLE") (no permission). Download it from $APP_RELEASES/latest instead."
+  team="$(app_sign_field "$APP_BUNDLE" TeamIdentifier)"
+  [[ -n "$team" && "$team" != "not set" ]] || die "This copy of Portalistic isn't signed by its developer, so it can't check an update. Download it from $APP_RELEASES/latest instead."
+  dir="$HOME/Library/Caches/Portalistic/update"
+  rm -rf "$dir"                         # (the copy an earlier update moved aside)
+  mkdir -p "$dir"
+  zip="$dir/Portalistic-$latest.zip"
+  info "Downloading Portalistic $latest…"
+  curl -fL --retry 3 --connect-timeout 20 -s -S -o "$zip" "$APP_RELEASES/download/v$latest/Portalistic-$latest.zip" \
+    || die "The download stopped (network?). Try again."
+  ditto -x -k "$zip" "$dir/new" 2>/dev/null || die "The download isn't a zip Portalistic can open. Try again."
+  new="$dir/new/Portalistic.app"
+  [[ -d "$new" ]] || die "The download has no Portalistic.app in it."
+  info "Checking it…"
+  codesign --verify --deep --strict "$new" 2>/dev/null || die "The new copy's signature doesn't check out. Nothing was changed."
+  [[ "$(app_sign_field "$new" TeamIdentifier)" == "$team" ]] || die "The new copy isn't signed by Portalistic's developer. Nothing was changed."
+  [[ "$(app_sign_field "$new" Identifier)" == "$(app_sign_field "$APP_BUNDLE" Identifier)" ]] || die "The download is a different app. Nothing was changed."
+  spctl -a -t exec "$new" 2>/dev/null || die "macOS doesn't accept the new copy (it isn't notarized). Nothing was changed."
+  version_newer "$(app_version_of "$new")" "$cur" || die "The download isn't newer than this copy ($cur). Nothing was changed."
+  info "Replacing Portalistic $cur with $latest…"
+  old="$dir/Portalistic-$cur.app"
+  mv "$APP_BUNDLE" "$old" || die "Couldn't move this copy aside. Nothing was changed."
+  if ! mv "$new" "$APP_BUNDLE"; then
+    mv "$old" "$APP_BUNDLE"
+    die "Couldn't put the new copy in place; this one is back as it was."
+  fi
+  rm -rf "$zip" "$dir/new"
+  info "Portalistic is now $latest."
 }
 
 # ---- Steam links and the window manager ----
@@ -2222,15 +2317,25 @@ cmd_disk() {
 # memory with file cache: an 18 GB VM grew to 18 GB on the Mac within minutes of an open-world
 # game, next to the game's GPU memory (also in the Mac's memory). On a 36 GB Mac that pushed
 # macOS into 21 GB of swap and The Witcher 3 from ~55 to ~15 fps after two minutes (Oct 9).
-# A smaller VM caps that: a third of the Mac's memory, 8-16 GB, leaves the Mac room.
+# A smaller VM caps that and leaves the Mac room: a third of the Mac's memory from 24 GB (8-16 GB),
+# half below (2-8 GB: 2 GB on a 4 GB Mac, 4 on 8, 8 on 16). The VM's zram swap (as big as its
+# memory, compressed) stretches a small VM: Steam's own client and pages take about 2.5 GB.
 vm_memory_gb() { echo $(( $(limactl list --format '{{.Memory}}' "$VM_NAME" 2>/dev/null || echo 0) / 1073741824 )); }
 mac_memory_gb() { echo $(( $(sysctl -n hw.memsize 2>/dev/null || echo 0) / 1073741824 )); }
+MAC_MEMORY_MIN_GB=4
 memory_suggested_gb() {
-  local s=$(( $(mac_memory_gb) / 3 ))
-  (( s < 8 )) && s=8
-  (( s > 16 )) && s=16
+  local t s
+  t="$(mac_memory_gb)"
+  if (( t >= 24 )); then
+    s=$(( t / 3 )); (( s > 16 )) && s=16
+  else
+    s=$(( t / 2 )); (( s > 8 )) && s=8
+  fi
+  (( s < 2 )) && s=2
   echo "$s"
 }
+# what macOS keeps at least, whatever the VM is given (bottle memory)
+mac_memory_reserve_gb() { if (( $(mac_memory_gb) >= 16 )); then echo 6; else echo 2; fi; }
 
 cmd_memory() {
   local want="${1:-}" cur total
@@ -2242,8 +2347,8 @@ cmd_memory() {
     return 0
   fi
   [[ "$want" =~ ^[0-9]+$ ]] || die "usage: bottle memory [GB]"
-  (( want >= 6 )) || die "Steam and a game need at least 6 GB in the VM."
-  (( want <= total - 6 )) || die "That leaves macOS less than 6 GB of this Mac's ${total} GB."
+  (( want >= 2 )) || die "Steam needs at least 2 GB in the VM."
+  (( want <= total - $(mac_memory_reserve_gb) )) || die "That leaves macOS less than $(mac_memory_reserve_gb) GB of this Mac's ${total} GB."
   if (( want == cur )); then
     info "The VM already has ${want} GB."
     return 0
@@ -2776,6 +2881,7 @@ case "$cmd" in
   install)      cmd_install ;;
   prebuild)     cmd_prebuild ;;
   setup)        cmd_setup "$@" ;;
+  app-update)   cmd_app_update "$@" ;;
   kosmickrisp)  exec "$KIT_DIR/host/kosmickrisp.sh" "$@" ;;
   help|-h|--help) sed -n '2,/^# Written/p' "$src" | sed 's/^# \{0,1\}//' ;;
   *) die "unknown command '$cmd' (bottle help)" ;;

@@ -7,7 +7,8 @@ your Mac, drawing with the Mac's GPU, and Steam plays Windows games through Prot
 
 **[Download the latest version](https://github.com/mcstig/PorTalistic/releases/latest)**
 
-- Needs an Apple Silicon Mac with macOS 26 or newer and 16 GB of memory or more.
+- Needs an Apple Silicon Mac with macOS 26 or newer and 4 GB of memory or more. The VM gets its
+  share of it (2 GB on a 4 GB Mac, 8 GB on a 16 GB one); bigger games want a Mac with 16 GB.
 - Unzip it and move Portalistic to Applications. Its first launch downloads its Linux system (a
   little over 2 GB), then Steam installs itself and asks you to sign in.
 - Games go in Games/Portalistic in your home folder. Bottle > Add a Game Folder adds another
@@ -51,8 +52,8 @@ download and sets up with one click (`bottle setup`):
 
 1. It downloads Portalistic's ready-made Linux image (2.3 GB, from the project's GitHub release,
    checked against its SHA-256) into `~/.portalistic/download`.
-2. Lima makes the VM from it in `~/.portalistic/lima`: a third of the Mac's memory (8-16 GB), its
-   performance cores, and a 200 GB disk that takes Mac space only as it fills. No Mac folders are
+2. Lima makes the VM from it in `~/.portalistic/lima`: half the Mac's memory under 24 GB (2-8 GB),
+   a third from 24 GB (8-16 GB), its performance cores, and a 200 GB disk that takes Mac space only as it fills. No Mac folders are
    shared except the game folder `~/Games/Portalistic`. The image file is deleted afterwards.
 3. The VM starts, brings itself up to the app's kit for its user (`deck`) in a few seconds, and
    installs Steam, which opens in Big Picture for signing in.
@@ -115,7 +116,7 @@ the first time (games with a Linux version default to it).
 | `bottle log list` / `bottle log prev [N]` | Earlier game launches: Proton starts its log over on every launch, so `bottle-logkeep` (runs with Steam) keeps the last 8 per game; `prev` summarizes the last one, e.g. a launch that crashed |
 | `bottle perf` | While a game runs: Mac CPU/GPU load (also per VM thread), the VM's busiest processes, busiest game threads, the game's frame pacing (hitches, shader compiling), and (with `--debug`) the game's swapchains, how each frame's time splits into GPU, screen and game, and what the game asks per frame (draws, submits, new pipelines). The keep-awake loop writes the same every 30 s of play to the kit's `logs/game-perf.log` |
 | `bottle fps [N\|off]` | Cap games at N fps (DXVK's limiter, `DXVK_FRAME_RATE` in steam.env; restarts Steam). A game that keeps the Mac's GPU flat out heats a MacBook until macOS slows it down; a cap a little under the game's early frame rate keeps it steady. One game only: `DXVK_FRAME_RATE=45 %command%` in its launch options |
-| `bottle memory [GB]` | The VM's memory (restarts the VM); no argument: how much it has and what's suggested (a third of the Mac's, 8-16 GB). The VM's file cache and the games' GPU memory both live in the Mac's memory |
+| `bottle memory [GB]` | The VM's memory (restarts the VM); no argument: how much it has and what's suggested (half the Mac's under 24 GB, 2-8 GB; a third from 24 GB, 8-16 GB). The VM's file cache and the games' GPU memory both live in the Mac's memory |
 | `bottle tso [on\|off]` | x86 memory ordering in hardware (Apple's TSO mode, as Rosetta uses): tests that it works in the VM, measures what it's worth, keeps it on if it holds; FEX then stops ordering every memory access of x86 games in software. Restarts Steam. No argument: whether it's on |
 | `bottle gputrace` | While a game runs: records 3 s of the Mac GPU timeline with Instruments (needs Xcode) and packs the tables into `~/Desktop/bottle-gputrace-*.zip` for analysis |
 | `bottle window` | Open **Portalistic.app** (built once into ~/Applications): the VM's screen in a Mac window with keyboard, mouse and sound. When a game hides its pointer (mouse-look) the mouse is captured and sent as raw motion; ⌘Esc releases it, a click captures again; ⌃⌘F full screen |
