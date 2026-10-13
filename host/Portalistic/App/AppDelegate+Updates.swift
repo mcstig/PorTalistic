@@ -1,32 +1,37 @@
 // Portalistic — updating the app from its GitHub releases (`bottle app-update`, in host/bottle).
 //
-// The packaged app looks a minute after it opens and then once a day. A new version shows as a
-// notice over the picture (nothing pops up over a game) and in the app menu, where Check for
-// Updates… offers it. Installing it downloads the new copy, checks its signature, swaps it in
-// and opens it; the VM, Steam and a game keep running meanwhile.
+// The packaged app looks as soon as it opens: a newer version is offered right away, on the
+// window (Update / Later / What's New). While the app stays open it looks again once a day; a
+// version found then shows as a notice over the picture (nothing pops up over a game) and in the
+// app menu, where Update to… offers it. Installing it downloads the new copy, checks its
+// signature, swaps it in and opens it; the VM, Steam and a game keep running meanwhile.
 
 import AppKit
 
 extension AppDelegate {
+    enum UpdateCheck { case atLaunch, daily, asked }
+
     static var availableUpdate: String?          // a newer version GitHub has, once a check found it
     static var offeringUpdate = false            // the update question is on screen
     static let skippedUpdateKey = "SkippedUpdateVersion"
 
     func scheduleUpdateChecks() {
         guard BottleCommand.isPackaged else { return }
-        perform(#selector(checkForUpdatesQuietly), with: nil, afterDelay: 60)
-        let t = Timer(timeInterval: 24 * 3600, target: self, selector: #selector(checkForUpdatesQuietly),
+        perform(#selector(checkForUpdatesAtLaunch), with: nil, afterDelay: 1)
+        let t = Timer(timeInterval: 24 * 3600, target: self, selector: #selector(checkForUpdatesDaily),
                       userInfo: nil, repeats: true)
         RunLoop.main.add(t, forMode: .common)
     }
 
-    @objc func checkForUpdatesQuietly() { checkForUpdates(manual: false) }
+    @objc func checkForUpdatesAtLaunch() { checkForUpdates(.atLaunch) }
 
-    @objc func checkForUpdatesNow(_ sender: Any?) { checkForUpdates(manual: true) }
+    @objc func checkForUpdatesDaily() { checkForUpdates(.daily) }
 
-    func checkForUpdates(manual: Bool) {
+    @objc func checkForUpdatesNow(_ sender: Any?) { checkForUpdates(.asked) }
+
+    func checkForUpdates(_ when: UpdateCheck) {
         guard BottleCommand.isPackaged else {
-            if manual {
+            if when == .asked {
                 tell("This copy of Portalistic doesn't update itself.",
                      "It was built from the kit: updating the kit rebuilds it.")
             }
@@ -38,37 +43,43 @@ extension AppDelegate {
             let answer = c.lines.last(where: { $0.hasPrefix("update ") || $0.hasPrefix("current ") }) ?? ""
             let words = answer.split(separator: " ").map(String.init)
             guard code == 0, let kind = words.first else {
-                if manual { self.tell("Couldn't check for updates.", c.problem) }
+                if when == .asked { self.tell("Couldn't check for updates.", c.problem) }
                 return
             }
             let version = words.count > 1 ? words[1] : ""
             if kind == "current" {
                 AppDelegate.availableUpdate = nil
-                if manual { self.tell("Portalistic is up to date.", "\(version) is the newest version.") }
+                if when == .asked { self.tell("Portalistic is up to date.", "\(version) is the newest version.") }
                 return
             }
             AppDelegate.availableUpdate = version
             let notes = words.count > 2 ? words[2] : ""
-            if manual {
+            let skipped = UserDefaults.standard.string(forKey: AppDelegate.skippedUpdateKey) == version
+            switch when {
+            case .asked:
                 self.offerUpdate(version, notes: notes)
-            } else if UserDefaults.standard.string(forKey: AppDelegate.skippedUpdateKey) != version {
-                self.noticeView.show(problem: false, title: "Portalistic \(version) is available",
-                                     detail: "Portalistic > Update to \(version)… installs it; Steam keeps running.",
-                                     seconds: 12)
+            case .atLaunch:
+                if !skipped { self.offerUpdate(version, notes: notes) }
+            case .daily:
+                if !skipped {
+                    self.noticeView.show(problem: false, title: "Portalistic \(version) is available",
+                                         detail: "Portalistic > Update to \(version)… installs it; Steam keeps running.",
+                                         seconds: 12)
+                }
             }
         }
         guard c.start() else {
-            if manual { tell("Couldn't run the bottle command.", BottleCommand.script ?? "") }
+            if when == .asked { tell("Couldn't run the bottle command.", BottleCommand.script ?? "") }
             return
         }
         quietCommands.removeAll { !$0.running }
         quietCommands.append(c)
     }
 
+    /// Update / Later / What's New, on the window (or on its own if the window isn't up).
     func offerUpdate(_ version: String, notes: String) {
         guard !AppDelegate.offeringUpdate else { return }
         AppDelegate.offeringUpdate = true
-        defer { AppDelegate.offeringUpdate = false }
         let current = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
         let alert = NSAlert()
         alert.messageText = "Portalistic \(version) is available"
@@ -79,17 +90,25 @@ extension AppDelegate {
         if URL(string: notes) != nil { alert.addButton(withTitle: "What's New") }
         alert.showsSuppressionButton = true
         alert.suppressionButton?.title = "Don't remind me about \(version)"
-        let answer = alert.runModal()
-        if alert.suppressionButton?.state == .on {
-            UserDefaults.standard.set(version, forKey: AppDelegate.skippedUpdateKey)
+        let answered: (NSApplication.ModalResponse) -> Void = { [weak self] answer in
+            AppDelegate.offeringUpdate = false
+            if alert.suppressionButton?.state == .on {
+                UserDefaults.standard.set(version, forKey: AppDelegate.skippedUpdateKey)
+            }
+            switch answer {
+            case .alertFirstButtonReturn:
+                self?.installUpdate()
+            case .alertThirdButtonReturn:
+                if let u = URL(string: notes) { NSWorkspace.shared.open(u) }
+            default:
+                break
+            }
         }
-        switch answer {
-        case .alertFirstButtonReturn:
-            installUpdate()
-        case .alertThirdButtonReturn:
-            if let u = URL(string: notes) { NSWorkspace.shared.open(u) }
-        default:
-            break
+        if let w = window, w.isVisible, w.attachedSheet == nil {
+            view?.releaseMouse()                 // (the pointer may be captured by the picture)
+            alert.beginSheetModal(for: w, completionHandler: answered)
+        } else {
+            answered(alert.runModal())
         }
     }
 
