@@ -57,7 +57,7 @@
 #                             runs, the watcher warns in the app when the Mac has under 10 GB
 #                             free (BOTTLE_DISK_LOW_GB), and under 3 GB (BOTTLE_DISK_STOP_GB) stops
 #                             a Steam download that's filling the VM's disk
-#   bottle disk grow [GB]     make the VM's disk bigger (default 200 GB; stops and restarts the VM)
+#   bottle disk grow [GB]     make the VM's disk bigger (default: 10 GB more; stops and restarts the VM)
 #   bottle disk clean         clear package caches, old system logs, crash dumps, huge game logs
 #   bottle memory [GB]        the VM's memory (restarts the VM); no argument: how much it has, and
 #                             what's suggested (half the Mac's under 24 GB, 2-8 GB; a third from
@@ -1186,24 +1186,31 @@ disk_status() {
     } | sort -rh | head -15 | sed "s#$S/##; s#$HOME/#~/#"'
 }
 
-disk_clean() {  # only things nothing needs: package caches, old system logs, crash dumps, huge game logs
-  need_vm
-  [[ "$(vm_status)" == Running ]] || die "The VM isn't running. Use: bottle start"
-  info "Clearing package caches, old system logs, crash dumps and game logs over 50 MB in the VM…"
-  vsh bash -c '
+# only what nothing needs: package caches, old system logs, crash dumps, huge game logs
+vm_disk_tidy() {
+  vsh_for 120 bash -c '
     sudo -n dnf clean all -q >/dev/null 2>&1
     sudo -n journalctl --vacuum-size=100M -q >/dev/null 2>&1
     sudo -n sh -c "rm -f /var/lib/systemd/coredump/*" 2>/dev/null
     find ~ -maxdepth 1 -name "steam-*.log" -size +50M -delete 2>/dev/null
-    df -h / | awk "NR == 2 {print \"In the VM now: \" \$4 \" free\"}"'
+    true' >/dev/null 2>&1 || true
+}
+vm_disk_free_kb() { vsh_for 30 bash -c 'df -Pk / | awk "NR == 2 {print \$4}"' 2>/dev/null | tail -n 1; }
+disk_clean() {
+  need_vm
+  [[ "$(vm_status)" == Running ]] || die "The VM isn't running. Use: bottle start"
+  info "Clearing package caches, old system logs, crash dumps and game logs over 50 MB in the VM…"
+  vm_disk_tidy
+  echo "In the VM now: $(( $(vm_disk_free_kb) / 1048576 )) GB free"
 }
 
-disk_grow() {  # $1 = new size in GB (default 200). Safe to run again: it finishes a grow
-  local want="${1:-200}" cur free started=1 restart=0 startlog="$STATE_DIR/vm-start.log"
+disk_grow() {  # $1 = new size in GB (default: 10 GB more). Safe to run again: it finishes a grow
+  local want="${1:-}" cur free started=1 restart=0 startlog="$STATE_DIR/vm-start.log"
   need_vm
-  [[ "$want" =~ ^[0-9]+$ ]] || die "usage: bottle disk grow [GB]   (default 200)"
+  [[ -z "$want" || "$want" =~ ^[0-9]+$ ]] || die "usage: bottle disk grow [GB]   (default: 10 GB more)"
   mkdir -p "$STATE_DIR"
   cur="$(vm_disk_gb)"
+  [[ -n "$want" ]] || want=$(( cur + 10 ))
   audio_stop
   awake_stop
   if (( want > cur )); then
@@ -1284,7 +1291,7 @@ disk_grow() {  # $1 = new size in GB (default 200). Safe to run again: it finish
 # ---- game folders: games on the Mac or a drive instead of the VM's disk ----
 # The VM's disk is one file on the Mac that grows as the VM fills it (and shrinks again when files
 # are deleted: the VM's file system hands freed blocks back), but inside the VM Steam sees the
-# disk's own size (200 GB), not the Mac's free space. A game folder is a plain folder on this Mac
+# disk's own size (20 GB since 0.7.0.1), not the Mac's free space. A game folder is a plain folder on this Mac
 # or on a drive, shared with the VM (a writable Lima mount at /mnt/portalistic/NAME): games there
 # are ordinary files on that drive, Steam sees its real free space before an install, and an
 # uninstall gives the space straight back. bottle-libraries in the VM makes each one a Steam
@@ -1563,8 +1570,8 @@ lib_folders() {
 }
 
 # ---- the Mac's free space (the watcher, every round) ----
-# The VM's disk takes Mac space as it fills, but inside the VM it looks like 200 GB with plenty
-# free, so Steam would download into it until the Mac is full, and a VM whose disk can't grow
+# The VM's disk takes Mac space as it fills, but inside the VM it looks like its own size with
+# room to spare, so Steam would download into it until the Mac is full, and a VM whose disk can't grow
 # any more stops working. Under BOTTLE_DISK_LOW_GB (10) free, the watcher has the VM hand back
 # what deleted files freed and puts a warning in the app (every 15 minutes at most); under
 # BOTTLE_DISK_STOP_GB (3), a Steam download that's making the VM's disk grow is stopped (Steam
@@ -1604,16 +1611,50 @@ disk_guard() {  # $1 = what Steam does: game, download, idle
   vm_notice 1 30 "Your Mac has ${free} GB free" "Games on the VM's disk use the Mac's space, and Steam can't see that limit there. Install games to a game folder (Bottle > Show Game Folders) or free up space."
 }
 
+# ---- the VM's own disk (the watcher, every round) ----
+# Since 0.7.0.1 a new VM's disk is 20 GB (VM_DISK_GB): Linux, Steam, Proton and its runtimes,
+# which need a case-sensitive disk; games go in game folders. Steam checks a game's size before
+# installing it there, but caches, logs, crash dumps and shader caches grow by themselves, and a
+# full disk stops Steam and the desktop. Under BOTTLE_VMDISK_LOW_GB (3) free, the watcher clears
+# what nothing needs (as bottle disk clean) and, if that wasn't enough, warns in the app (every
+# 15 minutes at most); under BOTTLE_VMDISK_STOP_GB (1), a Steam download is stopped.
+VG_WARNED=0
+vm_disk_guard() {  # $1 = what Steam does: game, download, idle; $2 = the VM disk's free KB
+  local free_kb="${2:-}" now low stop
+  [[ "$free_kb" =~ ^[0-9]+$ ]] || return 0
+  low=$(( ${BOTTLE_VMDISK_LOW_GB:-3} * 1048576 )); stop=$(( ${BOTTLE_VMDISK_STOP_GB:-1} * 1048576 ))
+  (( free_kb < low )) || return 0
+  now="$(date +%s)"
+  if (( free_kb < stop )) && [[ "$1" == download ]]; then
+    echo "$(date '+%F %T') the VM's disk has $(( free_kb / 1024 )) MB free and Steam is downloading: stopping Steam"
+    steam_stop >/dev/null 2>&1 || true
+    vm_disk_tidy
+    vm_notice 1 60 "Steam stopped: the VM's disk is full" "Only $(( free_kb / 1024 )) MB were left on it. Games go in a game folder (Bottle > Show Game Folders); Steam's Settings > Storage moves a game there. Bottle > Restart Steam brings Steam back."
+    VG_WARNED="$now"
+    return 0
+  fi
+  (( now - VG_WARNED >= 900 )) || return 0
+  VG_WARNED="$now"
+  echo "$(date '+%F %T') the VM's disk has $(( free_kb / 1024 )) MB free: clearing caches and logs"
+  vm_disk_tidy
+  free_kb="$(vm_disk_free_kb)"
+  [[ "$free_kb" =~ ^[0-9]+$ ]] || return 0
+  echo "$(date '+%F %T') the VM's disk now has $(( free_kb / 1024 )) MB free"
+  (( free_kb < low )) || return 0
+  vm_notice 1 30 "The VM's disk is almost full ($(( free_kb / 1048576 )) GB left)" "It holds Linux, Steam and Proton; games go in a game folder (Bottle > Show Game Folders), and Steam's Settings > Storage moves a game there. Or make the disk bigger: bottle disk grow."
+}
+
 # ---- the first launch on a Mac: Portalistic's Linux system (bottle setup) ----
 # A Mac without the VM gets Portalistic's ready-made Linux image (host/build-image.sh made it;
 # host/image.env says where it is, how big, and its checksum). Lima makes the VM from it; then the
 # VM starts as it always does, and its first start brings it up to this kit (for its new user)
 # and installs Steam. The VM: its share of the Mac's memory (memory_suggested_gb: 2 GB on a 4 GB
 # Mac, 8 GB on a 16 GB one), its performance cores, a
-# 200 GB disk that takes Mac space only as it fills, no Mac folders shared but the game folder
+# 20 GB disk (Linux, Steam, Proton) that takes Mac space only as it fills, no Mac folders shared but the game folder
 # ~/Games/Portalistic (bottle library). Downloads resume where they stopped.
 #   bottle setup [IMAGE]   IMAGE: a local image file instead of the download (development)
 IMAGE_ENV="$KIT_DIR/host/image.env"
+VM_DISK_GB="${BOTTLE_VM_DISK_GB:-20}"   # Linux, Steam, Proton (games go in game folders; see vm_disk_guard)
 mac_perf_cores() {
   local n all
   n="$(sysctl -n hw.perflevel0.physicalcpu 2>/dev/null || sysctl -n hw.physicalcpu 2>/dev/null || echo 4)"
@@ -1699,7 +1740,7 @@ images:
   digest: "sha256:$sha"
 cpus: $cpus
 memory: "${mem}GiB"
-disk: "200GiB"
+disk: "${VM_DISK_GB}GiB"
 mounts: []
 user:
   name: deck
@@ -2490,7 +2531,7 @@ host_test_run() {
 }
 
 awake_loop() {
-  local state last="" flags cpid="" me="$KIT_DIR/host/bottle" born t
+  local state out last="" flags cpid="" me="$KIT_DIR/host/bottle" born t
   # (the pid file only if it's still this watcher's: bash runs this trap only once the sleep in
   # progress ends, and by then a new watcher may have written its own; Oct 12, the move to
   # ~/Documents/Projects/PORTALISTIC: the old watcher's late exit removed the new one's)
@@ -2536,8 +2577,11 @@ awake_loop() {
       ( host_test_run "$t" >/dev/null 2>&1 || true ) &
     fi
     # (with a time limit: a VM that doesn't answer mustn't stop the watcher)
-    state="$(vsh_for 40 bash -c 'command -v bottle-busy >/dev/null && bottle-busy || echo idle' 2>/dev/null | tail -n 1 || true)"
+    # shellcheck disable=SC2016  # runs in the VM
+    out="$(vsh_for 40 bash -c 'echo "vmfree $(df -Pk / | awk "NR == 2 {print \$4}")"; command -v bottle-busy >/dev/null && bottle-busy || echo idle' 2>/dev/null || true)"
+    state="$(tail -n 1 <<<"$out")"
     disk_guard "$state" || true   # the Mac's free space (see disk_guard)
+    vm_disk_guard "$state" "$(sed -n 's/^vmfree //p' <<<"$out" | head -n 1)" || true   # the VM's own disk
     # a kit test asked for from outside (logs/.selftest holds its name): not while a game runs,
     # unless the test says it may ("# (selftest: may run during a game)", e.g. a screenshot)
     # (|| true: this script stops on any failing command, and no file is the usual case; the
@@ -2882,6 +2926,7 @@ case "$cmd" in
   prebuild)     cmd_prebuild ;;
   setup)        cmd_setup "$@" ;;
   app-update)   cmd_app_update "$@" ;;
+  _vmdisk-guard) need_vm; vm_disk_guard "${1:-idle}" "$(vm_disk_free_kb)" ;;   # one round of the watcher's (tests)
   kosmickrisp)  exec "$KIT_DIR/host/kosmickrisp.sh" "$@" ;;
   help|-h|--help) sed -n '2,/^# Written/p' "$src" | sed 's/^# \{0,1\}//' ;;
   *) die "unknown command '$cmd' (bottle help)" ;;

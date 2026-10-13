@@ -133,8 +133,8 @@ Portalistic $VERSION: Steam on an Apple Silicon Mac (macOS 26 or newer, 4 GB of 
 
 Download **Portalistic-$VERSION.zip**, unzip it and move Portalistic to Applications. On its first
 launch it downloads its Linux system ($(awk -v b="$PORTALISTIC_IMAGE_SIZE" 'BEGIN {printf "%.1f", b / 1e9}') GB, $IMAGE_WHERE: you don't need to download
-it yourself), then Steam installs itself and asks you to sign in. Portalistic 0.7.1 and later
-update themselves: they offer a new version when there is one.
+it yourself), then Steam installs itself and asks you to sign in. Portalistic updates itself from
+0.7.0.1 on: it offers each new version (a copy of 0.7.0 needs this download once).
 
 Portalistic isn't affiliated with Valve. Third-party software and licenses: LICENSES.md; the
 Linux kernel's source (libkrunfw-$KFW_VER-source.tar.gz, $KVER.tar.xz) is attached, and the

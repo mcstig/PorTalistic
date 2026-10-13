@@ -12,7 +12,8 @@ your Mac, drawing with the Mac's GPU, and Steam plays Windows games through Prot
 - Unzip it and move Portalistic to Applications. Its first launch downloads its Linux system (a
   little over 2 GB), then Steam installs itself and asks you to sign in.
 - Games go in Games/Portalistic in your home folder. Bottle > Add a Game Folder adds another
-  folder or an external drive.
+  folder or an external drive. The Linux system's own drive (Steam's "Internal Drive") is 20 GB:
+  Linux, Steam and Proton, not games.
 - Some games won't run: those whose anti-cheat doesn't accept Proton or a VM, and some whose copy
   protection fails under x86 emulation. Portalistic doesn't work around either.
 - It's experimental: the ARM64 Steam client it uses is a beta build from Valve.
@@ -53,7 +54,8 @@ download and sets up with one click (`bottle setup`):
 1. It downloads Portalistic's ready-made Linux image (2.3 GB, from the project's GitHub release,
    checked against its SHA-256) into `~/.portalistic/download`.
 2. Lima makes the VM from it in `~/.portalistic/lima`: half the Mac's memory under 24 GB (2-8 GB),
-   a third from 24 GB (8-16 GB), its performance cores, and a 200 GB disk that takes Mac space only as it fills. No Mac folders are
+   a third from 24 GB (8-16 GB), its performance cores, and a 20 GB disk (Linux, Steam and Proton)
+   that takes Mac space only as it fills. No Mac folders are
    shared except the game folder `~/Games/Portalistic`. The image file is deleted afterwards.
 3. The VM starts, brings itself up to the app's kit for its user (`deck`) in a few seconds, and
    installs Steam, which opens in Big Picture for signing in.
@@ -234,18 +236,19 @@ the VM's port 4711. Lima forwards the port, and `bottle start` runs `bottle-audi
 output with ~60 ms of delay. `bottle audio off|on|status`; log in `~/.config/steamos-bottle/audio.log`.
 
 **Disk space.** Games live in a game folder on the Mac or a drive (see "Where games go"), or on
-the VM's disk (200 GB inside the VM; a file under ~/.lima that takes Mac space only as it fills,
+the VM's disk (20 GB since 0.7.0.1, 200 GB before; a file that takes Mac space only as it fills,
 and gets it back when files are deleted, since the VM's file system discards freed blocks).
 `bottle disk` shows what fills it, what it takes of the Mac now and the Mac's free space;
 `bottle disk grow [GB]` makes it bigger (Lima's `limactl edit --disk`, Lima 1.1+: stops Steam
 and the VM, resizes, starts it, grows the partition and file system if cloud-init didn't,
-starts Steam; refuses sizes the Mac can't hold); `bottle disk clean` clears package caches,
-old journal, crash dumps and game logs over 50 MB. A full disk makes Steam crash and restart,
+starts Steam; refuses sizes the Mac can't hold; default: 10 GB more); `bottle disk clean` clears package caches,
+old journal, crash dumps and game logs over 50 MB. The watcher does that by itself when the
+VM's disk has under 3 GB free, then warns in the app; under 1 GB it stops a Steam download. A full disk makes Steam crash and restart,
 and `bottle update` fail. Switching a game from its Linux to its Windows version briefly needs
 room for both.
 
 **Where games go (Oct 12).** The VM's disk can't tell Steam how much room the Mac really has:
-inside the VM it looks like 200 GB with plenty free even when the Mac has 20 GB left. So games
+inside the VM it looked like 200 GB with plenty free even when the Mac had 20 GB left. So games
 go in a **game folder** instead: a plain folder on this Mac (`~/Games/Portalistic`, the default
 for new games) or on an external drive, which the Mac shares with the VM (a writable Lima mount
 at `/mnt/portalistic/NAME`). Games there are ordinary files on that drive: they take its space
