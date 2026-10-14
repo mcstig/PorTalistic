@@ -1,4 +1,4 @@
-// Portalistic — Bottle > Add a Game Folder…, Remove a Game Folder… and Show Game Folders: places
+// Portalistic — Game Folders > Add a Game Folder…, Remove a Game Folder… and Show Game Folders: places
 // for games outside the VM's disk (a folder on this Mac, or a drive), through `bottle library`.
 // Steam's own Add Drive can't see the Mac's drives (Steam runs in the VM, which sees only the
 // folders shared with it). So when the app opens, and whenever a drive is connected, a drive that
@@ -57,7 +57,7 @@ extension AppDelegate {
     @objc func removeGameFolder(_ sender: Any?) {
         let folders = gameFolders()
         guard !folders.isEmpty else {
-            tell("There are no game folders to remove.", "Bottle > Add a Game Folder… adds one.")
+            tell("There are no game folders to remove.", "Game Folders > Add a Game Folder… adds one.")
             return
         }
         let alert = NSAlert()
@@ -111,7 +111,7 @@ extension AppDelegate {
         let others = missing.count > 1 ? " (and \(missing.count - 1) more)" : ""
         noticeView.show(problem: false, title: "“\(f.label)” isn't connected\(others)",
                         detail: "Its games show as unavailable in Steam until you connect it. "
-                            + "Bottle > Remove a Game Folder… takes it off the list.", seconds: 15)
+                            + "Game Folders > Remove a Game Folder… takes it off the list.", seconds: 15)
     }
 
     /// A notice for a drive that suits games and isn't a game folder yet (unless declined).
@@ -124,7 +124,7 @@ extension AppDelegate {
         AppDelegate.offeredThisRun.insert(id)
         noticeView.show(problem: false, title: "“\(name)” is connected: use it for Steam games?",
                         detail: "Click here to add it. Steam's own Add Drive can't see your Mac's drives; "
-                            + "Bottle > Add a Game Folder… adds one any time.",
+                            + "Game Folders > Add a Game Folder… adds one any time.",
                         seconds: 20) { [weak self] in self?.confirmGameFolder(url, offered: true) }
         return true
     }

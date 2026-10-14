@@ -1,0 +1,18 @@
+gogdl in this folder is heroic-gogdl 1.3.1 (https://github.com/Heroic-Games-Launcher/heroic-gogdl,
+GPL-3.0-or-later, see LICENSE-gogdl), with one change:
+
+  gogdl/dl/workers/task_executor.py   `import gogdl_xdelta3` no longer stops the program when
+                                      the native module isn't there (it is built per machine:
+                                      guest/build-recipes.sh); only an update applied as a
+                                      patch needs it, and then fails for that file.
+
+gogdl_xdelta3.c is gogdl's own C module (GPL-3.0-or-later). xdelta3/ is xdelta 3.0.12
+(https://github.com/jmacd/xdelta, Apache-2.0, see xdelta3/LICENSE), unchanged, the files the
+module needs.
+
+legendary in this folder is Legendary 0.21.1 (https://github.com/legendary-gl/legendary, GPL-3.0-or-later,
+see LICENSE-legendary; the PyPI package legendary-gl), with one change:
+
+  legendary/__init__.py   `__version__ = '0.21.1'` instead of asking importlib.metadata for the
+                          installed package's version (the kit copies the files, nothing installs
+                          the package, so there is no metadata to ask).

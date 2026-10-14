@@ -513,6 +513,13 @@ steamplay_setup() {
   bottle-steamplay build || true
   bottle-steamplay map || true
 }
+# Games from other stores (GOG...) that bottle-stores installed: put in Steam's library as
+# non-Steam games before Steam starts (it keeps its shortcuts in memory and writes them back when
+# it quits). They run through Proton like the rest (steamplay_setup maps them).
+stores_setup() {
+  command -v bottle-stores >/dev/null || return 0
+  bottle-stores sync || true
+}
 # Portalistic's game folders (folders on the Mac or a drive, which the Mac shares with the VM at
 # /mnt/portalistic/NAME) as Steam libraries, Steam's tools moved off them, and the default
 # library for new games: before Steam starts, since it reads (and writes back) these files then.
@@ -563,6 +570,7 @@ link_dot_steam
 (( first_run )) && echo "$(date -Is) install: ${SECONDS}s" >> "${TIMING_LOG}"
 
 libraries_setup
+stores_setup
 steamplay_setup
 perf_graphs_off
 proton_overlay_settings
@@ -573,12 +581,16 @@ start_logkeep
 # starting again if it quits (bottle-maximize-steam --keep). This start isn't a stop any more.
 rm -f "${HOME}/.cache/steamos-bottle/steam-stopped"
 # (without the GPU mode's settings: the Steam it may start again reads the mode itself)
-command -v bottle-maximize-steam >/dev/null && {
+# Desktop Mode (bottle-session on): Steam is a window on KDE Plasma's desktop: its desktop interface,
+# and no keeper.
+desktop_mode=0
+[[ "$(cat "${LOG_DIR}/session" 2>/dev/null)" == desktop ]] && desktop_mode=1
+(( ! desktop_mode )) && command -v bottle-maximize-steam >/dev/null && {
   env -u MESA_LOADER_DRIVER_OVERRIDE -u LIBGL_KOPPER_DRI2 -u BOTTLE_STEAM_ZINK -u BOTTLE_PRESENT_DEBUG -u BOTTLE_FAKE_ZINK \
       -u BOTTLE_GPU_UI_VARS -u BOTTLE_STEAM_GPU -u BOTTLE_STEAM_GPU_FAKE \
     setsid -f bottle-maximize-steam --keep </dev/null >/dev/null 2>&1; }
 ui_args=()
-if [[ "$(cat "${LOG_DIR}/steam-ui" 2>/dev/null)" != desktop && " $* " != *" -gamepadui "* ]]; then
+if (( ! desktop_mode )) && [[ "$(cat "${LOG_DIR}/steam-ui" 2>/dev/null)" != desktop && " $* " != *" -gamepadui "* ]]; then
   ui_args=(-gamepadui)
 fi
 run_env=(LD_LIBRARY_PATH="${STEAM}/lib/aarch64-linux-gnu/${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}")

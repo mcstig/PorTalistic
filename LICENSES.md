@@ -4,8 +4,8 @@ Portalistic's own code (the app, the `bottle` command, and the scripts and progr
 the Linux VM) is free software under the GNU General Public License, version 3: LICENSE.md, and
 the source at https://github.com/mcstig/PorTalistic.
 
-Portalistic is not affiliated with or endorsed by Valve. Steam and SteamOS are trademarks of
-Valve Corporation. Portalistic doesn't include Steam or Proton: the Linux system it sets up
+Portalistic is not affiliated with or endorsed by Valve or GOG. Steam and SteamOS are trademarks of
+Valve Corporation; GOG is a trademark of GOG sp. z o.o. Portalistic doesn't include Steam or Proton: the Linux system it sets up
 downloads Valve's Steam client from Valve, and Steam downloads Proton and its runtimes itself,
 under Valve's terms (the Steam Subscriber Agreement).
 
@@ -33,10 +33,16 @@ packages with their versions and licenses is published next to each image
 |---|---|---|
 | Fedora Linux packages (kernel, systemd, TigerVNC, PipeWire, Mesa…) | Each package's own (GPL, LGPL, MIT, …) | Fedora's source RPMs for the exact versions: https://koji.fedoraproject.org |
 | Mesa with Venus for krunkit (COPR `slp/mesa-libkrun-vulkan`, aarch64 and x86_64) | MIT | https://copr.fedorainfracloud.org/coprs/slp/mesa-libkrun-vulkan/ |
+| Mesa 25.3.6 Venus driver, 32-bit x86 build with the COPR's three patches (`guest/x86-venus/`: the library, the patches and the build script) | MIT | https://gitlab.freedesktop.org/mesa/mesa, patches from https://copr.fedorainfracloud.org/coprs/slp/mesa-libkrun-vulkan/ |
 | FEX-Emu and its Fedora x86_64 system | MIT (FEX); the x86 system: Fedora packages' own | https://github.com/FEX-Emu/FEX |
 | DXVK 2.6.2 | Zlib | https://github.com/doitsujin/dxvk |
 | dxvk-gplasync 2.6.2-1 | Zlib | https://gitlab.com/Ph42oN/dxvk-gplasync |
 | vkd3d-proton 3.0.1 | LGPL-2.1-or-later | https://github.com/HansKristian-Work/vkd3d-proton/tree/v3.0.1 |
+| gogdl 1.3.1 (Heroic Games Launcher's GOG downloader), with one small change (`guest/stores/MODIFICATIONS.txt`) | GPL-3.0-or-later | https://github.com/Heroic-Games-Launcher/heroic-gogdl |
+| xdelta 3.0.12 (inside gogdl's patch module) | Apache-2.0 | https://github.com/jmacd/xdelta |
+| Legendary 0.21.1 (the Epic Games Store downloader, `legendary-gl`), with one small change (`guest/stores/MODIFICATIONS.txt`); the VM also installs Fedora's `python3-filelock` and `python3-pycryptodomex` for it | GPL-3.0-or-later | https://github.com/legendary-gl/legendary |
+| Comet 0.3.2, the open-source stand-in for the GOG Galaxy client's background service, built from its source unchanged (`guest/comet/`: BUILT, CRATES.tsv, THIRD-PARTY-LICENSES.txt list and reproduce the 251 Rust packages compiled into it, all under MIT, Apache-2.0, BSD, ISC, Zlib, Unicode, 0BSD, Unlicense or BSL-1.0) | Apache-2.0 (its protocol definitions: CC0-1.0) | https://github.com/imLinguin/comet |
+| KDE Plasma 6 (X11 session), Dolphin, Konsole, Kate, Spectacle, Discover, Flatpak, Firefox and their dependencies: not in the image; the VM downloads them from Fedora's repositories when Desktop Mode is first switched on (`guest/bottle-session`) | Each package's own (GPL, LGPL, MIT, MPL-2.0, …) | Fedora's source RPMs: https://koji.fedoraproject.org |
 | Portalistic's own programs in the VM (`guest/` in the source) | GPL-3.0 | https://github.com/mcstig/PorTalistic |
 
 ## Corresponding source

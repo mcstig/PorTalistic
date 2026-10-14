@@ -20,6 +20,10 @@
 #   bottle ui [bigpicture|desktop]
 #                             Steam's interface in the bottle: Big Picture (the default, as on
 #                             SteamOS) or Steam's desktop windows; no argument: which one
+#   bottle mode [game|desktop|install|status]
+#                             Game Mode (Steam's Big Picture fills the screen; the default) or
+#                             Desktop Mode (KDE Plasma, as on a Steam Deck; the first switch to it
+#                             downloads about 550 MB); no argument: which one
 #   bottle steam-gpu [on|off] Steam's own interface (Big Picture) drawn on the Mac's GPU (OpenGL
 #                             via zink) instead of the VM's processors: on checks that it works
 #                             first, then restarts Steam; off goes back; no argument: which one
@@ -51,6 +55,37 @@
 #                             as its Windows version through Proton (the default); restarts
 #                             Steam, which downloads that version. No arguments: each game's.
 #                             Steam's own setting (Properties > Compatibility) works as well
+#   bottle gog login-url      the address to sign in to GOG at (open it in a browser)
+#   bottle gog login ADDRESS  finish signing in: ADDRESS is the page the browser ends on after
+#                             signing in (it contains code=...), or just the code
+#   bottle gog logout         forget the sign-in (installed games stay)
+#   bottle gog status|list|folders [--json]
+#                             signed in?; the games the account owns (with a Windows version);
+#                             where games can go
+#   bottle gog install ID [--folder NAME] [--lang CODE]
+#                             download a GOG game into a game folder (default: the default one;
+#                             "GOG Games" inside it) and add it to Steam as a non-Steam game
+#                             (collection "GOG"), run through Proton like the rest; restarts
+#                             Steam to show it. Running it again updates the game
+#   bottle gog remove ID [--purge]
+#                             delete the game and its Steam entry (--purge: also its Wine prefix,
+#                             which holds its saves and settings); restarts Steam
+#   bottle epic login-url     the address to sign in to Epic Games at (open it in a browser)
+#   bottle epic login TEXT    finish signing in: TEXT is what Epic's page shows after signing in
+#                             (it contains "authorizationCode"), or just that code
+#   bottle epic logout        forget the sign-in (installed games stay)
+#   bottle epic status|list|folders [--json]
+#                             signed in?; the games the account owns (with a Windows version
+#                             Legendary can install); where games can go
+#   bottle epic install ID [--folder NAME]
+#                             download an Epic game (ID: the name `list` shows) into a game folder
+#                             ("Epic Games" inside it) and add it to Steam as a non-Steam game
+#                             (collection "Epic Games"), run through Proton; restarts Steam to show
+#                             it. Running it again updates the game. Games with anti-cheat that
+#                             Epic's own launcher doesn't run on Linux may not start
+#   bottle epic remove ID [--purge]
+#                             delete the game and its Steam entry (--purge: also its Wine prefix);
+#                             restarts Steam
 #   bottle anticheat          install Valve's Proton EasyAntiCheat Runtime, which games with Easy
 #                             Anti-Cheat that allow Proton (Rocket League...) need; restarts Steam
 #   bottle disk               what fills the VM's disk, and the Mac's free space. While the VM
@@ -102,10 +137,12 @@
 #                             VERSION URL", "replace VERSION URL" (this copy's version isn't a
 #                             release any more) or "current THIS LATEST"; install downloads it,
 #                             checks its signature and swaps it in (the app offers this itself)
-#   bottle prebuild           build the VM's own programs (C) in the VM, into the kit's
+#   bottle prebuild [PROGRAM...]
+#                             build the VM's own programs (C) in the VM, into the kit's
 #                             guest/prebuilt/aarch64: VMs then install those instead of compiling
 #                             them (the packaged app's VMs have no build tools). Run it after
-#                             changing their sources, before host/package-app.sh
+#                             changing their sources, before host/package-app.sh. With names,
+#                             only those are built again (the others' builds stay)
 #   bottle update             copy this kit into the VM and bring the VM up to date (not while a
 #                             game runs: it would unplug its controller; --now does it anyway)
 #   bottle shell              a shell inside the VM
@@ -1670,7 +1707,7 @@ disk_guard() {  # $1 = what Steam does: game, download, idle
   if (( free < ${BOTTLE_DISK_STOP_GB:-3} && grew )) && [[ "$1" == download ]]; then
     echo "$(date '+%F %T') the Mac has ${free} GB free and a Steam download is filling the VM's disk: stopping Steam"
     steam_stop >/dev/null 2>&1 || true
-    vm_notice 1 60 "Steam stopped: your Mac is almost full" "Only ${free} GB left, and Steam was downloading onto the VM's disk. Free up space on the Mac, then Bottle > Restart Steam. Games in a game folder (Bottle > Add a Game Folder) don't fill the VM's disk."
+    vm_notice 1 60 "Steam stopped: your Mac is almost full" "Only ${free} GB left, and Steam was downloading onto the VM's disk. Free up space on the Mac, then Bottle > Restart Steam. Games in a game folder (Game Folders > Add a Game Folder) don't fill the VM's disk."
     DG_WARNED="$now"
     return 0
   fi
@@ -1680,7 +1717,7 @@ disk_guard() {  # $1 = what Steam does: game, download, idle
   free="$(mac_free_gb)"
   (( free < ${BOTTLE_DISK_LOW_GB:-10} )) || return 0
   echo "$(date '+%F %T') the Mac has ${free} GB free"
-  vm_notice 1 30 "Your Mac has ${free} GB free" "Games on the VM's disk use the Mac's space, and Steam can't see that limit there. Install games to a game folder (Bottle > Show Game Folders) or free up space."
+  vm_notice 1 30 "Your Mac has ${free} GB free" "Games on the VM's disk use the Mac's space, and Steam can't see that limit there. Install games to a game folder (Game Folders > Show Game Folders) or free up space."
 }
 
 # ---- the VM's own disk (the watcher, every round) ----
@@ -1701,7 +1738,7 @@ vm_disk_guard() {  # $1 = what Steam does: game, download, idle; $2 = the VM dis
     echo "$(date '+%F %T') the VM's disk has $(( free_kb / 1024 )) MB free and Steam is downloading: stopping Steam"
     steam_stop >/dev/null 2>&1 || true
     vm_disk_tidy
-    vm_notice 1 60 "Steam stopped: the VM's disk is full" "Only $(( free_kb / 1024 )) MB were left on it. Games go in a game folder (Bottle > Show Game Folders); Steam's Settings > Storage moves a game there. Bottle > Restart Steam brings Steam back."
+    vm_notice 1 60 "Steam stopped: the VM's disk is full" "Only $(( free_kb / 1024 )) MB were left on it. Games go in a game folder (Game Folders > Show Game Folders); Steam's Settings > Storage moves a game there. Bottle > Restart Steam brings Steam back."
     VG_WARNED="$now"
     return 0
   fi
@@ -1713,7 +1750,7 @@ vm_disk_guard() {  # $1 = what Steam does: game, download, idle; $2 = the VM dis
   [[ "$free_kb" =~ ^[0-9]+$ ]] || return 0
   echo "$(date '+%F %T') the VM's disk now has $(( free_kb / 1024 )) MB free"
   (( free_kb < low )) || return 0
-  vm_notice 1 30 "The VM's disk is almost full ($(( free_kb / 1048576 )) GB left)" "It holds Linux, Steam and Proton; games go in a game folder (Bottle > Show Game Folders), and Steam's Settings > Storage moves a game there. Or make the disk bigger: bottle disk grow."
+  vm_notice 1 30 "The VM's disk is almost full ($(( free_kb / 1048576 )) GB left)" "It holds Linux, Steam and Proton; games go in a game folder (Game Folders > Show Game Folders), and Steam's Settings > Storage moves a game there. Or make the disk bigger: bottle disk grow."
 }
 
 # ---- the first launch on a Mac: Portalistic's Linux system (bottle setup) ----
@@ -2358,6 +2395,71 @@ cmd_version() {
   awake_start
 }
 
+# --- GOG --------------------------------------------------------------------------------------
+# guest/bottle-stores does the work in the VM (gogdl downloads, then the game becomes a Steam
+# shortcut when Steam next starts). The kit's copy runs, so it works before the VM is updated.
+GOG_LOGIN_URL="https://auth.gog.com/auth?client_id=46899977096215655&redirect_uri=https%3A%2F%2Fembed.gog.com%2Fon_login_success%3Forigin%3Dclient&response_type=code&layout=galaxy"
+
+EPIC_LOGIN_URL="https://www.epicgames.com/id/login?redirectUrl=https%3A//www.epicgames.com/id/api/redirect%3FclientId%3D34a02cf8f4414e29b15921876da36f9a%26responseType%3Dcode"
+
+stores_run() {
+  local sp="$KIT_DIR/guest/bottle-stores"
+  if [[ -f "$sp" ]]; then vsh python3 - "$@" < "$sp"; else vsh bottle-stores "$@"; fi
+}
+
+# Steam keeps its shortcuts in memory: a changed list shows after it restarts (not under a game).
+steam_refresh_for() {  # $1 = what changed
+  if [[ "$(vsh_for 30 bash -c 'command -v bottle-busy >/dev/null && bottle-busy || echo idle' 2>/dev/null | tail -n 1)" == game ]]; then
+    info "A game is running: $1 shows in Steam at its next start (Bottle > Restart Steam after you quit it)."
+    return 0
+  fi
+  info "Restarting Steam so it shows $1…"
+  steam_stop
+  desktop_start >/dev/null
+  steam_start 0
+  awake_start
+}
+
+cmd_gog() {
+  local sub="${1:-}"
+  [[ $# -gt 0 ]] && shift
+  case "$sub" in
+    login-url) echo "$GOG_LOGIN_URL"; return 0 ;;
+    status|list|folders|login|logout|install|remove) ;;
+    *) die "usage: bottle gog login-url | login ADDRESS | logout | status | list | folders | install ID | remove ID" ;;
+  esac
+  need_vm
+  [[ "$(vm_status)" == Running ]] || die "The VM isn't running. Use: bottle start"
+  if [[ "$sub" == remove ]] && [[ "$(vsh_for 30 bash -c 'command -v bottle-busy >/dev/null && bottle-busy || echo idle' 2>/dev/null | tail -n 1)" == game ]]; then
+    die "A game is running. Quit it first: removing a game's files under it would crash it."
+  fi
+  stores_run gog "$sub" "$@" || return 1
+  case "$sub" in
+    install) steam_refresh_for "the game" ;;
+    remove)  steam_refresh_for "the change" ;;
+  esac
+}
+
+cmd_epic() {   # the same as cmd_gog, for Epic Games (guest/bottle-stores epic ...)
+  local sub="${1:-}"
+  [[ $# -gt 0 ]] && shift
+  case "$sub" in
+    login-url) echo "$EPIC_LOGIN_URL"; return 0 ;;
+    status|list|folders|login|logout|install|remove) ;;
+    *) die "usage: bottle epic login-url | login TEXT | logout | status | list | folders | install ID | remove ID" ;;
+  esac
+  need_vm
+  [[ "$(vm_status)" == Running ]] || die "The VM isn't running. Use: bottle start"
+  if [[ "$sub" == remove ]] && [[ "$(vsh_for 30 bash -c 'command -v bottle-busy >/dev/null && bottle-busy || echo idle' 2>/dev/null | tail -n 1)" == game ]]; then
+    die "A game is running. Quit it first: removing a game's files under it would crash it."
+  fi
+  stores_run epic "$sub" "$@" || return 1
+  case "$sub" in
+    install) steam_refresh_for "the game" ;;
+    remove)  steam_refresh_for "the change" ;;
+  esac
+}
+
 cmd_play() {
   [[ "${1:-}" =~ ^[0-9]+$ ]] || die "usage: bottle play APP_ID   (bottle library lists them)"
   cmd_steam_url "steam://rungameid/$1"
@@ -2408,6 +2510,26 @@ cmd_repair_fex() {
   sleep 30
   log_export || true   # so the outcome can be checked (compat_log, Steam's messages)
   info "Steam doesn't install FEX? Put the old one back: bottle repair-fex --undo"
+}
+
+# Game Mode (Steam's Big Picture fills the screen) or Desktop Mode (KDE Plasma, as on a Steam Deck's
+# desktop). guest/bottle-session does the work in the VM; the first switch to Desktop Mode installs it.
+cmd_mode() {
+  local want="${1:-status}"
+  need_vm
+  [[ "$(vm_status)" == Running ]] || die "The VM isn't running. Use: bottle start"
+  case "$want" in
+    status|install) ;;
+    game|off) want=off ;;
+    desktop|on) want=on ;;
+    *) die "usage: bottle mode [game | desktop | install | status]" ;;
+  esac
+  if ! vsh_for 30 bash -c 'command -v bottle-session >/dev/null' 2>/dev/null; then   # a VM from before Desktop Mode
+    update_if_behind "Desktop Mode" || true
+    vsh_for 30 bash -c 'command -v bottle-session >/dev/null' 2>/dev/null \
+      || die "The VM doesn't have Desktop Mode's tools yet. Run: bottle update"
+  fi
+  vsh bottle-session "$want"
 }
 
 cmd_wm() {
@@ -2912,14 +3034,16 @@ cmd_update() {
 # The VM's own programs, built once in this VM for the kit (guest/prebuild.sh,
 # guest/build-recipes.sh): guest/prebuilt/aarch64 and its MANIFEST (which sources each came from).
 cmd_prebuild() {
-  local new="$KIT_DIR/guest/prebuilt/aarch64.new" dest="$KIT_DIR/guest/prebuilt/aarch64"
+  local new="$KIT_DIR/guest/prebuilt/aarch64.new" dest="$KIT_DIR/guest/prebuilt/aarch64" names=("$@") n
+  for n in ${names[@]+"${names[@]}"}; do [[ "$n" =~ ^[A-Za-z0-9._-]+$ ]] || die "usage: bottle prebuild [PROGRAM...]"; done
   need_vm
   [[ "$(vm_status)" == Running ]] || die "The VM isn't running. Use: bottle start"
+  [[ ${#names[@]} -eq 0 || -d "$dest" ]] || die "There are no ready-made builds to add to yet. Run: bottle prebuild"
   info "Building the VM's programs in the VM (build tools install the first time)…"
   # shellcheck disable=SC2016  # runs in the VM
   COPYFILE_DISABLE=1 tar -C "$KIT_DIR" --exclude __pycache__ --exclude .DS_Store --exclude guest/tests \
       --exclude guest/prebuilt -czf - guest \
-    | vsh bash -c 'rm -rf /tmp/pb-kit && mkdir -p /tmp/pb-kit && tar -xzf - -C /tmp/pb-kit && sudo -n bash /tmp/pb-kit/guest/prebuild.sh /tmp/pb-out' \
+    | vsh bash -c 'rm -rf /tmp/pb-kit && mkdir -p /tmp/pb-kit && tar -xzf - -C /tmp/pb-kit && sudo -n bash /tmp/pb-kit/guest/prebuild.sh /tmp/pb-out "$@"' _ ${names[@]+"${names[@]}"} \
     || die "The build in the VM failed (see above)."
   rm -rf "$new"
   mkdir -p "$new"
@@ -2927,6 +3051,18 @@ cmd_prebuild() {
   vsh bash -c 'tar -C /tmp/pb-out -cf - .; s=$?; sudo -n rm -rf /tmp/pb-kit /tmp/pb-out; exit $s' | tar -C "$new" -xf - \
     || die "Couldn't copy the builds out of the VM."
   [[ -s "$new/MANIFEST" ]] || die "The VM made no builds."
+  if [[ ${#names[@]} -gt 0 ]]; then
+    # only these programs: the others' ready-made builds stay as they are
+    for n in "${names[@]}"; do
+      [[ -f "$new/$n" ]] || die "The VM didn't build $n."
+      cp "$new/$n" "$dest/$n"
+      { grep -v "^$n " "$dest/MANIFEST" || true; grep "^$n " "$new/MANIFEST"; } > "$dest/MANIFEST.tmp"
+      mv "$dest/MANIFEST.tmp" "$dest/MANIFEST"
+    done
+    rm -rf "$new"
+    info "Added to guest/prebuilt/aarch64: ${names[*]}"
+    return 0
+  fi
   rm -rf "$dest"
   mv "$new" "$dest"
   info "Ready-made builds in guest/prebuilt/aarch64 ($(du -sh "$dest" | cut -f1)): $(awk '{printf "%s ", $1}' "$dest/MANIFEST")"
@@ -2990,8 +3126,11 @@ case "$cmd" in
   anticheat)    cmd_anticheat ;;
   library)      cmd_library "$@" ;;
   ui)           cmd_ui "$@" ;;
+  mode)         cmd_mode "$@" ;;
   steam-gpu)    cmd_steam_gpu "$@" ;;
   play)         cmd_play "$@" ;;
+  gog)          cmd_gog "$@" ;;
+  epic)         cmd_epic "$@" ;;
   version)      cmd_version "$@" ;;
   _awake)       awake_loop ;;   # the background keep-awake loop (awake_start)
   status)       cmd_status ;;
@@ -3005,7 +3144,7 @@ case "$cmd" in
   shell)        need_vm; exec limactl shell "$VM_NAME" ;;
   selftest)     cmd_selftest "$@" ;;
   install)      cmd_install ;;
-  prebuild)     cmd_prebuild ;;
+  prebuild)     cmd_prebuild "$@" ;;
   setup)        cmd_setup "$@" ;;
   app-update)   cmd_app_update "$@" ;;
   _vmdisk-guard) need_vm; vm_disk_guard "${1:-idle}" "$(vm_disk_free_kb)" ;;   # one round of the watcher's (tests)

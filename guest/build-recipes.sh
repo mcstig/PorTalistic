@@ -15,7 +15,7 @@
 #                     brought them in before)
 
 # shellcheck disable=SC2034  # (used by the scripts that source this)
-PB_NAMES="bottle-screen libnvidia-ml.so.1 libVkLayer_bottle_present.so libbottle_kopper.so bottle-gltest"
+PB_NAMES="bottle-screen libnvidia-ml.so.1 libVkLayer_bottle_present.so libbottle_kopper.so bottle-gltest gogdl_xdelta3.abi3.so"
 # shellcheck disable=SC2034
 PB_RUNTIME="libX11 libXext libXdamage libXfixes libXtst libXrender turbojpeg libxcb mesa-libGL mesa-libEGL"
 
@@ -26,6 +26,7 @@ pb_sources() {  # its source files, in guest/
     libVkLayer_bottle_present.so) echo present-layer/bottle_present.c ;;
     libbottle_kopper.so)          echo present-layer/bottle_kopper.c ;;
     bottle-gltest)                echo present-layer/bottle_gltest.c ;;
+    gogdl_xdelta3.abi3.so)        echo stores/gogdl_xdelta3.c stores/xdelta3/xdelta3/xdelta3.c ;;
   esac
 }
 
@@ -36,6 +37,7 @@ pb_devel() {  # the packages building it needs
     libVkLayer_bottle_present.so) echo gcc vulkan-headers libxcb-devel libX11-devel ;;
     libbottle_kopper.so)          echo gcc ;;
     bottle-gltest)                echo gcc mesa-libGL-devel mesa-libEGL-devel libXrender-devel libX11-devel ;;
+    gogdl_xdelta3.abi3.so)        echo gcc python3-devel ;;
   esac
 }
 
@@ -53,6 +55,12 @@ pb_build() {  # $1 = name, $2 = output file
       gcc -O2 -fPIC -shared -Wall -Wl,-soname,libbottle_kopper.so -o "$2" "$s/present-layer/bottle_kopper.c" -ldl ;;
     bottle-gltest)
       gcc -O2 -Wall -o "$2" "$s/present-layer/bottle_gltest.c" -lX11 -lXrender -lGL -lEGL ;;
+    gogdl_xdelta3.abi3.so)   # gogdl's patch module (stable Python ABI: any Python from 3.9 loads it)
+      gcc -O2 -fPIC -shared -w -I"$(python3 -c 'import sysconfig; print(sysconfig.get_paths()["include"])')" \
+        -I"$s/stores/xdelta3" -DPy_LIMITED_API=0x03090000 -DSIZEOF_SIZE_T=8 -DSIZEOF_UNSIGNED_INT=4 \
+        -DSIZEOF_UNSIGNED_LONG=8 -DSIZEOF_UNSIGNED_LONG_LONG=8 -DXD3_USE_LARGEFILE64=1 -DXD3_ENCODER=0 \
+        -DSECONDARY_DJW=0 -DSECONDARY_LZMA=0 -DSHELL_TESTS=0 \
+        -o "$2" "$s/stores/gogdl_xdelta3.c" "$s/stores/xdelta3/xdelta3/xdelta3.c" ;;
     *) return 1 ;;
   esac
 }

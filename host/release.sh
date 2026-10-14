@@ -128,7 +128,8 @@ echo "  libkrunfw $KFW_VER, $KVER"
 NOTES="$KIT/build/release-notes.md"
 if (( NEW_IMAGE )); then IMAGE_WHERE="the \`portalistic-linux\` files below"
 else IMAGE_WHERE="from release [$IMG_TAG](https://github.com/$REPO/releases/tag/$IMG_TAG)"; fi
-cat > "$NOTES" <<EOF
+{
+cat <<EOF
 Portalistic $VERSION: Steam on an Apple Silicon Mac (macOS 26 or newer, 4 GB of memory or more).
 
 Download **Portalistic-$VERSION.zip**, unzip it and move Portalistic to Applications. On its first
@@ -136,12 +137,17 @@ launch it downloads its Linux system ($(awk -v b="$PORTALISTIC_IMAGE_SIZE" 'BEGI
 it yourself), then Steam installs itself and asks you to sign in. Portalistic updates itself from
 0.7.0.1 on: it offers each new version (a copy of 0.7.0 needs this download once).
 
+EOF
+# what changed (host/release-notes/VERSION.md, if there is one) goes between the download text and the licenses
+if [[ -f "$KIT/host/release-notes/$VERSION.md" ]]; then cat "$KIT/host/release-notes/$VERSION.md"; echo; fi
+cat <<EOF
 Portalistic isn't affiliated with Valve. Third-party software and licenses: LICENSES.md; the
 Linux kernel's source (libkrunfw-$KFW_VER-source.tar.gz, $KVER.tar.xz) is attached, and the
 image's package list is with the image.
 
 Linux image $PORTALISTIC_IMAGE_VERSION, SHA-256: \`$PORTALISTIC_IMAGE_SHA256\`
 EOF
+} > "$NOTES"
 
 if [[ "$STATE" == none ]]; then
   info "Making release $TAG on $REPO (a draft until every file is up)…"

@@ -14,6 +14,22 @@ extension AppDelegate {
         runQuietly(["settings"], log: "settings", failure: "Steam's settings didn't open.")
     }
 
+    /// Desktop Mode: KDE Plasma takes the screen (Steam stays running, in a window). The first time
+    /// it downloads and installs it, which the Activity window shows; it closes itself when the switch worked.
+    @objc func switchToDesktopMode(_ sender: Any?) {
+        guard confirm("Switch to Desktop Mode?",
+                      "Steam's Big Picture closes and a Linux desktop (KDE Plasma, like the Steam Deck's) opens in this window. "
+                      + "The first time it downloads about 550 MB. “Return to Game Mode” on the desktop, or this menu, switches back.",
+                      "Switch to Desktop Mode") else { return }
+        activity.run("Switching to Desktop Mode", ["mode", "desktop"], log: "mode") { [weak self] code, _ in
+            if code == 0 { self?.activity.window?.orderOut(nil) }
+        }
+    }
+
+    @objc func switchToGameMode(_ sender: Any?) {
+        runQuietly(["mode", "game"], log: "mode", failure: "Game Mode didn't start.")
+    }
+
     @objc func updateBottle(_ sender: Any?) {
         activity.run("Updating the bottle", ["update"], log: "update")
     }
@@ -61,6 +77,19 @@ extension AppDelegate {
         appMenu.addItem(withTitle: "Quit Portalistic", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appItem.submenu = appMenu
 
+        /// A menu of plain items in the menu bar, after the Bottle's.
+        func makeMenu(_ title: String, _ entries: [(String, Selector)]) {
+            let item = NSMenuItem()
+            let menu = NSMenu(title: title)
+            for (name, action) in entries {
+                let entry = NSMenuItem(title: name, action: action, keyEquivalent: "")
+                entry.target = self
+                menu.addItem(entry)
+            }
+            item.submenu = menu
+            main.addItem(item)
+        }
+
         let bottleItem = NSMenuItem()
         main.addItem(bottleItem)
         let bottleMenu = NSMenu(title: "Bottle")
@@ -72,10 +101,8 @@ extension AppDelegate {
         add("Start the Bottle", #selector(startBottle(_:)))
         add("Restart Steam…", #selector(restartSteam(_:)))
         add("Open Steam Settings", #selector(steamSettings(_:)))
-        bottleMenu.addItem(.separator())
-        add("Add a Game Folder…", #selector(addGameFolder(_:)))
-        add("Remove a Game Folder…", #selector(removeGameFolder(_:)))
-        add("Show Game Folders", #selector(showGameFolders(_:)))
+        add("Switch to Desktop Mode…", #selector(switchToDesktopMode(_:)))
+        add("Switch to Game Mode", #selector(switchToGameMode(_:)))
         bottleMenu.addItem(.separator())
         add("Update the Bottle", #selector(updateBottle(_:)))
         add("Save Logs", #selector(saveLogs(_:)))
@@ -83,6 +110,13 @@ extension AppDelegate {
         bottleMenu.addItem(.separator())
         add("Shut Down the VM…", #selector(shutDown(_:)))
         bottleItem.submenu = bottleMenu
+
+        // The stores whose games Steam in the bottle shows, and the places games are kept.
+        makeMenu("Stores", [("GOG Games…", #selector(showGOGGames(_:))),
+                            ("Epic Games…", #selector(showEpicGames(_:)))])
+        makeMenu("Game Folders", [("Add a Game Folder…", #selector(addGameFolder(_:))),
+                                  ("Remove a Game Folder…", #selector(removeGameFolder(_:))),
+                                  ("Show Game Folders", #selector(showGameFolders(_:)))])
 
         let viewItem = NSMenuItem()
         main.addItem(viewItem)
@@ -133,6 +167,9 @@ extension AppDelegate: NSMenuItemValidation {
             return !busy
         }
         if item.action == #selector(steamSettings(_:)) { return !busy && view.connected }
+        if item.action == #selector(switchToDesktopMode(_:)) || item.action == #selector(switchToGameMode(_:)) {
+            return !busy && view.connected
+        }
         if item.action == #selector(checkForUpdatesNow(_:)) {
             item.title = AppDelegate.availableUpdate.map { "Update to \($0)…" } ?? "Check for Updates…"
             return !activity.busy

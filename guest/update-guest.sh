@@ -11,13 +11,23 @@
 #   tools       steam-arm64, bottle-desktop, bottle-bench, bottle-dxvk, bottle-steamplay,
 #               bottle-busy, bottle-maximize-steam, bottle-library, bottle-log(keep),
 #               bottle-resolution (the screen's size), bottle-whyquit (why a game closed at
-#               launch), bottle-libraries (the Mac's game folders as Steam libraries)
-#               -> /usr/local/bin
+#               launch), bottle-libraries (the Mac's game folders as Steam libraries),
+#               bottle-stores (GOG and Epic games as non-Steam games in Steam), bottle-session
+#               (Game Mode / Desktop Mode) -> /usr/local/bin
+#   GOG         gogdl (Heroic's GOG downloader, guest/stores) and its patch module, for
+#               bottle-stores -> /usr/local/share/steamos-bottle/gogdl
+#   Epic        Legendary (the Epic Games Store downloader, guest/stores/legendary) and the
+#               Python modules it needs, for bottle-stores
+#               -> /usr/local/share/steamos-bottle/legendary
+#   Comet       the open-source stand-in for the GOG Galaxy client's background service
+#               (guest/comet, a ready-made arm64 build): GOG games that use the Galaxy SDK
+#               sign in through it; bottle-stores starts it for them
+#               -> /usr/local/share/steamos-bottle/comet
 #   GPU numbers libnvidia-ml.so.1 stand-in with the Mac's GPU load/memory/temperature, for
 #               Steam's performance monitor (guest/nvml)
 #   arm64 layer swapchain + DXVK feature stand-ins for native Vulkan apps
-#   x86 driver  Mac-patched Venus for Proton/Wine under FEX (x86-venus.sh)
-#   x86 layer   same layer for the x86 side (install-x86.sh)
+#   x86 driver  Mac-patched Venus for Proton/Wine under FEX, 64- and 32-bit (x86-venus.sh)
+#   x86 layer   same layer for the x86 side, x86_64 and i386 builds (install-x86.sh)
 #   DXVK 2.6.2  DLL cache for bottle-dxvk: Ph42oN's dxvk-gplasync 2.6.2-1 (asynchronous
 #               pipeline compiling) and plain 2.6.2 (the fallback)
 #   x86 order   bottle-tso, and its module rebuilt for a new kernel while it's on
@@ -250,6 +260,12 @@ desktop_look() {  # bottle-desktop applies it (Steam's main window maximized, no
   [[ -S /tmp/.X11-unix/X1 ]] || { echo "  applies when the desktop starts"; return 0; }
   # the window keeper on its new version (bottle-desktop starts it again for a running Steam)
   pkill -u "$TARGET_USER" -f "[b]ottle-maximize-steam --keep" 2>/dev/null || true
+  # (wait until the old one has let go of its lock: a new one started meanwhile quits at once, and then
+  # none is left; a restart that came back without a keeper, Oct 14)
+  for _ in $(seq 1 20); do
+    pgrep -u "$TARGET_USER" -f "[b]ottle-maximize-steam --keep" >/dev/null 2>&1 || break
+    sleep 0.3
+  done
   sudo -u "$TARGET_USER" -H /usr/local/bin/bottle-desktop >/dev/null
 }
 
@@ -267,7 +283,9 @@ tools() {
   install -m 0755 "$HERE/bottle-library"   /usr/local/bin/bottle-library   || return 1
   install -m 0755 "$HERE/bottle-resolution" /usr/local/bin/bottle-resolution || return 1
   install -m 0755 "$HERE/bottle-whyquit"   /usr/local/bin/bottle-whyquit   || return 1
+  install -m 0755 "$HERE/bottle-session"   /usr/local/bin/bottle-session   || return 1
   install -m 0755 "$HERE/bottle-libraries" /usr/local/bin/bottle-libraries || return 1
+  install -m 0755 "$HERE/bottle-stores"    /usr/local/bin/bottle-stores    || return 1
   install -m 0755 "$HERE/tso/bottle-tso"   /usr/local/bin/bottle-tso       || return 1
   install -d -m 0755 /usr/local/share/steamos-bottle/tso || return 1
   install -m 0644 "$HERE/tso/bottle_tso.c" /usr/local/share/steamos-bottle/tso/ || return 1
@@ -291,6 +309,111 @@ tools() {
 EOF
     chown "$TARGET_USER:$TARGET_USER" "$STATE/steam.env"
   fi
+}
+
+# --- GOG: gogdl, for bottle-stores ---------------------------------------------------------
+# Heroic's GOG downloader (Python, guest/stores/gogdl) plus its patch module, a C extension that
+# is built like the VM's other programs (build-recipes.sh). Without the module a fresh install
+# works; only an update that GOG ships as patches doesn't.
+GOGDL_DIR=/usr/local/share/steamos-bottle/gogdl
+gogdl_install() {
+  local tmp
+  command -v python3 >/dev/null || { warn "  no python3: GOG downloads won't work"; return 1; }
+  python3 -c 'import requests' 2>/dev/null || dnf install -y -q python3-requests >/dev/null 2>&1 \
+    || warn "  python3-requests isn't there and wouldn't install: GOG downloads need it"
+  install -d -m 0755 "$GOGDL_DIR" || return 1
+  rm -rf "${GOGDL_DIR:?}/gogdl"
+  cp -r "$HERE/stores/gogdl" "$GOGDL_DIR/gogdl" || return 1
+  install -m 0644 "$HERE/stores/LICENSE-gogdl" "$HERE/stores/MODIFICATIONS.txt" "$GOGDL_DIR/" || return 1
+  tmp="$(mktemp)"
+  if pb_get gogdl_xdelta3.abi3.so "$tmp"; then
+    install -m 0644 "$tmp" "$GOGDL_DIR/gogdl_xdelta3.abi3.so"
+  else
+    warn "  gogdl's patch module isn't available: GOG updates that come as patches won't apply"
+  fi
+  rm -f "$tmp"
+  chmod -R a+rX "$GOGDL_DIR"
+  if python3 -I -c "import sys; sys.path.insert(0, '$GOGDL_DIR'); import gogdl.cli" 2>"$tmp.err"; then
+    echo "  gogdl in place"
+  else
+    tail -3 "$tmp.err" >&2; rm -f "$tmp.err"
+    warn "  gogdl doesn't load; GOG downloads won't work"
+    return 1
+  fi
+  rm -f "$tmp.err"
+}
+
+# --- Epic Games: Legendary, for bottle-stores ----------------------------------------------
+# The Epic Games Store downloader (Python, guest/stores/legendary) with the three Python modules it
+# needs; Fedora has them all (requests is there already for gogdl).
+LEGENDARY_DIR=/usr/local/share/steamos-bottle/legendary
+legendary_install() {
+  local tmp need=()
+  command -v python3 >/dev/null || { warn "  no python3: Epic downloads won't work"; return 1; }
+  python3 -c 'import requests' 2>/dev/null || need+=(python3-requests)
+  python3 -c 'import filelock' 2>/dev/null || need+=(python3-filelock)
+  python3 -c 'import Cryptodome' 2>/dev/null || need+=(python3-pycryptodomex)
+  if (( ${#need[@]} )); then
+    dnf install -y -q "${need[@]}" >/dev/null 2>&1 \
+      || warn "  ${need[*]} wouldn't install: Epic downloads need them"
+  fi
+  install -d -m 0755 "$LEGENDARY_DIR" || return 1
+  rm -rf "${LEGENDARY_DIR:?}/legendary"
+  cp -r "$HERE/stores/legendary" "$LEGENDARY_DIR/legendary" || return 1
+  find "$LEGENDARY_DIR/legendary" -name __pycache__ -prune -exec rm -rf {} + 2>/dev/null
+  install -m 0644 "$HERE/stores/LICENSE-legendary" "$HERE/stores/MODIFICATIONS.txt" "$LEGENDARY_DIR/" || return 1
+  chmod -R a+rX "$LEGENDARY_DIR"
+  tmp="$(mktemp)"
+  # (importing it as root also leaves the compiled files behind, which the players can't write themselves)
+  if python3 -I -c "import sys; sys.path.insert(0, '$LEGENDARY_DIR'); import legendary.cli" 2>"$tmp"; then
+    chmod -R a+rX "$LEGENDARY_DIR"
+    echo "  Legendary in place"
+  else
+    tail -3 "$tmp" >&2; rm -f "$tmp"
+    warn "  Legendary doesn't load; Epic downloads won't work"
+    return 1
+  fi
+  rm -f "$tmp"
+}
+
+# --- Comet: the Galaxy client's service, for GOG games that use the Galaxy SDK ------------------
+# A ready-made arm64 build (guest/comet, built from the pinned source by guest/comet/build-aarch64.sh;
+# the VMs Portalistic ships have no compilers). bottle-stores starts it beside such a game.
+COMET_DIR=/usr/local/share/steamos-bottle/comet
+comet_install() {
+  local src="$HERE/comet" want got
+  if [[ ! -f "$src/comet-aarch64" || ! -f "$src/MANIFEST" ]]; then
+    warn "  Comet isn't in this kit: GOG games that ask for the Galaxy client's sign-in won't get it"
+    return 0
+  fi
+  want="$(awk '$1 == "comet-aarch64" {print $2}' "$src/MANIFEST")"
+  got="$(sha256sum "$src/comet-aarch64" | cut -d' ' -f1)"
+  if [[ -z "$want" || "$want" != "$got" ]]; then
+    warn "  Comet's checksum doesn't match guest/comet/MANIFEST; not installed"
+    return 1
+  fi
+  install -d -m 0755 "$COMET_DIR" || return 1
+  # (a running Comet keeps its old file: replace by rename)
+  install -m 0755 "$src/comet-aarch64" "$COMET_DIR/comet.new" && mv -f "$COMET_DIR/comet.new" "$COMET_DIR/comet" || return 1
+  install -m 0644 "$src/BUILT" "$src/CRATES.tsv" "$src/LICENSE-comet" "$src/LICENSE-proto-cc0" \
+    "$src/THIRD-PARTY-LICENSES.txt" "$COMET_DIR/" || return 1
+  if "$COMET_DIR/comet" --version >/dev/null 2>&1; then
+    echo "  Comet $("$COMET_DIR/comet" --version | awk '{print $2}') in place"
+  else
+    warn "  Comet doesn't start here; GOG games that ask for the Galaxy client's sign-in won't get it"
+    return 1
+  fi
+}
+
+# --- Desktop Mode: Plasma's settings, if it's installed ---------------------------------------------
+# Desktop Mode (KDE Plasma, bottle-session) is installed by the user's first switch to it, not with
+# the image (about 300 MB). When it's there, its settings follow the kit.
+desktop_mode_settings() {
+  if ! command -v startplasma-x11 >/dev/null; then
+    echo "  Desktop Mode isn't installed (Bottle > Switch to Desktop Mode installs it)"
+    return 0
+  fi
+  sudo -u "$TARGET_USER" -H /usr/local/bin/bottle-session configure && echo "  Plasma's settings in place"
 }
 
 # --- FEX's own settings for the user ------------------------------------------------
@@ -414,6 +537,10 @@ vkd3d_cache() {
 # --- Run everything ------------------------------------------------------------
 step "Desktop packages (TigerVNC, keyboard tools)" desktop_packages
 step "Bottle tools" tools
+step "GOG downloader (gogdl) for bottle-stores" gogdl_install
+step "Epic downloader (Legendary) for bottle-stores" legendary_install
+step "Comet, the Galaxy sign-in for GOG games" comet_install
+step "Desktop Mode settings (only if it is installed)" desktop_mode_settings
 step "FEX's settings" fex_config
 step "Sound server (silent output for games)" sound
 step "Game controllers from the Mac" controllers
@@ -430,8 +557,8 @@ step "x86 memory ordering in hardware (only while bottle tso is on)" tso_build
 step "The file cache trimmer off (it came with crashes)" memtrim_off
 step "Present layer, arm64 build" env BOTTLE_SKIP_TESTS=1 bash "$HERE/present-layer/install.sh"
 if [[ -d "$GUEST_ROOTFS/usr/lib64" ]]; then
-  step "Mac-patched Venus driver for the x86 side" env BOTTLE_SKIP_PROBE=1 bash "$HERE/x86-venus.sh"
-  step "Present layer, x86_64 build (+ GPU probe)" bash "$HERE/present-layer/install-x86.sh"
+  step "Mac-patched Venus driver for the x86 side (64- and 32-bit)" env BOTTLE_SKIP_PROBE=1 bash "$HERE/x86-venus.sh"
+  step "Present layer, x86_64 and i386 builds (+ GPU probes)" bash "$HERE/present-layer/install-x86.sh"
 else
   warn "No x86 rootfs at $GUEST_ROOTFS yet: skipping the x86 GPU driver and layer (run setup-guest.sh)."
   FAILED+=("x86 rootfs missing")

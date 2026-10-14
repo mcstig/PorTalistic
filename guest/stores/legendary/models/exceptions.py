@@ -1,0 +1,3 @@
+
+class InvalidCredentialsError(Exception):
+    pass

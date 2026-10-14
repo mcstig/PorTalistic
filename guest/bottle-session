@@ -1,0 +1,492 @@
+#!/usr/bin/env bash
+# bottle-session: the bottle's two ways of running, as on a Steam Deck.
+#
+#   Game Mode (the default)  Steam's Big Picture fills the screen; the window keeper
+#                            (bottle-maximize-steam --keep) holds it there.
+#   Desktop Mode             KDE Plasma (its X11 session) takes the screen. Steam keeps running, in a
+#                            window; Dolphin, Konsole, Firefox and the rest of the desktop are there.
+#
+#   bottle-session status      the mode, and whether Desktop Mode is installed and running
+#   bottle-session install     download and set up Desktop Mode (about 550 MB; installs only what's missing)
+#   bottle-session on          switch to Desktop Mode (installs it first if it isn't there)
+#   bottle-session off         back to Game Mode
+#   bottle-session configure   the settings Plasma gets here (bottle update runs it when it's installed)
+#   bottle-session steam       Steam's window (what the desktop's Steam icon runs)
+#
+# Plasma runs on its own D-Bus (dbus-run-session), so leaving it leaves nothing behind. The mode is
+# ~/.config/steamos-bottle/session ("game" or "desktop"); bottle-desktop, steam-arm64 and the window
+# keeper read it, so a restarted Steam or a re-run desktop keeps the mode. A fresh screen (the VM just
+# started) is Game Mode.
+#
+# Env: DISPLAY_NUM (default 1: the screen the Mac app shows),
+#      BOTTLE_SESSION_NO_STEAM=1 (leave Steam, the keeper and the game check alone: for tests on another screen)
+set -uo pipefail
+
+ME="$(id -un)"
+STATE="$HOME/.config/steamos-bottle"
+CACHE="$HOME/.cache/steamos-bottle"
+FILE="$STATE/session"
+BUS_FILE="$CACHE/plasma-bus"
+LOG="$STATE/desktop-mode.log"
+N="${DISPLAY_NUM:-1}"
+export DISPLAY=":$N" DISPLAY_NUM="$N"
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+NO_STEAM="${BOTTLE_SESSION_NO_STEAM:-0}"
+mkdir -p "$STATE" "$CACHE"
+
+# What Desktop Mode is made of (Fedora's packages, KDE Plasma 6's X11 session; the dependencies come along).
+PKGS=(plasma-desktop plasma-workspace-x11 kwin-x11 dolphin konsole kate firefox spectacle plasma-systemmonitor
+      plasma-discover plasma-discover-flatpak flatpak)   # (Discover for Flatpak apps only: no PackageKit, which would offer to update the bottle's own Mesa)
+
+say() { printf '%s\n' "$*"; }
+# The ordinary environment, for what Game Mode needs started. Run from the desktop (its "Return to Game
+# Mode" icon), this script carries Plasma's session: its private D-Bus, the session manager, the KDE desktop
+# names. Plasma is on its way out, so a program that talks to it dies: xfwm4 said "Xfconf could not be
+# initialized" and exited, leaving Big Picture with no window manager (small, not full screen).
+normal_env() {
+  unset SESSION_MANAGER KDE_FULL_SESSION KDE_SESSION_VERSION KDE_SESSION_UID KDE_APPLICATIONS_AS_SCOPE \
+        XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP DESKTOP_SESSION XDG_MENU_PREFIX QT_QPA_PLATFORMTHEME
+  export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+}
+die() { printf 'error: %s\n' "$*" >&2; exit 1; }
+spawn() { setsid -f "$@" </dev/null >>"$LOG" 2>&1; }
+
+installed() { command -v startplasma-x11 >/dev/null && command -v kwin_x11 >/dev/null && command -v plasmashell >/dev/null; }
+current() { local m; m="$(cat "$FILE" 2>/dev/null)"; [[ "$m" == desktop ]] && echo desktop || echo game; }
+
+# This user's processes of that name that run on this screen (the DISPLAY they were started with).
+on_display() {
+  local p
+  for p in $(pgrep -u "$ME" -x "$1" 2>/dev/null); do
+    { tr '\0' '\n' < "/proc/$p/environ" | grep -qx "DISPLAY=$DISPLAY"; } 2>/dev/null && echo "$p"
+  done
+}
+plasma_running() { [[ -n "$(on_display plasmashell)" && -n "$(on_display kwin_x11)" ]]; }
+
+# The Plasma session's processes: the ones carrying its private D-Bus address (apps started from the
+# desktop have it too). Never Steam, a game or Wine, which can be started from a window here.
+session_pids() {
+  local bus p
+  bus="$(cat "$BUS_FILE" 2>/dev/null)"
+  [[ -n "$bus" ]] || return 0
+  for p in /proc/[0-9]*; do
+    p="${p#/proc/}"
+    [[ "$p" == "$$" ]] && continue
+    { tr '\0' '\n' < "/proc/$p/environ" | grep -qxF "DBUS_SESSION_BUS_ADDRESS=$bus"; } 2>/dev/null || continue
+    { tr '\0' ' ' < "/proc/$p/cmdline" | grep -qiE 'steam|reaper|wine|proton|pressure-vessel|[.]exe'; } 2>/dev/null && continue
+    echo "$p"
+  done
+}
+
+game_running() {
+  [[ "$NO_STEAM" == 1 ]] && return 1
+  command -v bottle-busy >/dev/null || return 1
+  [[ "$(bottle-busy 2>/dev/null | tail -n 1)" == game ]]
+}
+steam_running() { pgrep -u "$ME" -f "[s]teamrtarm64/steam" >/dev/null; }
+steam_url() {   # the running Steam opens a steam:// link
+  local S="$HOME/.local/share/Steam"
+  ( LD_LIBRARY_PATH="$S/lib/aarch64-linux-gnu" timeout 30 "$S/steamrtarm64/steam" "$1" </dev/null >/dev/null 2>&1 & )
+}
+
+# ---------------------------------------------------------------------------------------------
+cmd_status() {
+  local run=no
+  installed && plasma_running && run=yes
+  say "mode: $(current)"
+  say "installed: $(installed && echo yes || echo no)"
+  say "running: $run"
+}
+
+missing_pkgs() { local p; for p in "${PKGS[@]}"; do rpm -q "$p" >/dev/null 2>&1 || echo "$p"; done; }
+
+# Downloads what's missing of PKGS (all of it the first time; later only apps added to the list).
+cmd_install() {
+  local need free
+  need="$(missing_pkgs | tr '\n' ' ')"
+  if [[ -z "$need" ]]; then say "Desktop Mode is installed."; cmd_configure; return 0; fi
+  free="$(df -Pk / | awk 'NR == 2 {print int($4 / 1048576)}')"
+  if (( free < 2 )); then
+    echo "error: Only $free GB are free in the VM's disk; Desktop Mode needs about 2. See: bottle disk" >&2
+    return 1
+  fi
+  if installed; then say "Downloading Desktop Mode's apps…"; else say "Downloading Desktop Mode (KDE Plasma and a few apps; about 550 MB)…"; fi
+  # shellcheck disable=SC2086
+  if ! sudo -n dnf install -y --setopt=install_weak_deps=False $need; then
+    echo "error: The download or install didn't work (see above). Run it again: it carries on from what's there." >&2
+    return 1
+  fi
+  if ! installed; then echo "error: Desktop Mode didn't install completely." >&2; return 1; fi
+  # Flatpak adds Fedora's own app source for the whole system at the next boot; installing from it would
+  # ask for an administrator password this user doesn't have. Discover has Flathub, for this user.
+  sudo -n systemctl disable flatpak-add-fedora-repos.service >/dev/null 2>&1 || true
+  cmd_configure
+  say "Desktop Mode is installed."
+}
+
+# Dolphin's sidebar gets the Mac's shared folders (the game folders), and Discover gets Flathub (for this
+# user, so installing an app asks for no password).
+sync_places() {
+  python3 - "$@" <<'PY' 2>>"$LOG"
+# Dolphin's Places get the folders the Mac shares with this VM (the game folders, and whatever else Lima
+# mounts), so they show in its sidebar. Our entries carry the ID "portalistic-N": each run replaces them.
+# Usage: python3 - [PLACES_FILE]. Exit 3: no places file yet (Dolphin makes it, with its own defaults, the
+# first time Plasma runs: writing one first would leave those out).
+import json, os, re, subprocess, sys
+from urllib.parse import quote
+from xml.dom import minidom
+from xml.sax.saxutils import escape
+
+home = os.path.expanduser("~")
+path = sys.argv[1] if len(sys.argv) > 1 else os.path.join(home, ".local/share/user-places.xbel")
+if not os.path.isfile(path):
+    sys.exit(3)
+
+labels = {}
+try:
+    for f in json.load(open(os.path.join(home, ".config/steamos-bottle/libraries.json"))).get("folders", []):
+        labels[f.get("name")] = f.get("label") or f.get("name")
+except Exception:
+    pass
+
+mounts = []
+out = subprocess.run(["findmnt", "-rn", "-t", "virtiofs", "-o", "TARGET,OPTIONS"], capture_output=True, text=True).stdout
+for line in sorted(out.splitlines()):
+    target, _, opts = line.partition(" ")
+    target = target.replace("\\x20", " ")
+    if not target.startswith("/") or target == "/":
+        continue
+    base = os.path.basename(target.rstrip("/"))
+    if target.startswith("/mnt/portalistic/"):
+        title = labels.get(base, base)
+    elif target.startswith("/Users/"):
+        title = "Mac Home"
+    else:
+        title = base
+    if "ro" in opts.split(","):
+        title += " (read-only)"
+    mounts.append((target, title))
+
+text = open(path, encoding="utf-8").read()
+kept = re.sub(r" *<bookmark href=.*?</bookmark>\n?", lambda m: "" if "<ID>portalistic-" in m.group(0) else m.group(0), text, flags=re.S)
+blocks = ""
+for i, (target, title) in enumerate(mounts):
+    blocks += f""" <bookmark href="file://{quote(target)}">
+  <title>{escape(title)}</title>
+  <info>
+   <metadata owner="http://freedesktop.org">
+    <bookmark:icon name="drive-harddisk"/>
+   </metadata>
+   <metadata owner="http://www.kde.org">
+    <ID>portalistic-{i}</ID>
+    <isSystemItem>false</isSystemItem>
+   </metadata>
+  </info>
+ </bookmark>
+"""
+new = kept.replace("</xbel>", blocks + "</xbel>", 1)
+if new == text:
+    sys.exit(0)
+minidom.parseString(new.encode("utf-8"))   # well-formed, or nothing is written
+bak = path + ".portalistic-orig"
+if not os.path.exists(bak):
+    open(bak, "w", encoding="utf-8").write(text)
+tmp = path + ".tmp"
+open(tmp, "w", encoding="utf-8").write(new)
+os.replace(tmp, path)
+print("places:", ", ".join(t for _, t in mounts) or "none")
+PY
+}
+flathub_remote() {
+  command -v flatpak >/dev/null || return 0
+  flatpak remotes --user 2>/dev/null | grep -qw flathub && return 0
+  timeout 40 flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo >/dev/null 2>&1 || true
+}
+
+# The settings Plasma gets here. The screen is streamed to the Mac and has no GPU of its own, so no
+# effects (each frame would cost the VM's processors), no lock screen or sleep (a locked screen would be
+# stuck: nothing to type a password into but the stream), no file indexing, and no windows from the
+# last session coming back. All plain Plasma settings in the home folder; it writes only what differs.
+cmd_configure() {
+  local f p apps="$HOME/.local/share/applications" prof
+  installed || return 0
+  command -v kwriteconfig6 >/dev/null || return 0
+  kwriteconfig6 --file startkderc --group General --key systemdBoot false
+  kwriteconfig6 --file kwinrc --group Compositing --key Enabled false
+  kwriteconfig6 --file kscreenlockerrc --group Daemon --key Autolock false
+  kwriteconfig6 --file kscreenlockerrc --group Daemon --key LockOnResume false
+  kwriteconfig6 --file ksmserverrc --group General --key loginMode emptySession
+  kwriteconfig6 --file baloofilerc --group "Basic Settings" --key Indexing-Enabled false
+  for prof in AC Battery LowBattery; do
+    kwriteconfig6 --file powerdevilrc --group "$prof" --group Display --key TurnOffDisplayWhenIdle false
+    kwriteconfig6 --file powerdevilrc --group "$prof" --group Display --key DimDisplayWhenIdle false
+    kwriteconfig6 --file powerdevilrc --group "$prof" --group SuspendAndShutdown --key AutoSuspendAction 0
+  done
+  # (no file-indexing service in the background)
+  mkdir -p "$HOME/.config/autostart"
+  for f in /etc/xdg/autostart/*localsearch*.desktop /etc/xdg/autostart/*tracker*.desktop; do
+    [[ -f "$f" ]] || continue
+    printf '[Desktop Entry]\nHidden=true\n' > "$HOME/.config/autostart/${f##*/}"
+  done
+  # Their icons: Steam's own, and the SteamOS mark, cut out of picture files Steam ships in its folder
+  # (nothing from Valve is kept in this kit; it's made here from the install, again at every configure).
+  # Without Steam's files (not installed yet) they get a plain game icon from the theme.
+  local icons="$HOME/.local/share/steamos-bottle/icons"
+  python3 - "$HOME/.local/share/Steam" "$icons" <<'PY' >/dev/null 2>&1 || true
+# The two desktop icons, cut from files Steam itself ships (nothing is drawn or stored in the kit):
+#   steam.png        the picture inside public/steam_tray.ico (Steam's own icon)
+#   steamos-mark.png the round mark from steamui/images/startup_steamos.png (the SteamOS start-up image),
+#                    on a transparent background
+# Usage: python3 - STEAM_DIR OUT_DIR. Prints the names it made; makes nothing it can't (no error).
+import os, struct, sys, zlib
+
+steam, out = sys.argv[1], sys.argv[2]
+os.makedirs(out, exist_ok=True)
+PNG = b"\x89PNG\r\n\x1a\n"
+
+def save(name, data):
+    tmp = os.path.join(out, name + ".tmp")
+    with open(tmp, "wb") as f:
+        f.write(data)
+    os.replace(tmp, os.path.join(out, name))
+    print(name)
+
+def ico_largest_png(path):
+    d = open(path, "rb").read()
+    best = None
+    for i in range(struct.unpack("<H", d[4:6])[0]):
+        size, off = struct.unpack("<II", d[6 + 16 * i + 8:6 + 16 * i + 16])
+        if d[off:off + 8] == PNG and (best is None or size > len(best)):
+            best = d[off:off + size]
+    return best
+
+def png_top_left(path, cols, rows):
+    """The top-left cols x rows pixels of an 8-bit RGB(A) PNG, as lists of (r, g, b). Filters only look left
+    and up, so the rest of the picture needn't be unpacked."""
+    d = open(path, "rb").read()
+    if d[:8] != PNG:
+        return None
+    pos, idat = 8, b""
+    while pos < len(d):
+        n, typ = struct.unpack(">I4s", d[pos:pos + 8])
+        body = d[pos + 8:pos + 8 + n]
+        pos += 12 + n
+        if typ == b"IHDR":
+            w, h, depth, ctype, _, _, interlace = struct.unpack(">IIBBBBB", body)
+        elif typ == b"IDAT":
+            idat += body
+    if depth != 8 or ctype not in (2, 6) or interlace:
+        return None
+    bpp = 3 if ctype == 2 else 4
+    cols, rows = min(cols, w), min(rows, h)
+    raw, stride, need = zlib.decompress(idat), w * bpp, cols * bpp
+    prev, p, pixels = bytearray(need), 0, []
+    for _ in range(rows):
+        ft, line = raw[p], bytearray(raw[p + 1:p + 1 + need])
+        p += 1 + stride
+        if ft == 1:
+            for i in range(bpp, need):
+                line[i] = (line[i] + line[i - bpp]) & 255
+        elif ft == 2:
+            for i in range(need):
+                line[i] = (line[i] + prev[i]) & 255
+        elif ft == 3:
+            for i in range(need):
+                a = line[i - bpp] if i >= bpp else 0
+                line[i] = (line[i] + ((a + prev[i]) >> 1)) & 255
+        elif ft == 4:
+            for i in range(need):
+                a = line[i - bpp] if i >= bpp else 0
+                b = prev[i]
+                c = prev[i - bpp] if i >= bpp else 0
+                pa, pb, pc = abs(b - c), abs(a - c), abs(a + b - 2 * c)
+                line[i] = (line[i] + (a if pa <= pb and pa <= pc else b if pb <= pc else c)) & 255
+        elif ft != 0:
+            return None
+        pixels.append([tuple(line[x * bpp:x * bpp + 3]) for x in range(cols)])
+        prev = line
+    return pixels
+
+def rgba_png(w, h, rows):
+    def chunk(t, b):
+        return struct.pack(">I", len(b)) + t + b + struct.pack(">I", zlib.crc32(t + b))
+    raw = b"".join(b"\x00" + bytes(r) for r in rows)
+    return PNG + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b"")
+
+try:
+    ico = os.path.join(steam, "public", "steam_tray.ico")
+    if os.path.isfile(ico):
+        png = ico_largest_png(ico)
+        if png:
+            save("steam.png", png)
+except Exception:
+    pass
+
+try:
+    for name in ("startup_steamos.png", "steam_os_family_startup.png"):
+        img = os.path.join(steam, "steamui", "images", name)
+        if not os.path.isfile(img):
+            continue
+        # The round mark is the bright shape left of the "STEAMOS" lettering: 800 px across, 800 down is plenty.
+        px = png_top_left(img, 760, 800)
+        if not px:
+            continue
+        pts = [(x, y) for y, row in enumerate(px) for x, (r, g, b) in enumerate(row) if r > 128 and x < 745]
+        if len(pts) < 5000:
+            continue
+        x0, x1 = min(p[0] for p in pts), max(p[0] for p in pts)
+        y0, y1 = min(p[1] for p in pts), max(p[1] for p in pts)
+        cx, cy, rad = (x0 + x1) / 2, (y0 + y1) / 2, min(x1 - x0, y1 - y0) / 2 - 1
+        if not 40 < rad < 300:
+            continue
+        side = int(2 * rad) + 5
+        ox, oy = int(cx - side / 2), int(cy - side / 2)
+        rows = []
+        for y in range(side):
+            row = []
+            for x in range(side):
+                sx, sy = ox + x, oy + y
+                a = max(0.0, min(1.0, rad - ((sx - cx) ** 2 + (sy - cy) ** 2) ** 0.5 + 0.5))
+                g = px[sy][sx][0] if 0 <= sy < len(px) and 0 <= sx < len(px[0]) else 0
+                row += [g, g, g, int(a * 255)]
+            rows.append(row)
+        save("steamos-mark.png", rgba_png(side, side, rows))
+        break
+except Exception:
+    pass
+PY
+  icon_of() { [[ -s "$icons/$1" ]] && echo "$icons/$1" || echo "${2:-applications-games}"; }
+  # The way back, and Steam, on the desktop and in the launcher.
+  mkdir -p "$apps" "$HOME/Desktop"
+  entry() {   # file, name, comment, command, icon
+    printf '[Desktop Entry]\nType=Application\nName=%s\nComment=%s\nExec=%s\nIcon=%s\nTerminal=false\nCategories=Game;\n' "$2" "$3" "$4" "$5" > "$1"
+  }
+  entry "$apps/bottle-game-mode.desktop" "Return to Game Mode" "Back to Steam's Big Picture, full screen" "bottle-session off" \
+        "$(icon_of steamos-mark.png "$(icon_of steam.png)")"
+  # Named steam.desktop: that's how the taskbar knows Steam's window (class "steam") belongs to it, and
+  # shows its icon instead of the window's own (a game controller).
+  rm -f "$apps/bottle-steam.desktop" "$HOME/Desktop/bottle-steam.desktop"
+  entry "$apps/steam.desktop" "Steam" "Steam's window" "bottle-session steam" "$(icon_of steam.png)"
+  printf 'StartupWMClass=steam\n' >> "$apps/steam.desktop"
+  for p in bottle-game-mode steam; do
+    cp "$apps/$p.desktop" "$HOME/Desktop/$p.desktop"
+    chmod +x "$HOME/Desktop/$p.desktop"
+  done
+  mv -f "$HOME/Desktop/bottle-game-mode.desktop" "$HOME/Desktop/Return to Game Mode.desktop"
+  mv -f "$HOME/Desktop/steam.desktop" "$HOME/Desktop/Steam.desktop"
+  flathub_remote
+  sync_places >/dev/null || true
+  # With Plasma already up (bottle update while it runs), it picks the new icons up now.
+  plasma_running && spawn "${BASH_SOURCE[0]}" look
+  return 0
+}
+
+# What only a running Plasma can be told: its application list (new launchers and icons), and the Start
+# button (the Application Launcher), which shows the distribution's logo by default: it gets the SteamOS
+# mark. Through Plasma's own scripting interface, so it takes effect at once and Plasma keeps it in its own
+# settings. Waits a little for the panel to be there; goes quietly when it isn't (no Plasma, no icon).
+cmd_look() {
+  local bus icon="$HOME/.local/share/steamos-bottle/icons/steamos-mark.png" i
+  bus="$(cat "$BUS_FILE" 2>/dev/null)"
+  [[ -n "$bus" ]] || return 0
+  export DBUS_SESSION_BUS_ADDRESS="$bus"
+  command -v kbuildsycoca6 >/dev/null && { timeout 60 kbuildsycoca6 >/dev/null 2>&1 || true; }
+  for i in $(seq 1 40); do sync_places >/dev/null; [[ $? -eq 3 ]] || break; sleep 1; done   # (3: no places file yet)
+  [[ -s "$icon" ]] && command -v qdbus-qt6 >/dev/null || return 0
+  for i in $(seq 1 30); do
+    if timeout 10 qdbus-qt6 org.kde.plasmashell /PlasmaShell org.kde.PlasmaShell.evaluateScript "
+      var n = 0, ps = panels();
+      for (var i = 0; i < ps.length; i++) { var ids = ps[i].widgetIds;
+        for (var j = 0; j < ids.length; j++) { var w = ps[i].widgetById(ids[j]);
+          if (w.type == 'org.kde.plasma.kickoff') {
+            w.currentConfigGroup = ['General']; w.writeConfig('icon', '$icon'); w.reloadConfig(); n++; } } }
+      print('changed ' + n);" 2>/dev/null | grep -q '^changed [1-9]'; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 0
+}
+
+cmd_on() {
+  local i
+  if [[ -n "$(missing_pkgs)" ]]; then
+    cmd_install || { installed || return 1; echo "Some of Desktop Mode's apps didn't download; it starts without them." >&2; }
+  fi
+  cmd_configure
+  [[ -S "/tmp/.X11-unix/X$N" ]] || die "The bottle's screen isn't running. Open Portalistic first."
+  if plasma_running; then echo desktop > "$FILE"; say "Desktop Mode is on."; return 0; fi
+  game_running && die "A game is running. Quit it first."
+  say "Switching to Desktop Mode…"
+  echo desktop > "$FILE"
+  if [[ "$NO_STEAM" != 1 ]]; then
+    pkill -u "$ME" -f "[b]ottle-maximize-steam --keep" 2>/dev/null || true   # (it would put Big Picture back)
+    steam_running && steam_url steam://close/bigpicture
+  fi
+  # the Game Mode window manager makes way for KWin
+  for wm in openbox xfwm4; do for i in $(on_display "$wm"); do kill "$i" 2>/dev/null; done; done
+  sleep 0.5
+  spawn dbus-run-session -- sh -c 'echo "$DBUS_SESSION_BUS_ADDRESS" > "$1"; exec startplasma-x11' _ "$BUS_FILE"
+  for i in $(seq 1 120); do plasma_running && break; sleep 0.5; done
+  if ! plasma_running; then
+    say "Plasma didn't start (see $LOG); back to Game Mode." >&2
+    cmd_off --quiet
+    return 1
+  fi
+  spawn "${BASH_SOURCE[0]}" look
+  say "Desktop Mode is on. “Return to Game Mode” on the desktop, or the Bottle menu, switches back."
+}
+
+cmd_off() {
+  local quiet=0 bus pids p q i
+  [[ "${1:-}" == --quiet ]] && quiet=1
+  echo game > "$FILE"
+  if plasma_running || [[ -n "$(session_pids)" ]]; then
+    (( quiet )) || say "Switching to Game Mode…"
+    bus="$(cat "$BUS_FILE" 2>/dev/null)"
+    if [[ -n "$bus" ]] && command -v busctl >/dev/null; then   # a normal log out: apps close, the session saves
+      timeout 5 busctl --address="$bus" call org.kde.Shutdown /Shutdown org.kde.Shutdown logout >/dev/null 2>&1 || true
+    fi
+    for i in $(seq 1 24); do plasma_running || break; sleep 0.5; done
+    echo "$(date '+%F %T') leaving Plasma: ${bus:+logout asked}, Plasma ${i:+gone after about $(( i / 2 )) s}$(plasma_running && echo ' STILL RUNNING')" >> "$LOG"
+    pids="$(session_pids)"
+    if [[ -n "$pids" ]]; then
+      # shellcheck disable=SC2086
+      kill $pids 2>/dev/null; sleep 2
+      pids="$(session_pids)"
+      # shellcheck disable=SC2086
+      [[ -z "$pids" ]] || kill -9 $pids 2>/dev/null
+    fi
+    for p in kwin_x11 plasmashell; do for q in $(on_display "$p"); do kill -9 "$q" 2>/dev/null; done; done
+    rm -f "$BUS_FILE"
+  fi
+  normal_env
+  # Game Mode's screen: openbox, and the window keeper for a running Steam (it reads the mode)
+  command -v bottle-desktop >/dev/null && bottle-desktop >/dev/null 2>&1
+  [[ "$NO_STEAM" == 1 ]] || { steam_running && steam_url steam://open/bigpicture; }
+  (( quiet )) || say "Game Mode is on."
+  return 0
+}
+
+cmd_steam() {
+  local L="$STATE/steam.log"
+  if steam_running; then
+    steam_url steam://open/main
+  else
+    [[ -f "$L" ]] && mv -f "$L" "$L.1"
+    # (Steam gets the normal user bus, not the desktop session's: it must outlive the session)
+    DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus" setsid -f steam-arm64 </dev/null >"$L" 2>&1
+  fi
+}
+
+case "${1:-}" in
+  status)    cmd_status ;;
+  install)   cmd_install ;;
+  on|desktop) cmd_on ;;
+  off|game)  cmd_off ;;
+  configure) cmd_configure ;;
+  look)      cmd_look ;;
+  places)    sync_places ;;
+  steam)     cmd_steam ;;
+  *) echo "usage: bottle-session status | install | on | off | configure | steam" >&2; exit 2 ;;
+esac

@@ -84,6 +84,23 @@ while read -r name hash; do
   [[ "$now" == "$hash" ]] || stale="$stale $name"
 done < "$PRE/MANIFEST"
 [[ -z "$stale" ]] || die "The ready-made builds are older than their sources:$stale. Run: bottle prebuild"
+# The x86 side's builds are made outside the VM. The 32-bit layer records which bottle_present.c it was built from.
+b32="$KIT/guest/present-layer/i386/BUILT"
+want32="$(sed -n 's/.*(sha1 first 16: \([0-9a-f]*\)).*/\1/p' "$b32" 2>/dev/null | head -1)"
+[[ -f "$KIT/guest/present-layer/i386/libVkLayer_bottle_present.so" && -n "$want32" ]] \
+  || die "No 32-bit build of the Vulkan layer (guest/present-layer/i386): 32-bit games would not work. Run guest/present-layer/build-i386.sh"
+[[ "$want32" == "$(shasum -a 1 "$KIT/guest/present-layer/bottle_present.c" | cut -c1-16)" ]] \
+  || die "The 32-bit Vulkan layer build (guest/present-layer/i386) is older than bottle_present.c. Run guest/present-layer/build-i386.sh"
+[[ -f "$KIT/guest/x86-venus/libvulkan_virtio.i686.so" && -f "$KIT/guest/x86-venus/MANIFEST" ]] \
+  || die "No 32-bit Venus driver (guest/x86-venus): 32-bit games would not work."
+[[ "$(awk '$1 == "libvulkan_virtio.i686.so" {print $2}' "$KIT/guest/x86-venus/MANIFEST")" == "$(shasum -a 256 "$KIT/guest/x86-venus/libvulkan_virtio.i686.so" | cut -d' ' -f1)" ]] \
+  || die "guest/x86-venus/MANIFEST doesn't match libvulkan_virtio.i686.so."
+# Comet (the Galaxy sign-in for GOG games) is built outside the VM too: its notices must travel with it.
+for f in comet-aarch64 MANIFEST BUILT CRATES.tsv LICENSE-comet LICENSE-proto-cc0 THIRD-PARTY-LICENSES.txt; do
+  [[ -f "$KIT/guest/comet/$f" ]] || die "guest/comet/$f is missing: GOG games that ask for the Galaxy client's sign-in would not work. Run guest/comet/build-aarch64.sh"
+done
+[[ "$(awk '$1 == "comet-aarch64" {print $2}' "$KIT/guest/comet/MANIFEST")" == "$(shasum -a 256 "$KIT/guest/comet/comet-aarch64" | cut -d' ' -f1)" ]] \
+  || die "guest/comet/MANIFEST doesn't match comet-aarch64."
 VERSION="$(sed -n 's/^MARKETING_VERSION *= *//p' "$KIT/host/xcode/Bottle.xcconfig")"
 info "Packaging Portalistic $VERSION, signed as: $IDENTITY"
 echo "  Lima $("$LIMACTL" --version | awk '{print $3}'), $("$KRUNKIT" --version 2>/dev/null | head -1), KosmicKrisp from $(dirname "$KK")"

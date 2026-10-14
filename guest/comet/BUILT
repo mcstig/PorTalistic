@@ -1,0 +1,6 @@
+Comet v0.3.2 (https://github.com/imLinguin/comet), Apache-2.0
+commit  3d7488ee72f83b7e8462a70fd4c4638d6da71360 (tag v0.3.2, Jan 4 2026)
+proto   923e8a0008603365d29002db611559190da5bf99 (submodule Yepoleb/gog_protocols, CC0-1.0)
+built   Oct 14 2026 in Portalistic's own VM (Fedora 44 aarch64), rustc 1.98.1 / cargo 1.98.1 (Fedora packages),
+        cargo build --release --locked, nothing changed in the source
+sha256  e110522e6542136d972ac1e171f70e2119326d7c3537768ff0a9d124bea5e8a7

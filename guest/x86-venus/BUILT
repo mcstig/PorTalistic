@@ -1,0 +1,4 @@
+libvulkan_virtio.i686.so: Mesa 25.3.6 Venus (-Dvulkan-drivers=virtio -Dplatforms=x11), 32-bit x86 (gcc -m32), with patches/ applied
+built 2026-10-14 on Ubuntu 24.04 (gcc 13.3, glibc 2.39, meson 1.8.5) by build-i686.sh's recipe; needs glibc >= 2.38 and the
+libz, libzstd, libdrm, libexpat, libxcb* and libxshmfence the x86 system already has.
+Tested 2026-10-14: guest/tests/vk32-probe.c under FEX (instance, Venus device, memory of 131268 bytes mapped), and Blades of Time (GOG).

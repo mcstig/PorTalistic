@@ -1,0 +1,1683 @@
+#!/usr/bin/env python3
+"""bottle-stores: games from other stores (GOG, Epic Games) in Steam's library.
+
+Steam in the bottle can't run a store's own launcher, so Portalistic does what Heroic does: it
+downloads a game with the store's download tool (GOG: gogdl, Epic: Legendary, both vendored in
+the kit), puts it in one of the game folders, and adds it to Steam as a "non-Steam game" that
+runs through Proton Experimental like every Steam game (bottle-steamplay sets that, bottle-dxvk
+adds DXVK 2.6.2). The game then shows in Steam's library and in Big Picture, under the
+collection "GOG" or "Epic Games".
+
+  bottle-stores gog status [--json]       signed in? how many games installed
+  bottle-stores gog login-url             the address to sign in at (in a browser)
+  bottle-stores gog login CODE|ADDRESS    finish signing in with what the browser ended on
+  bottle-stores gog logout                forget the sign-in (installed games stay)
+  bottle-stores gog list [--json] [--refresh]
+                                          the games the account owns that have a Windows version
+  bottle-stores gog folders [--json]      where games can go (the Mac's game folders, the VM's disk)
+  bottle-stores gog install ID [--folder NAME] [--lang CODE]
+                                          download a game (or bring an installed one up to date)
+  bottle-stores gog remove ID [--purge]   delete a game's files and its Steam entry (--purge: also
+                                          its Wine prefix, which holds saves and settings)
+  bottle-stores epic status [--json]      the same for Epic Games:
+  bottle-stores epic login-url            the address to sign in at
+  bottle-stores epic login CODE|TEXT      finish signing in with what Epic's page shows
+  bottle-stores epic logout
+  bottle-stores epic list [--json] [--refresh]
+  bottle-stores epic folders [--json]
+  bottle-stores epic install ID [--folder NAME]
+  bottle-stores epic remove ID [--purge]
+  bottle-stores sync [--force]            write the installed games into Steam's shortcuts (Steam
+                                          must not be running: steam-arm64 runs this before it
+                                          starts Steam, which keeps its lists in memory)
+  bottle-stores ids                       the Steam app IDs of those shortcuts (bottle-steamplay)
+  bottle-stores status                    every installed game
+  bottle-stores run -- COMMAND...         run COMMAND (a game) with Comet beside it, see below
+  bottle-stores run --epic ID -- COMMAND...
+                                          run COMMAND (an Epic game) with Epic's sign-in added
+
+Games that use GOG's Galaxy SDK (a Galaxy.dll or Galaxy64.dll in their folder) ask the Galaxy
+client's background service for the player's sign-in, achievements and leaderboards; without it
+they say "User is not signed in. To continue, start the GOG Galaxy client". The VM can't run that
+client, so the kit carries Comet (https://github.com/imLinguin/comet, Apache-2.0), an open-source
+stand-in for that service, which Heroic uses too. For such a game the Steam shortcut's launch
+options are "bottle-stores run -- %command%": `run` signs Comet in with the GOG sign-in already
+held here (through a private link to gog-auth.json; no token goes on a command line), starts it
+on port 9977 unless it already runs, waits for the Galaxy files it fetches from GOG on first use
+(about 27 MB, kept in ~/.local/share/comet), runs the game, and stops the Comet it started when
+the game ends. Without Comet, or without a sign-in, `run` just runs the game.
+
+Epic's games start differently: the game itself asks for a sign-in token on its command line
+(-AUTH_PASSWORD=...), and a token works once, for a few minutes. So an Epic game's launch options
+are "bottle-stores run --epic ID -- %command%": `run` asks Legendary for the arguments (it
+signs in with the saved login and gets a fresh token) and starts the game with them. If that
+doesn't work the game still starts, without the sign-in. The kit does nothing about anti-cheat
+(Easy Anti-Cheat, BattlEye): games that need it may not start.
+
+Files, in ~/.config/steamos-bottle/stores:
+  gog-auth.json     gogdl's sign-in (a secret: mode 600; never printed)
+  gog-user.json     the account's name; gog-library.json the games list (a cache)
+  legendary/        Legendary's own folder: user.json (Epic's sign-in, a secret: mode 600),
+                    installed.json, metadata/ ...; epic-library.json is the games list (a cache)
+  games.json        installed games: {"gog": {ID: {title, dir, exe, args, startdir, appid, galaxy, ...}},
+                    "epic": {APPNAME: {...}}}
+  art/              artwork downloaded for them
+  comet-cfg/        a link to gog-auth.json where Comet looks for it (it reads Heroic's file name)
+Comet's own log: ~/.cache/steamos-bottle/comet.log; the Epic launches': epic.log next to it.
+Output lines starting with "@@" are for the Mac app (download progress).
+"""
+import argparse
+import concurrent.futures
+import fcntl
+import json
+import os
+import re
+import shlex
+import shutil
+import signal
+import struct
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+import zlib
+from datetime import datetime
+from pathlib import Path
+
+HOME = Path.home()
+CONF = HOME / ".config/steamos-bottle"
+STATE = Path(os.environ.get("BOTTLE_STORES_DIR") or CONF / "stores")
+STEAM = Path(os.environ.get("BOTTLE_STEAM_DIR") or HOME / ".local/share/Steam")
+LIBRARIES = Path(os.environ.get("BOTTLE_LIBRARIES_CONF") or CONF / "libraries.json")
+MOUNT_ROOT = Path(os.environ.get("BOTTLE_LIBRARY_ROOT", "/mnt/portalistic"))
+GOGDL_DIR = os.environ.get("BOTTLE_GOGDL_DIR", "/usr/local/share/steamos-bottle/gogdl")
+GOG_EMBED = os.environ.get("BOTTLE_GOG_EMBED", "https://embed.gog.com")
+GOG_API = os.environ.get("BOTTLE_GOG_API", "https://api.gog.com")
+# GOG Galaxy's public client, the one gogdl (Heroic's downloader) signs in with
+GOG_LOGIN_URL = ("https://auth.gog.com/auth?client_id=46899977096215655"
+                 "&redirect_uri=https%3A%2F%2Fembed.gog.com%2Fon_login_success%3Forigin%3Dclient"
+                 "&response_type=code&layout=galaxy")
+GOG_TAG = "GOG"
+MARK = "portalistic:"                  # in a shortcut's ShortcutPath: ours (portalistic:gog:ID, portalistic:epic:NAME)
+STORES = {"gog": "GOG", "epic": "Epic Games"}     # each store, and the collection its games are in
+LIBRARY_MAX_AGE = 6 * 3600             # the cached games list is used this long (seconds)
+LIBRARY_VERSION = 2                    # a cached list from before this (no release years) is fetched again
+SPACE_MARGIN = 1 << 30                 # free space to keep beyond a game's size
+
+AUTH = STATE / "gog-auth.json"
+USER = STATE / "gog-user.json"
+LIBCACHE = STATE / "gog-library.json"
+GAMES = STATE / "games.json"
+ART = STATE / "art"
+ART_VERSION = 2                        # bump it when the pictures we fetch change: each game's are fetched again, once
+ART_RETRY = 3600                       # after a failed fetch, wait this long (seconds) before asking GOG again
+# Steam's grid folder (userdata/ID/config/grid) holds a non-Steam game's pictures, named by its app ID:
+# NAME.jpg the wide tile, NAMEp.jpg the tall one (what Big Picture's library shows), NAME_hero.jpg the
+# banner of its page, NAME_logo.png its title. (our kind of picture, the end of Steam's file name)
+GRID_ART = (("cover", "p"), ("hero", "_hero"), ("hero", ""), ("logo", "_logo"))
+GRID_EXTS = (".jpg", ".jpeg", ".png", ".webp")
+GOGDL_CONFIG = STATE / "gogdl"        # gogdl keeps its manifests in heroic_gogdl/manifests under it
+
+# Epic Games, through Legendary (https://github.com/legendary-gl/legendary, GPL-3.0-or-later)
+LEGENDARY_DIR = os.environ.get("BOTTLE_LEGENDARY_DIR", "/usr/local/share/steamos-bottle/legendary")
+LGD_CONFIG = STATE / "legendary"       # Legendary's own folder (LEGENDARY_CONFIG_PATH)
+EPIC_LIBCACHE = STATE / "epic-library.json"
+EPIC_YEARS = STATE / "epic-years.json"  # each game's release year, from Epic's public store (kept: a year doesn't change)
+# Epic's store site answers the questions its own pages ask (what Legendary uses for the same host); no sign-in
+EPIC_GRAPHQL = os.environ.get("BOTTLE_EPIC_GRAPHQL", "https://store.epicgames.com/graphql")
+EPIC_YEARS_RETRY = 3600                # after Epic's store couldn't be reached, wait this long (seconds)
+EPIC_YEAR_UNKNOWN_RETRY = 7 * 86400    # a game the store gave no year for is asked about again after this long
+EPIC_LOG = HOME / ".cache/steamos-bottle/epic.log"
+EPIC_RUN = os.environ.get("BOTTLE_EPIC_RUN", "/usr/local/bin/bottle-stores run --epic")
+# Epic's own launcher's public sign-in (what Legendary uses): the page it ends on shows the code
+EPIC_LOGIN_URL = ("https://www.epicgames.com/id/login?redirectUrl="
+                  + urllib.parse.quote("https://www.epicgames.com/id/api/redirect"
+                                       "?clientId=34a02cf8f4414e29b15921876da36f9a&responseType=code"))
+# Python 3.14 starts helper processes with "forkserver", which Legendary's downloader doesn't expect
+LGD_BOOT = ("import multiprocessing, sys\n"
+            "multiprocessing.set_start_method('fork')\n"
+            "sys.argv[0] = 'legendary'\n"
+            "from legendary.cli import main\n"
+            "main()\n")
+
+# Comet, the stand-in for the Galaxy client's background service (see the top of this file)
+COMET_DIR = Path(os.environ.get("BOTTLE_COMET_DIR", "/usr/local/share/steamos-bottle/comet"))
+COMET_BIN = COMET_DIR / "comet"
+COMET_PORT = int(os.environ.get("BOTTLE_COMET_PORT", "9977"))   # where the Galaxy SDK looks for it
+COMET_CFG = STATE / "comet-cfg"
+COMET_LOG = HOME / ".cache/steamos-bottle/comet.log"
+COMET_DATA = Path(os.environ.get("XDG_DATA_HOME") or HOME / ".local/share") / "comet"
+COMET_PEER_DONE = COMET_DATA / "redist/.desktop-galaxy-peer-windows.toml"   # written when the Galaxy files are in
+COMET_RUN = os.environ.get("BOTTLE_COMET_RUN", "/usr/local/bin/bottle-stores run --")
+GALAXY_DLLS = ("galaxy.dll", "galaxy64.dll")
+
+
+def say(*a):
+    print(*a, flush=True)
+
+
+def die(msg, code=1):
+    print(f"error: {msg}", flush=True)
+    sys.exit(code)
+
+
+# ------------------------------------------------------------------ small files
+
+def read_json(path, default=None):
+    try:
+        return json.loads(Path(path).read_text())
+    except (OSError, ValueError):
+        return {} if default is None else default
+
+
+def write_json(path, value, mode=None):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(value, indent=1, sort_keys=True) + "\n")
+    if mode is not None:
+        os.chmod(tmp, mode)
+    os.replace(tmp, path)
+
+
+class locked:
+    """One at a time: a game's install or removal ("gog-ID"), or a change to games.json ("games")."""
+    def __init__(self, name):
+        self.name = name
+
+    def __enter__(self):
+        STATE.mkdir(parents=True, exist_ok=True)
+        self.f = open(STATE / f"lock-{self.name}", "w")
+        fcntl.flock(self.f, fcntl.LOCK_EX)
+        return self
+
+    def __exit__(self, *exc):
+        self.f.close()
+
+
+def installed(store="gog"):
+    games = read_json(GAMES).get(store)
+    return games if isinstance(games, dict) else {}
+
+
+def update_installed(store, gid, rec):
+    """Add or replace one game's record (rec None: take it out), without losing another install's."""
+    with locked("games"):
+        games = installed(store)
+        if rec is None:
+            games.pop(gid, None)
+        else:
+            games[gid] = rec
+        all_games = read_json(GAMES)
+        all_games[store] = games
+        write_json(GAMES, all_games)
+
+
+def all_installed():
+    """Every installed game of every store: {"gog:ID": rec, "epic:NAME": rec}, each rec with its "store"."""
+    out = {}
+    for store in STORES:
+        for gid, rec in installed(store).items():
+            if isinstance(rec, dict):
+                rec["store"] = store
+                out[f"{store}:{gid}"] = rec
+    return out
+
+
+def art_key(rec):
+    """What a game's picture files in our art folder start with: GOG's ID as it always was, or store-NAME."""
+    store = rec.get("store", "gog")
+    return str(rec["id"]) if store == "gog" else f"{store}-{rec['id']}"
+
+
+def human(n):
+    n = float(n)
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1000 or unit == "GB":
+            return f"{n:.0f} {unit}" if unit in ("B", "KB") else f"{n:.1f} {unit}"
+        n /= 1000
+
+
+# ------------------------------------------------------------------ Steam's binary shortcuts.vdf
+
+def bvdf_load(data):
+    """shortcuts.vdf: a dict of dicts; a value is a dict or (type byte, value). Anything we don't
+    understand raises ValueError, and the file is then left alone."""
+    pos, n = 0, len(data)
+
+    def cstr():
+        nonlocal pos
+        end = data.index(b"\0", pos)
+        s = data[pos:end].decode("utf-8", "replace")
+        pos = end + 1
+        return s
+
+    def node():
+        nonlocal pos
+        out = {}
+        while pos < n:
+            t = data[pos]
+            pos += 1
+            if t == 8:
+                return out
+            key = cstr()
+            if t == 0:
+                out[key] = node()
+            elif t == 1:
+                out[key] = (1, cstr())
+            elif t == 2:
+                out[key] = (2, struct.unpack_from("<I", data, pos)[0])
+                pos += 4
+            elif t in (3, 4, 6):
+                out[key] = (t, data[pos:pos + 4])
+                pos += 4
+            elif t == 7:
+                out[key] = (t, data[pos:pos + 8])
+                pos += 8
+            else:
+                raise ValueError(f"unknown type {t}")
+        return out
+
+    return node()
+
+
+def bvdf_dump(d):
+    out = bytearray()
+    for k, v in d.items():
+        kb = k.encode() + b"\0"
+        if isinstance(v, dict):
+            out += b"\0" + kb + bvdf_dump(v)
+        elif v[0] == 1:
+            out += b"\1" + kb + v[1].encode() + b"\0"
+        elif v[0] == 2:
+            out += b"\2" + kb + struct.pack("<I", v[1] & 0xFFFFFFFF)
+        else:
+            out += bytes([v[0]]) + kb + v[1]
+    out += b"\x08"
+    return bytes(out)
+
+
+def shortcut_appid(exe, name):
+    """The app ID Steam gives a non-Steam game: a CRC of its quoted program path and name, with
+    the top bit set (it names the Steam Play setting and the artwork)."""
+    return (zlib.crc32((exe + name).encode("utf-8")) & 0xFFFFFFFF) | 0x80000000
+
+
+def sval(entry, key, default=""):
+    v = entry.get(key)
+    return v[1] if isinstance(v, tuple) and v[0] == 1 else default
+
+
+def ival(entry, key, default=0):
+    v = entry.get(key)
+    return v[1] if isinstance(v, tuple) and v[0] == 2 else default
+
+
+def uses_galaxy(game_dir, max_depth=4):
+    """Does the game carry GOG's Galaxy SDK (Galaxy.dll / Galaxy64.dll near its top)? True or False;
+    None when the folder isn't there to look in (a drive that isn't connected)."""
+    base = Path(game_dir)
+    if not base.is_dir():
+        return None
+    try:
+        for root, dirs, files in os.walk(base):
+            if any(f.lower() in GALAXY_DLLS for f in files):
+                return True
+            if len(Path(root).relative_to(base).parts) >= max_depth:
+                dirs[:] = []
+    except OSError:
+        pass
+    return False
+
+
+def launch_options(rec):
+    """What goes in the shortcut's launch options: the game's own arguments, and for a game that uses
+    the Galaxy SDK also `bottle-stores run -- %command%`, which starts Comet beside it (an Epic game:
+    `bottle-stores run --epic ID -- %command%`, which adds Epic's sign-in to its arguments)."""
+    args = (rec.get("args") or "").strip()
+    if rec.get("store") == "epic":
+        return f"{EPIC_RUN} {shlex.quote(str(rec['id']))} -- %command% {args}".strip()
+    if rec.get("galaxy"):
+        return f"{COMET_RUN} %command% {args}".strip()
+    return args
+
+
+def make_entry(rec, old=None):
+    """The shortcut for an installed game; an existing entry keeps what Steam stored in it."""
+    e = dict(old) if old else {}
+    exe, start = f'"{rec["exe"]}"', f'"{rec["startdir"]}"'
+    e["appid"] = (2, int(rec["appid"]))
+    e["AppName"] = (1, rec["title"])
+    e["Exe"] = (1, exe)
+    e["StartDir"] = (1, start)
+    e["icon"] = (1, rec.get("icon") or sval(e, "icon"))
+    e["ShortcutPath"] = (1, f"{MARK}{rec.get('store', 'gog')}:{rec['id']}")
+    e["LaunchOptions"] = (1, launch_options(rec))
+    for key, val in (("IsHidden", 0), ("AllowDesktopConfig", 1), ("AllowOverlay", 1), ("OpenVR", 0),
+                     ("Devkit", 0), ("DevkitOverrideAppID", 0), ("LastPlayTime", 0)):
+        e[key] = (2, ival(e, key, val))
+    for key in ("DevkitGameID", "FlatpakAppID"):
+        e[key] = (1, sval(e, key))
+    e["tags"] = {"0": (1, STORES[rec.get("store", "gog")])}
+    return e
+
+
+def steam_user_dirs():
+    base = STEAM / "userdata"
+    try:
+        return sorted(d for d in base.iterdir() if d.name.isdigit() and d.name != "0" and d.is_dir())
+    except OSError:
+        return []
+
+
+def steam_running():
+    # (BOTTLE_STEAM_PROC: what the self-test points elsewhere, so a Steam running in the VM doesn't count there)
+    pat = os.environ.get("BOTTLE_STEAM_PROC", "[s]teamrtarm64/steam( |$)")
+    return subprocess.run(["pgrep", "-f", pat], capture_output=True).returncode == 0
+
+
+def sync_user(udir, games):
+    """Make udir's shortcuts.vdf hold exactly our games among its own. Returns (added, removed, updated)."""
+    cfg = udir / "config"
+    path = cfg / "shortcuts.vdf"
+    try:
+        data = bvdf_load(path.read_bytes()) if path.is_file() else {}
+    except (ValueError, struct.error, OSError) as e:
+        say(f"  {udir.name}: shortcuts.vdf isn't in a form I understand ({e}); left alone")
+        return 0, 0, 0
+    top_key = next((k for k in data if k.lower() == "shortcuts"), "shortcuts")
+    shortcuts = data.get(top_key) if isinstance(data.get(top_key), dict) else {}
+    ours_by_id, keep = {}, []
+    removed = 0
+    for entry in shortcuts.values():
+        if not isinstance(entry, dict):
+            continue
+        mark = sval(entry, "ShortcutPath")
+        if mark.startswith(MARK):
+            gid = mark[len(MARK):]
+            if gid in games and gid not in ours_by_id:
+                ours_by_id[gid] = entry
+                keep.append(("ours", gid))
+            else:
+                removed += 1
+        else:
+            keep.append(("theirs", entry))
+    added = updated = 0
+    result = []
+    done = set()
+    for kind, item in keep:
+        if kind == "theirs":
+            result.append(item)
+        else:
+            new = make_entry(games[item], ours_by_id[item])
+            if new != ours_by_id[item]:
+                updated += 1
+            result.append(new)
+            done.add(item)
+    for gid, rec in games.items():
+        if gid not in done:
+            result.append(make_entry(rec))
+            added += 1
+    new_data = dict(data)
+    new_data.pop(top_key, None)
+    new_data["shortcuts"] = {str(i): e for i, e in enumerate(result)}
+    if not (added or removed or updated) and path.is_file():
+        copy_art(cfg / "grid", games)            # (pictures fetched since the last sync)
+        return 0, 0, 0
+    if not games and not path.is_file():
+        return 0, 0, 0
+    cfg.mkdir(parents=True, exist_ok=True)
+    blob = bvdf_dump(new_data)
+    if bvdf_load(blob) != new_data:          # never hand Steam a file it can't read back
+        say(f"  {udir.name}: couldn't write shortcuts.vdf safely; left alone")
+        return 0, 0, 0
+    if path.is_file() and not path.with_name("shortcuts.vdf.bottle-backup").exists():
+        shutil.copy2(path, path.with_name("shortcuts.vdf.bottle-backup"))
+    tmp = path.with_name("shortcuts.vdf.bottle-tmp")
+    tmp.write_bytes(blob)
+    os.replace(tmp, path)
+    copy_art(cfg / "grid", games)
+    return added, removed, updated
+
+
+def note_galaxy(games):
+    """Find out once, for a game installed before this was checked, whether it uses the Galaxy SDK
+    (an install or update checks again). A game whose folder can't be looked in stays as it is."""
+    for rec in games.values():
+        if rec.get("store") == "gog" and "galaxy" not in rec:
+            found = uses_galaxy(rec.get("dir", ""))
+            if found is not None:
+                rec["galaxy"] = found
+                update_installed("gog", rec["id"], rec)
+
+
+def cmd_sync(args):
+    games = all_installed()
+    note_galaxy(games)
+    if steam_running() and not args.force:
+        say("Steam is running; it would undo this when it quits. Quit Steam first (bottle steam does it).")
+        return 1
+    users = steam_user_dirs()
+    if not users:
+        say("Steam has no signed-in user yet; the games are added once it has.")
+        return 0
+    note_art(games)
+    for u in users:
+        a, r, up = sync_user(u, games)
+        if a or r or up:
+            say(f"Steam user {u.name}: {a} added, {up} updated, {r} taken out (games from other stores)")
+    return 0
+
+
+def cmd_ids(args):
+    for store in read_json(GAMES).values():
+        for rec in (store or {}).values():
+            if isinstance(rec, dict) and str(rec.get("appid", "")).isdigit():
+                print(rec["appid"])
+    return 0
+
+
+# ------------------------------------------------------------------ gogdl
+
+def gogdl_cmd():
+    custom = os.environ.get("BOTTLE_GOGDL")
+    if custom:
+        return shlex.split(custom)
+    return [sys.executable or "python3", "-m", "gogdl.cli"]
+
+
+def gogdl_env():
+    env = dict(os.environ)
+    env["PYTHONPATH"] = GOGDL_DIR + (":" + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+    env["GOGDL_CONFIG_PATH"] = str(GOGDL_CONFIG)
+    env["PYTHONUNBUFFERED"] = "1"
+    return env
+
+
+def gogdl_available():
+    return bool(os.environ.get("BOTTLE_GOGDL")) or (Path(GOGDL_DIR) / "gogdl/cli.py").is_file()
+
+
+def gogdl_run(args, timeout=300):
+    """gogdl's output, without ever showing it (the sign-in prints tokens). -> (code, out, err)"""
+    if not gogdl_available():
+        die("GOG's downloader isn't in the VM yet. Choose Bottle > Update the Bottle, then try again.")
+    STATE.mkdir(parents=True, exist_ok=True)
+    GOGDL_CONFIG.mkdir(parents=True, exist_ok=True)
+    cmd = gogdl_cmd() + ["--auth-config-path", str(AUTH)] + args
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=gogdl_env(),
+                           stdin=subprocess.DEVNULL)
+    except subprocess.TimeoutExpired:
+        die("GOG's downloader took too long to answer. Check the VM's network and try again.")
+    return r.returncode, r.stdout, r.stderr
+
+
+def last_json(text):
+    for line in reversed(text.strip().splitlines()):
+        line = line.strip()
+        if line.startswith("{") or line == "null":
+            try:
+                return json.loads(line)
+            except ValueError:
+                continue
+    return None
+
+
+def gog_token():
+    """A valid access token (gogdl refreshes an expired one), or None when not signed in."""
+    if not AUTH.is_file():
+        return None
+    _code, out, _err = gogdl_run(["auth"], timeout=60)
+    data = last_json(out)
+    return data.get("access_token") if isinstance(data, dict) else None
+
+
+def http_json(url, token=None, timeout=40):
+    headers = {"User-Agent": "Portalistic/1 (bottle-stores)", "Accept": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=timeout) as r:
+        return json.loads(r.read().decode("utf-8", "replace"))
+
+
+def year_of(value):
+    """The year at the start of a date text ("2012-04-21 00:00:00.000000", "2015-07-07T15:00:00.000Z"); 0 when
+    the text has none, or a year no game has (a placeholder)."""
+    m = re.match(r"\s*(\d{4})-\d\d", value) if isinstance(value, str) else None
+    year = int(m.group(1)) if m else 0
+    return year if 1970 <= year <= datetime.now().year + 2 else 0
+
+
+def http_blob(url, timeout=60, limit=20 << 20):
+    """A file's bytes; OSError when it is bigger than limit (half a picture is worse than none)."""
+    req = urllib.request.Request(url, headers={"User-Agent": "Portalistic/1 (bottle-stores)"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        blob = r.read(limit + 1)
+    if len(blob) > limit:
+        raise OSError(f"{url} is bigger than {limit >> 20} MB")
+    return blob
+
+
+# ------------------------------------------------------------------ GOG: signing in
+
+def extract_code(text):
+    text = (text or "").strip().strip("\"'")
+    m = re.search(r"[?&#]code=([^&#\s]+)", text)
+    if m:
+        return m.group(1)
+    return text if re.fullmatch(r"[A-Za-z0-9_\-]{16,}", text) else None
+
+
+def gog_status(args):
+    games = installed("gog")
+    signed = AUTH.is_file()
+    info = {"signedIn": signed, "user": read_json(USER).get("username", "") if signed else "",
+            "installed": len(games), "downloader": gogdl_available()}
+    if args.json:
+        print(json.dumps(info))
+    else:
+        say(f"GOG: {'signed in as ' + (info['user'] or 'an account') if signed else 'not signed in'}; "
+            f"{len(games)} game(s) installed")
+        if not info["downloader"]:
+            say("GOG's downloader isn't in the VM yet (Bottle > Update the Bottle).")
+    return 0
+
+
+def gog_login(args):
+    code = extract_code(args.code)
+    if not code:
+        die("I couldn't find a GOG code in that. After you sign in, the browser ends on a page that "
+            "says nothing useful; copy the whole address from its address bar (it contains code=...) "
+            "and paste that.")
+    old = AUTH.read_bytes() if AUTH.is_file() else None
+    STATE.mkdir(parents=True, exist_ok=True)
+    os.chmod(STATE, 0o700)
+    _c, out, _e = gogdl_run(["auth", "--code", code], timeout=90)
+    data = last_json(out)
+    if not isinstance(data, dict) or data.get("error") or not data.get("access_token") or not AUTH.is_file():
+        if old is not None:
+            AUTH.write_bytes(old)
+        else:
+            AUTH.unlink(missing_ok=True)
+        die("GOG didn't accept that code. A code works once and expires within a minute or so: "
+            "sign in again and paste the new address straight away.")
+    os.chmod(AUTH, 0o600)
+    name = ""
+    try:
+        d = http_json(f"{GOG_EMBED}/userData.json", data["access_token"], timeout=20)
+        name = d.get("username") or d.get("email") or ""
+    except (urllib.error.URLError, ValueError, OSError):
+        pass
+    write_json(USER, {"username": name})
+    LIBCACHE.unlink(missing_ok=True)
+    say(f"Signed in to GOG{' as ' + name if name else ''}.")
+    return 0
+
+
+def gog_logout(args):
+    for p in (AUTH, USER, LIBCACHE):
+        p.unlink(missing_ok=True)
+    say("Signed out of GOG. Installed games stay.")
+    return 0
+
+
+# ------------------------------------------------------------------ GOG: the library
+
+def fetch_library(token):
+    """The games the account owns that have a Windows version: [{id, title, slug, image, year}] (year 0: GOG
+    gives no release date)."""
+    games, page, total = [], 1, 1
+    try:
+        while page <= total:
+            d = http_json(f"{GOG_EMBED}/account/getFilteredProducts?mediaType=1&page={page}", token)
+            total = int(d.get("totalPages") or 1)
+            for p in d.get("products") or []:
+                if p.get("isGame") is False or not p.get("id"):
+                    continue
+                if (p.get("worksOn") or {}).get("Windows") is False:
+                    continue
+                released = p.get("releaseDate")
+                games.append({"id": str(p["id"]), "title": p.get("title") or str(p["id"]),
+                              "slug": p.get("slug") or "", "image": p.get("image") or "",
+                              "year": year_of(released.get("date") if isinstance(released, dict) else released)})
+            page += 1
+        return games
+    except (urllib.error.URLError, ValueError, OSError, KeyError) as e:
+        say(f"(GOG's games list didn't load the usual way: {e}; trying product by product)")
+    # the other way: the owned IDs, then each product's own page
+    owned = http_json(f"{GOG_EMBED}/user/data/games", token).get("owned") or []
+
+    def one(pid):
+        try:
+            d = http_json(f"{GOG_API}/products/{pid}", None, timeout=30)
+        except (urllib.error.URLError, ValueError, OSError):
+            return None
+        if d.get("game_type", "game") != "game":
+            return None
+        return {"id": str(pid), "title": d.get("title") or str(pid), "slug": d.get("slug") or "", "image": "",
+                "year": year_of(d.get("release_date"))}
+
+    with concurrent.futures.ThreadPoolExecutor(8) as pool:
+        games = [g for g in pool.map(one, owned) if g]
+    return games
+
+
+def gog_library(refresh=False):
+    cache = read_json(LIBCACHE)
+    fresh = (cache.get("games") and cache.get("v") == LIBRARY_VERSION
+             and time.time() - cache.get("fetched", 0) < LIBRARY_MAX_AGE)
+    if fresh and not refresh:
+        return cache["games"]
+    token = gog_token()
+    if not token:
+        if cache.get("games"):
+            return cache["games"]
+        die("You're not signed in to GOG (or the sign-in expired). Sign in again.")
+    try:
+        games = fetch_library(token)
+    except (urllib.error.URLError, ValueError, OSError) as e:
+        if cache.get("games"):
+            say(f"(couldn't reach GOG: {e}; showing the list from before)")
+            return cache["games"]
+        die(f"couldn't get your GOG games: {e}")
+    games.sort(key=lambda g: g["title"].lower())
+    write_json(LIBCACHE, {"fetched": time.time(), "v": LIBRARY_VERSION, "games": games})
+    return games
+
+
+def gog_list(args):
+    if not AUTH.is_file():
+        die("You're not signed in to GOG.")
+    games = gog_library(args.refresh)
+    have = installed("gog")
+    rows = [{"id": g["id"], "title": g["title"], "installed": g["id"] in have,
+             "size": have.get(g["id"], {}).get("size", 0), "image": g.get("image", ""),
+             "year": int(g.get("year") or 0)} for g in games]
+    for gid, rec in have.items():     # an installed game the list doesn't show (removed from the account)
+        if not any(r["id"] == gid for r in rows):
+            rows.append({"id": gid, "title": rec["title"], "installed": True, "size": rec.get("size", 0),
+                         "image": "", "year": 0})
+    if args.json:
+        print(json.dumps({"games": rows}))
+    else:
+        for r in rows:
+            say(f"{r['id']:>12}  {'installed' if r['installed'] else '         '}  {r['title']}")
+        say(f"{len(rows)} game(s)")
+    return 0
+
+
+# ------------------------------------------------------------------ where games go
+
+def folder_choices():
+    """The places a game can go: the Mac's game folders as the VM sees them, then the VM's disk.
+    -> [{name, label, path, default}]"""
+    conf = read_json(LIBRARIES)
+    default = conf.get("default") or "mac"
+    out = []
+    for f in conf.get("folders") or []:
+        name = f.get("name")
+        mount = MOUNT_ROOT / str(name)
+        if name and mount.is_dir() and os.access(mount, os.W_OK):
+            out.append({"name": name, "label": f.get("label") or name, "path": str(mount)})
+    out.append({"name": "vm", "label": "VM disk", "path": str(HOME / "Games")})
+    pick = next((i for i, c in enumerate(out) if c["name"] == default), 0)
+    for i, c in enumerate(out):
+        c["default"] = i == pick
+        c["free"] = free_space(c["path"])
+    return out
+
+
+def free_space(path):
+    p = Path(path)
+    while not p.exists() and p != p.parent:
+        p = p.parent
+    try:
+        return shutil.disk_usage(p).free
+    except OSError:
+        return 0
+
+
+def choose_folder(wanted, old=None):
+    """The game folder an install goes to: the one asked for, else where the game already is, else the default."""
+    choices = folder_choices()
+    if wanted:
+        choice = next((c for c in choices if c["name"] == wanted), None)
+        if choice is None:
+            die(f"There is no game folder '{wanted}' here ({', '.join(c['name'] for c in choices)}). "
+                "A drive may not be connected.")
+        return choice
+    if old and old.get("folder") in [c["name"] for c in choices]:
+        return next(c for c in choices if c["name"] == old["folder"])
+    return next((c for c in choices if c["default"]), choices[-1])
+
+
+def gog_folders(args):
+    out = folder_choices()
+    if args.json:
+        print(json.dumps({"folders": out}))
+    else:
+        for c in out:
+            say(f"{c['name']:<10} {c['label']:<20} {human(c['free']):>9} free  {c['path']}{'  (default)' if c['default'] else ''}")
+    return 0
+
+
+# ------------------------------------------------------------------ GOG: installing
+
+PROGRESS = re.compile(r"= Progress: ([\d.]+) (\d+)/(\d+), Running for: [\d:]+, ETA: ([\d:]+)")
+
+
+def pick_language(info, wanted):
+    langs = info.get("languages") or []
+    if wanted:
+        return wanted
+    if not langs or "en-US" in langs:
+        return "en-US"
+    english = [l for l in langs if l.lower().startswith("en")]
+    return (english or langs)[0]
+
+
+def play_task(dest):
+    """(exe, args, startdir) from the game's goggame-ID.info: its primary play task."""
+    infos = sorted(dest.glob("goggame-*.info")) + sorted(dest.glob("*/goggame-*.info"))
+    best = None
+    for f in infos:
+        d = read_json(f)
+        tasks = [t for t in d.get("playTasks") or [] if t.get("type", "FileTask") == "FileTask" and t.get("path")]
+        for t in tasks:
+            score = (2 if t.get("isPrimary") else 0) + (1 if t.get("category") == "game" else 0)
+            if str(t["path"]).lower().endswith(".exe") and (best is None or score > best[0]):
+                best = (score, f.parent, t)
+    if best is None:
+        return None
+    _score, root, t = best
+    rel = str(t["path"]).replace("\\", "/")
+    exe = find_nocase(root, rel)
+    if exe is None:
+        return None
+    wd = str(t.get("workingDir") or "").replace("\\", "/")
+    start = find_nocase(root, wd) if wd else exe.parent
+    return str(exe), str(t.get("arguments") or ""), str(start if start and start.is_dir() else exe.parent)
+
+
+def find_nocase(root, rel):
+    """root/rel where a part's capitals may differ (GOG's paths come from Windows)."""
+    p = Path(root)
+    for part in [x for x in rel.split("/") if x not in ("", ".")]:
+        if (p / part).exists():
+            p = p / part
+            continue
+        try:
+            match = next((c for c in p.iterdir() if c.name.lower() == part.lower()), None)
+        except OSError:
+            return None
+        if match is None:
+            return None
+        p = match
+    return p
+
+
+def image_ext(blob):
+    """The file extension for a picture's bytes (Steam looks at the name), None for anything but PNG and JPEG."""
+    if blob[:4] == b"\x89PNG":
+        return ".png"
+    if blob[:2] == b"\xff\xd8":
+        return ".jpg"
+    return None
+
+
+def art_file(key, kind):
+    """Our copy of one of a game's pictures (cover, hero, logo, icon), or None."""
+    for ext in (".jpg", ".png"):
+        f = ART / f"{key}_{kind}{ext}"
+        if f.is_file():
+            return f
+    return None
+
+
+def store_art(key, rec, kind, blob):
+    """Keep blob as the game's `kind` picture. A copy of the earlier picture that we put in Steam's grid
+    folder (same bytes) goes too, so the next sync puts this one there; a picture the player chose stays."""
+    ext = image_ext(blob)
+    if ext is None:
+        return False
+    old = art_file(key, kind)
+    old_blob = None
+    if old is not None:
+        try:
+            old_blob = old.read_bytes()
+        except OSError:
+            pass
+    if old_blob == blob:
+        return True
+    ART.mkdir(parents=True, exist_ok=True)
+    new = ART / f"{key}_{kind}{ext}"
+    tmp = new.with_name(new.name + ".tmp")
+    tmp.write_bytes(blob)
+    os.replace(tmp, new)
+    if old is not None and old != new:
+        old.unlink(missing_ok=True)
+    if old_blob and rec.get("appid"):
+        for u in steam_user_dirs():
+            for k, suffix in GRID_ART:
+                for e in GRID_EXTS if k == kind else ():
+                    f = u / "config/grid" / f"{rec['appid']}{suffix}{e}"
+                    try:
+                        if f.is_file() and f.read_bytes() == old_blob:
+                            f.unlink()
+                    except OSError:
+                        pass
+    return True
+
+
+def gog_art_links(gid, timeout):
+    """GOG's pictures for a game, from its public page: ({cover, hero, logo, icon: address}, complete), or
+    None when GOG can't be reached."""
+    def url(u):
+        return ("https:" + u) if u and u.startswith("//") else u
+
+    links = {}
+    try:
+        d = http_json(f"{GOG_API}/v2/games/{gid}?locale=en-US", None, timeout=timeout)
+        for k, v in ((d.get("_links") or {}) if isinstance(d, dict) else {}).items():
+            if isinstance(v, dict) and isinstance(v.get("href"), str):
+                links[k] = url(v["href"])
+    except (urllib.error.URLError, ValueError, OSError):
+        pass
+    complete = bool(links)
+    if not links:
+        # the older answer has no cover or logo: take its background and icon now, the rest on a later try
+        try:
+            d = http_json(f"{GOG_API}/products/{gid}", None, timeout=timeout)
+        except (urllib.error.URLError, ValueError, OSError):
+            return None
+        imgs = d.get("images") if isinstance(d, dict) else None
+        imgs = imgs if isinstance(imgs, dict) else {}
+        links = {"backgroundImage": url(imgs.get("background")),
+                 "icon": url(imgs.get("icon") or imgs.get("sidebarIcon"))}
+    return ({"cover": links.get("boxArtImage"),
+             "hero": links.get("galaxyBackgroundImage") or links.get("backgroundImage"),
+             "logo": links.get("logo"), "icon": links.get("icon") or links.get("iconSquare")}, complete)
+
+
+def fetch_art(rec, timeout=20):
+    """The pictures Steam's library shows for a game, from the store's public pages, best effort: the tall
+    cover (the library's tiles), the background (the banner of the game's page and the wide tile), the
+    title logo and the icon. -> True when everything the store lists came down, False when something
+    didn't, None when the store couldn't be reached. The attempt is noted in rec (art: the version
+    fetched, art_try: when)."""
+    key = art_key(rec)
+    rec["art_try"] = int(time.time())
+    got = epic_art_links(str(rec["id"])) if rec.get("store") == "epic" else gog_art_links(str(rec["id"]), timeout)
+    if got is None:
+        return None
+    links, complete = got
+    for kind in ("cover", "hero", "logo", "icon"):
+        href = links.get(kind)
+        if not href:
+            continue
+        try:
+            blob = http_blob(href, timeout)
+            stored = store_art(key, rec, kind, blob)
+        except (urllib.error.URLError, OSError):
+            complete = False
+            continue
+        if kind == "icon" and stored:
+            rec["icon"] = str(art_file(key, "icon"))
+    (ART / f"{key}_wide.jpg").unlink(missing_ok=True)     # (the hero is the wide tile too now)
+    if complete:
+        rec["art"] = ART_VERSION
+    return complete
+
+
+def note_art(games):
+    """Fetch the pictures once for a game that hasn't got the current ones (it was installed before the
+    cover and logo were fetched, or the store couldn't be reached then). A failed try waits an hour; with
+    the store out of reach the other games wait for the next sync."""
+    now = time.time()
+    for rec in games.values():
+        if rec.get("art", 0) >= ART_VERSION or now - rec.get("art_try", 0) < ART_RETRY or not rec.get("appid"):
+            continue
+        result = fetch_art(rec, timeout=10)
+        update_installed(rec.get("store", "gog"), str(rec["id"]), rec)
+        if result is None:
+            break
+
+
+def copy_art(grid, games):
+    """Put each game's pictures in Steam's grid folder, where it looks for a non-Steam game's, unless the
+    player has set their own there."""
+    for rec in games.values():
+        for kind, suffix in GRID_ART:
+            src = art_file(art_key(rec), kind)
+            if src is None or not rec.get("appid"):
+                continue
+            stem = f"{rec['appid']}{suffix}"
+            if any((grid / (stem + e)).exists() for e in GRID_EXTS):
+                continue
+            try:
+                grid.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(src, grid / (stem + src.suffix))
+            except OSError:
+                pass
+
+
+def run_download(cmd, env, progress):
+    """A downloader's run (gogdl, Legendary), its progress as @@ lines; progress is the regular expression
+    for its progress line (percent, parts done, parts, time left). -> (exit code, the last lines it said)."""
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env,
+                            stdin=subprocess.DEVNULL, bufsize=0)
+    tail, buf, last_pct = [], b"", -1.0
+    while True:
+        chunk = proc.stdout.read1(4096) if hasattr(proc.stdout, "read1") else proc.stdout.read(4096)
+        if not chunk:
+            break
+        buf += chunk
+        while True:
+            m = re.search(rb"[\r\n]", buf)
+            if not m:
+                break
+            line, buf = buf[:m.start()].decode("utf-8", "replace").strip(), buf[m.end():]
+            if not line:
+                continue
+            pm = progress.search(line)
+            if pm:
+                pct = float(pm.group(1))
+                if pct != last_pct:
+                    last_pct = pct
+                    say(f"@@progress {pct:.1f} {pm.group(2)} {pm.group(3)} {pm.group(4)}")
+            elif "Downloaded:" in line or " + Download" in line or " + Disk" in line or "Cache usage:" in line:
+                continue
+            else:
+                tail = (tail + [line])[-6:]
+    return proc.wait(), tail
+
+
+def gog_install(args):
+    gid = str(args.id)
+    if not gid.isdigit():
+        die("usage: bottle-stores gog install GAME_ID (the number from the games list)")
+    if not AUTH.is_file():
+        die("You're not signed in to GOG.")
+    cache = {g["id"]: g for g in read_json(LIBCACHE).get("games") or []}
+    have = installed("gog")
+    title = (have.get(gid) or cache.get(gid) or {}).get("title") or f"GOG game {gid}"
+    choice = choose_folder(args.folder, have.get(gid))
+    base = Path(choice["path"]) / "GOG Games"
+
+    say(f"Looking up {title}…")
+    code, out, err = gogdl_run(["info", gid, "--platform", "windows"] + (["--lang", args.lang] if args.lang else []),
+                               timeout=180)
+    info = last_json(out)
+    if code != 0 or not isinstance(info, dict) or "folder_name" not in info:
+        why = [l for l in (err or "").strip().splitlines() if l.strip()][-1:] or [""]
+        if "support" in why[0].lower() or "content system" in why[0].lower():
+            die(f"{title} has no Windows download on GOG.")
+        die(f"GOG didn't give the details for {title}: {why[0] or 'no answer'}. "
+            "Is it in your library, and are you still signed in?")
+    lang = pick_language(info, args.lang)
+    need = int((info.get("size") or {}).get("disk_size") or 0)
+    base.mkdir(parents=True, exist_ok=True)
+    dest = base / info["folder_name"]
+    free = free_space(base) + (sum(f.stat().st_size for f in dest.rglob("*") if f.is_file()) if dest.is_dir() else 0)
+    if need and free < need + SPACE_MARGIN:
+        die(f"{title} needs {human(need)} and there's {human(free)} free in {choice['label']}. "
+            "Free some space or pick another game folder.")
+    say(f"Downloading {title}{f' ({human(need)})' if need else ''} to {choice['label']} / GOG Games / {info['folder_name']}")
+    with locked("gog-" + gid):
+        code, tail = run_download(gogdl_cmd() + ["--auth-config-path", str(AUTH), "download", gid, "--path", str(base),
+                                                 "--platform", "windows", "--lang", lang], gogdl_env(), PROGRESS)
+        if code != 0:
+            die(f"the download stopped ({tail[-1] if tail else 'exit ' + str(code)}). Starting it again picks up what's done.")
+        task = play_task(dest)
+        if task is None:
+            die(f"{title} downloaded to {dest}, but I couldn't find which program starts it "
+                "(no goggame-*.info with a play task). Add it to Steam by hand from that folder.")
+        exe, gargs, start = task
+        old = have.get(gid) or {}
+        # (GOG doesn't always say how big a game is up front: measure what's on disk then)
+        size = need or sum(f.stat().st_size for f in dest.rglob("*") if f.is_file())
+        rec = {"id": gid, "store": "gog", "title": title, "dir": str(dest), "exe": exe, "args": gargs, "startdir": start,
+               "folder": choice["name"], "size": size, "installed": int(time.time()), "lang": lang,
+               "slug": (cache.get(gid) or {}).get("slug", ""), "icon": old.get("icon", "")}
+        rec["appid"] = old.get("appid") or shortcut_appid(f'"{exe}"', title)
+        rec["galaxy"] = bool(uses_galaxy(dest))
+        rec["art"], rec["art_try"] = old.get("art", 0), old.get("art_try", 0)
+        if rec["art"] < ART_VERSION:
+            fetch_art(rec)
+        update_installed("gog", gid, rec)
+    say(f"@@done {gid}")
+    say(f"Installed {title}. It shows in Steam (collection “{GOG_TAG}”) after Steam restarts.")
+    return 0
+
+
+def gog_remove(args):
+    gid = str(args.id)
+    have = installed("gog")
+    rec = have.get(gid)
+    if rec is None:
+        die(f"GOG game {gid} isn't installed here.")
+    rec["store"] = "gog"
+    with locked("gog-" + gid):
+        delete_game_folder(rec, "GOG Games")
+        # gogdl's record of what it installed: left behind, a reinstall would skip files
+        for m in (GOGDL_CONFIG / "heroic_gogdl/manifests").glob(gid + "*"):
+            m.unlink(missing_ok=True)
+        forget_game(rec, args.purge)
+        update_installed("gog", gid, None)
+    say(f"@@done {gid}")
+    say(f"Removed {rec['title']}." + ("" if args.purge else " Its saves and settings (the Wine prefix) are kept."))
+    return 0
+
+
+def delete_game_folder(rec, store_folder):
+    """Delete an installed game's files, but only inside a folder called store_folder ("GOG Games"):
+    never something else by mistake."""
+    d = Path(rec["dir"])
+    if d.is_dir() and d.parent.name == store_folder:
+        say(f"Deleting {rec['title']} ({d})…")
+        shutil.rmtree(d, ignore_errors=True)
+        if d.exists():
+            die(f"couldn't delete everything in {d}.")
+    elif d.is_dir():
+        say(f"{d} isn't in a folder called {store_folder}; I left its files alone.")
+
+
+def forget_game(rec, purge):
+    """What a removed game leaves besides its files: its Wine prefix (only with purge: it holds saves
+    and settings), our pictures of it, and the copies of them in Steam's grid folder."""
+    if purge:
+        for apps in steam_libraries():
+            shutil.rmtree(apps / "compatdata" / str(rec["appid"]), ignore_errors=True)
+    for f in ART.glob(f"{art_key(rec)}_*"):
+        f.unlink(missing_ok=True)
+    for u in steam_user_dirs():
+        for _kind, suffix in GRID_ART:
+            for e in GRID_EXTS:
+                (u / "config/grid" / f"{rec['appid']}{suffix}{e}").unlink(missing_ok=True)
+
+
+# ------------------------------------------------------------------ Epic Games: Legendary
+
+EPIC_PROGRESS = re.compile(r"= Progress: ([\d.]+)% \((\d+)/(\d+)\), Running for [\d:]+, ETA: ([\d:]+)")
+EPIC_APP = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
+
+
+def legendary_available():
+    return bool(os.environ.get("BOTTLE_LEGENDARY")) or (Path(LEGENDARY_DIR) / "legendary/cli.py").is_file()
+
+
+def legendary_cmd():
+    custom = os.environ.get("BOTTLE_LEGENDARY")
+    if custom:
+        return shlex.split(custom)
+    return [sys.executable or "python3", "-c", LGD_BOOT]
+
+
+def legendary_env():
+    # (without Steam's LD_PRELOAD and LD_LIBRARY_PATH: a game's launch sets them, and they don't suit Python)
+    env = {k: v for k, v in os.environ.items() if k not in ("LD_PRELOAD", "LD_LIBRARY_PATH")}
+    env["PYTHONPATH"] = LEGENDARY_DIR + (":" + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+    env["LEGENDARY_CONFIG_PATH"] = str(LGD_CONFIG)
+    env["PYTHONUNBUFFERED"] = "1"
+    env["PYTHONWARNINGS"] = "ignore"
+    return env
+
+
+def legendary_run(args, timeout=300):
+    """Legendary's output, without ever showing it (a launch and a sign-in print tokens). -> (code, out, err)"""
+    if not legendary_available():
+        die("Epic's downloader isn't in the VM yet. Choose Bottle > Update the Bottle, then try again.")
+    private_dirs()
+    try:
+        r = subprocess.run(legendary_cmd() + args, capture_output=True, text=True, timeout=timeout,
+                           env=legendary_env(), stdin=subprocess.DEVNULL)
+    except subprocess.TimeoutExpired:
+        die("Epic didn't answer in time. Check the VM's network and try again.")
+    return r.returncode, r.stdout, r.stderr
+
+
+def private_dirs():
+    """Our folder and Legendary's hold sign-ins: only the player gets in."""
+    for d in (STATE, LGD_CONFIG):
+        d.mkdir(parents=True, exist_ok=True)
+        os.chmod(d, 0o700)
+
+
+def lgd_json(text):
+    """The last line of Legendary's output that is JSON (a list or an object), or None."""
+    for line in reversed((text or "").strip().splitlines()):
+        line = line.strip()
+        if line[:1] in ("[", "{"):
+            try:
+                return json.loads(line)
+            except ValueError:
+                continue
+    return None
+
+
+def lgd_why(text):
+    """What went wrong, from Legendary's messages: a failed check if it names one, else its last error line."""
+    lines = [l.strip() for l in (text or "").splitlines() if l.strip()]
+    fails = [l for l in lines if "Failure:" in l]
+    bad = [l for l in lines if re.search(r"\b(ERROR|CRITICAL|FATAL)\b", l)]
+    line = (fails or bad or lines or ["no answer"])[0 if fails else -1]
+    return re.sub(r"^(\[[^\]]*\]\s*[A-Z]+:\s*|\s*!\s*Failure:\s*)", "", line)[:200]
+
+
+def epic_user():
+    """The signed-in Epic account's saved data, or {} (not signed in, or the sign-in has run out)."""
+    d = read_json(LGD_CONFIG / "user.json")
+    if not d.get("refresh_token"):
+        return {}
+    exp = d.get("refresh_expires_at")
+    if isinstance(exp, str):
+        try:
+            if datetime.fromisoformat(exp.replace("Z", "+00:00")).timestamp() < time.time():
+                return {}
+        except ValueError:
+            pass
+    return d
+
+
+def epic_extract_code(text):
+    """The code from what Epic's sign-in page ends on: JSON with "authorizationCode", or the bare code."""
+    text = (text or "").strip()
+    m = re.search(r'"authorizationCode"\s*:\s*"([^"]+)"', text)
+    if m:
+        return m.group(1)
+    m = re.search(r"[?&#]code=([^&#\s\"']+)", text)
+    if m:
+        return m.group(1)
+    text = text.strip("\"'")
+    return text if re.fullmatch(r"[A-Za-z0-9]{16,64}", text) else None
+
+
+def epic_status(args):
+    games = installed("epic")
+    user = epic_user()
+    info = {"signedIn": bool(user), "user": user.get("displayName", "") if user else "",
+            "installed": len(games), "downloader": legendary_available()}
+    if args.json:
+        print(json.dumps(info))
+    else:
+        say(f"Epic Games: {'signed in as ' + (info['user'] or 'an account') if user else 'not signed in'}; "
+            f"{len(games)} game(s) installed")
+        if not info["downloader"]:
+            say("Epic's downloader isn't in the VM yet (Bottle > Update the Bottle).")
+    return 0
+
+
+def epic_login(args):
+    code = epic_extract_code(args.code)
+    if not code:
+        die("I couldn't find an Epic code in that. After you sign in, Epic's page shows some text that "
+            "contains \"authorizationCode\"; copy all of that text and paste it.")
+    private_dirs()
+    user_file = LGD_CONFIG / "user.json"
+    old = user_file.read_bytes() if user_file.is_file() else None
+    user_file.unlink(missing_ok=True)          # (with a sign-in on file Legendary would keep it and ignore the code)
+    legendary_run(["auth", "--code", code], timeout=120)
+    user = epic_user()
+    if not user:
+        user_file.unlink(missing_ok=True)
+        if old is not None:
+            user_file.write_bytes(old)
+            os.chmod(user_file, 0o600)
+        die("Epic didn't accept that code. A code works once and expires within a minute or so: "
+            "sign in again and paste the new text straight away.")
+    os.chmod(user_file, 0o600)
+    EPIC_LIBCACHE.unlink(missing_ok=True)
+    name = user.get("displayName") or ""
+    say(f"Signed in to Epic Games{' as ' + name if name else ''}.")
+    return 0
+
+
+def epic_logout(args):
+    for p in (LGD_CONFIG / "user.json", EPIC_LIBCACHE, LGD_CONFIG / "assets.json"):
+        p.unlink(missing_ok=True)
+    say("Signed out of Epic Games. Installed games stay.")
+    return 0
+
+
+def epic_images(meta):
+    """The pictures Epic lists for a game (its catalog entry's keyImages): {cover, hero, logo, icon: address}
+    (None for one it hasn't got)."""
+    by_type = {}
+    for im in (meta or {}).get("keyImages") or []:
+        if isinstance(im, dict) and isinstance(im.get("url"), str) and im["url"].startswith(("https://", "http://")):
+            by_type.setdefault(im.get("type"), im["url"])
+
+    def pick(*types):
+        return next((by_type[t] for t in types if t in by_type), None)
+
+    return {"cover": pick("DieselGameBoxTall", "OfferImageTall", "DieselStoreFrontTall"),
+            "hero": pick("DieselGameBox", "DieselStoreFrontWide", "OfferImageWide"),
+            "logo": pick("DieselGameBoxLogo", "ProductLogo"),
+            "icon": pick("Thumbnail")}
+
+
+def epic_art_links(app):
+    """Epic's pictures for an installed game, from the catalog entry Legendary saved: (links, complete)."""
+    meta = read_json(LGD_CONFIG / "metadata" / f"{app}.json").get("metadata")
+    if not isinstance(meta, dict):
+        return {}, False                          # (not saved yet: the next try finds it)
+    return epic_images(meta), True
+
+
+def epic_rows(raw):
+    """The games Legendary lists, as {id, title, version, image}: those with a Windows version it can
+    install itself (not the ones Epic hands on to Ubisoft Connect or EA), by title."""
+    rows = []
+    for g in raw if isinstance(raw, list) else []:
+        if not isinstance(g, dict) or not g.get("app_name"):
+            continue
+        meta = g.get("metadata") if isinstance(g.get("metadata"), dict) else {}
+        version = ((g.get("asset_infos") or {}).get("Windows") or {}).get("build_version")
+        attrs = meta.get("customAttributes") if isinstance(meta.get("customAttributes"), dict) else {}
+        third_party = any(isinstance(attrs.get(k), dict) and attrs[k].get("value")
+                          for k in ("ThirdPartyManagedApp", "ThirdPartyManagedProvider"))
+        addon = any(isinstance(c, dict) and c.get("path") == "addons/launchable" for c in meta.get("categories") or [])
+        if not version or third_party or addon:
+            continue
+        rows.append({"id": str(g["app_name"]), "title": (g.get("app_title") or str(g["app_name"])).strip(),
+                     "version": str(version), "image": epic_images(meta).get("cover") or "",
+                     "ns": str(meta.get("namespace") or ""), "item": str(meta.get("id") or "")})
+    rows.sort(key=lambda r: r["title"].lower())
+    return rows
+
+
+EPIC_OFFERS_QUERY = ("query($ns: String!) { Catalog { catalogOffers(namespace: $ns, params: {count: 100}) "
+                     "{ elements { id releaseDate pcReleaseDate items { id } } } } }")
+
+
+def epic_release_year(ns, item):
+    """The year the game (its catalog item in the namespace) came out on PC, from Epic's public store: the
+    earliest of its offers' PC release dates, else of their store dates. 0: the store gives none.
+    OSError / ValueError when the store can't be reached or answers oddly."""
+    req = urllib.request.Request(
+        EPIC_GRAPHQL, data=json.dumps({"query": EPIC_OFFERS_QUERY, "variables": {"ns": ns}}).encode(),
+        headers={"User-Agent": "Portalistic/1 (bottle-stores)", "Accept": "application/json",
+                 "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=10) as r:
+        data = json.loads(r.read().decode("utf-8", "replace"))
+    catalog = (data.get("data") or {}).get("Catalog") if isinstance(data, dict) else None
+    offers = ((catalog or {}).get("catalogOffers") or {}).get("elements")
+    if not isinstance(offers, list):
+        raise ValueError("Epic's store gave no offers")
+    pc, store = [], []
+    for o in offers:
+        if not isinstance(o, dict) or item not in {i.get("id") for i in o.get("items") or [] if isinstance(i, dict)}:
+            continue
+        for key, found in (("pcReleaseDate", pc), ("releaseDate", store)):
+            y = year_of(o.get(key))
+            if y:
+                found.append(y)
+    return min(pc or store or [0])
+
+
+def epic_years(games, budget=25.0):
+    """The release year of each game in `games` ([{id, ns, item}]) -> {id: year}, from what is kept in EPIC_YEARS.
+    Asks Epic's store, for up to `budget` seconds, about the games not kept yet (a few at a time); a year
+    that is found is kept for good, "no year" is asked again after a week, and when the store can't be
+    reached it isn't asked again for an hour. The games not reached stay for the next call."""
+    data = read_json(EPIC_YEARS)
+    kept = data.get("years") if isinstance(data.get("years"), dict) else {}
+    now = time.time()
+
+    def wanted(g):
+        k = kept.get(g["id"])
+        if not (g.get("ns") and g.get("item")):
+            return False
+        return not isinstance(k, dict) or (not k.get("y") and now - k.get("t", 0) > EPIC_YEAR_UNKNOWN_RETRY)
+
+    todo = [g for g in games if wanted(g)]
+    if todo and now - data.get("failed", 0) > EPIC_YEARS_RETRY:
+        deadline = time.monotonic() + budget
+        trouble = {"n": 0}
+
+        def ask(g):
+            if trouble["n"] >= 4 or time.monotonic() > deadline:
+                return g["id"], None
+            try:
+                year = epic_release_year(g["ns"], g["item"])
+            except (OSError, ValueError):
+                trouble["n"] += 1
+                return g["id"], None
+            trouble["n"] = 0
+            return g["id"], year
+
+        pool = concurrent.futures.ThreadPoolExecutor(6)
+        try:
+            for gid, year in pool.map(ask, todo):
+                if year is not None:
+                    kept[gid] = {"y": year, "t": now}
+        finally:
+            pool.shutdown(wait=True)
+        out = {"v": 1, "years": kept}
+        if trouble["n"] >= 4:
+            out["failed"] = now
+        write_json(EPIC_YEARS, out)
+    return {g["id"]: int((kept.get(g["id"]) or {}).get("y") or 0) for g in games}
+
+
+def epic_library(refresh=False):
+    cache = read_json(EPIC_LIBCACHE)
+    fresh = (cache.get("games") and cache.get("v") == LIBRARY_VERSION
+             and time.time() - cache.get("fetched", 0) < LIBRARY_MAX_AGE)
+    if fresh and not refresh:
+        return cache["games"]
+    if not epic_user():
+        if cache.get("games"):
+            return cache["games"]
+        die("You're not signed in to Epic Games (or the sign-in expired). Sign in again.")
+    code, out, err = legendary_run(["list", "--json", "--platform", "Windows"], timeout=900)
+    data = lgd_json(out)
+    if code != 0 or not isinstance(data, list):
+        if cache.get("games"):
+            say(f"(couldn't reach Epic: {lgd_why(err)}; showing the list from before)")
+            return cache["games"]
+        die(f"couldn't get your Epic games: {lgd_why(err)}")
+    games = epic_rows(data)
+    write_json(EPIC_LIBCACHE, {"fetched": time.time(), "v": LIBRARY_VERSION, "games": games})
+    return games
+
+
+def epic_list(args):
+    if not epic_user():
+        die("You're not signed in to Epic Games (or the sign-in expired).")
+    games = epic_library(args.refresh)
+    have = installed("epic")
+    years = epic_years(games)
+    rows = [{"id": g["id"], "title": g["title"], "installed": g["id"] in have,
+             "size": have.get(g["id"], {}).get("size", 0), "image": g.get("image", ""),
+             "year": years.get(g["id"], 0),
+             "update": bool(g["id"] in have and g.get("version") and have[g["id"]].get("version") != g["version"])}
+            for g in games]
+    for gid, rec in have.items():     # an installed game the list doesn't show (gone from the account)
+        if not any(r["id"] == gid for r in rows):
+            rows.append({"id": gid, "title": rec["title"], "installed": True, "size": rec.get("size", 0),
+                         "image": "", "year": 0, "update": False})
+    if args.json:
+        print(json.dumps({"games": rows}))
+    else:
+        for r in rows:
+            mark = "update   " if r["update"] else ("installed" if r["installed"] else "         ")
+            say(f"{r['id']:>34}  {mark}  {r['title']}")
+        say(f"{len(rows)} game(s)")
+    return 0
+
+
+def epic_install(args):
+    app = str(args.id)
+    if not EPIC_APP.fullmatch(app):
+        die("usage: bottle-stores epic install GAME_ID (the name from the games list)")
+    if not epic_user():
+        die("You're not signed in to Epic Games (or the sign-in expired).")
+    cache = {g["id"]: g for g in read_json(EPIC_LIBCACHE).get("games") or []}
+    have = installed("epic")
+    title = (have.get(app) or cache.get(app) or {}).get("title") or f"Epic game {app}"
+    choice = choose_folder(args.folder, have.get(app))
+    base = Path(choice["path"]) / "Epic Games"
+    base.mkdir(parents=True, exist_ok=True)
+    say(f"Downloading {title} to {choice['label']} / Epic Games")
+    # (one at a time: Legendary keeps a single lock on its list of installed games)
+    with locked("epic"):
+        code, tail = run_download(
+            legendary_cmd() + ["-y", "install", app, "--base-path", str(base), "--platform", "Windows",
+                               "--skip-dlcs", "--skip-sdl", "--max-shared-memory", "512"],
+            legendary_env(), EPIC_PROGRESS)
+        if code != 0:
+            die(f"the download stopped ({lgd_why(chr(10).join(tail))}). Starting it again picks up what's done.")
+        igame = read_json(LGD_CONFIG / "installed.json").get(app)
+        if not isinstance(igame, dict) or not igame.get("install_path"):
+            die(f"Epic didn't install {title} ({lgd_why(chr(10).join(tail))}). "
+                "A game that comes from another store (EA, Ubisoft) has to be installed there.")
+        install_dir = Path(igame["install_path"])
+        rel = str(igame.get("executable") or "").replace("\\", "/").lstrip("/")
+        exe = find_nocase(install_dir, rel) if rel else None
+        if exe is None or not exe.is_file():
+            die(f"{title} downloaded to {install_dir}, but I couldn't find the program that starts it "
+                f"({rel or 'Epic lists none'}). Add it to Steam by hand from that folder.")
+        old = have.get(app) or {}
+        size = int(igame.get("install_size") or 0) or sum(f.stat().st_size for f in install_dir.rglob("*") if f.is_file())
+        title = igame.get("title") or title
+        rec = {"id": app, "store": "epic", "title": title, "dir": str(install_dir), "exe": str(exe), "args": "",
+               "startdir": str(exe.parent), "folder": choice["name"], "size": size, "installed": int(time.time()),
+               "version": str(igame.get("version") or ""), "icon": old.get("icon", "")}
+        rec["appid"] = old.get("appid") or shortcut_appid(f'"{exe}"', title)
+        rec["art"], rec["art_try"] = old.get("art", 0), old.get("art_try", 0)
+        if rec["art"] < ART_VERSION:
+            fetch_art(rec)
+        update_installed("epic", app, rec)
+    say(f"@@done {app}")
+    say(f"Installed {title}. It shows in Steam (collection “{STORES['epic']}”) after Steam restarts.")
+    return 0
+
+
+def epic_remove(args):
+    app = str(args.id)
+    have = installed("epic")
+    rec = have.get(app)
+    if rec is None:
+        die(f"Epic game {app} isn't installed here.")
+    rec["store"] = "epic"
+    with locked("epic"):
+        delete_game_folder(rec, "Epic Games")
+        legendary_run(["-y", "uninstall", "--keep-files", app], timeout=120)     # (drops Legendary's record of it)
+        forget_game(rec, args.purge)
+        update_installed("epic", app, None)
+    say(f"@@done {app}")
+    say(f"Removed {rec['title']}." + ("" if args.purge else " Its saves and settings (the Wine prefix) are kept."))
+    return 0
+
+
+def epic_launch_args(app):
+    """The arguments an Epic game is started with beyond its program: its own, and the sign-in (a token
+    that works once). -> (list, a note for the log, which never holds the token)."""
+    if not EPIC_APP.fullmatch(app):
+        return [], f"{app!r} isn't a game name: started without Epic's sign-in"
+    err = ""
+    for extra in ([], ["--offline"]):         # (offline: no token, for when Epic can't be reached)
+        code, out, err = legendary_run(["launch", app, "--json", "--skip-version-check", "--no-wine"] + extra,
+                                       timeout=90)
+        data = lgd_json(out)
+        if code == 0 and isinstance(data, dict):
+            found = [str(a) for key in ("game_parameters", "user_parameters", "egl_parameters")
+                     for a in data.get(key) or []]
+            return found, ("Epic's sign-in added" if not extra else "no sign-in with Epic: started offline")
+    return [], f"Legendary gave no launch arguments ({lgd_why(err)}): started without Epic's sign-in"
+
+
+# ------------------------------------------------------------------ Comet: the Galaxy client's service
+
+def port_listening(port):
+    """Is something listening on 127.0.0.1:port? Read from the kernel's table, so no connection is
+    made (Comet would count one as a game)."""
+    want = f"{port:04X}"
+    for table in ("/proc/net/tcp", "/proc/net/tcp6"):
+        try:
+            lines = Path(table).read_text().splitlines()[1:]
+        except OSError:
+            continue
+        for line in lines:
+            f = line.split()
+            if len(f) > 3 and f[3] == "0A" and f[1].rsplit(":", 1)[-1] == want:
+                return True
+    return False
+
+
+def log_note(path, msg):
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a") as f:
+            f.write(f"[bottle-stores {time.strftime('%H:%M:%S')}] {msg}\n")
+    except OSError:
+        pass
+
+
+def comet_note(msg):
+    log_note(COMET_LOG, msg)
+
+
+def _comet_dies_with_us():
+    """(in the new process) Comet gets Ctrl-C, which it shuts down on, if this tool is killed."""
+    try:
+        import ctypes
+        ctypes.CDLL(None, use_errno=True).prctl(1, int(signal.SIGINT))   # PR_SET_PDEATHSIG
+    except Exception:
+        pass
+
+
+def comet_start():
+    """Make sure Comet is up for a game about to start. -> (the process if this call started it, a note
+    for the log). Never raises for the ordinary reasons it can't (no Comet, not signed in)."""
+    if port_listening(COMET_PORT):
+        return None, "Comet is already running"
+    if not COMET_BIN.is_file():
+        return None, "Comet isn't installed in this VM (Bottle > Update the Bottle)"
+    if not AUTH.is_file():
+        return None, "not signed in to GOG, so the game gets no Galaxy sign-in"
+    saved = {k: os.environ.pop(k) for k in ("LD_PRELOAD", "LD_LIBRARY_PATH") if k in os.environ}
+    try:
+        if gog_token() is None:             # gogdl renews an old token and saves it
+            return None, "GOG didn't confirm the sign-in; sign in again in Portalistic"
+    finally:
+        os.environ.update(saved)
+    link_dir = COMET_CFG / "heroic/gog_store"           # (Comet looks for Heroic's file name)
+    link_dir.mkdir(parents=True, exist_ok=True)
+    os.chmod(COMET_CFG, 0o700)
+    link = link_dir / "auth.json"
+    if link.is_symlink() or link.exists():
+        link.unlink()
+    link.symlink_to(AUTH)
+    name = read_json(USER).get("username") or "gog"
+    env = {k: v for k, v in os.environ.items() if k not in ("LD_PRELOAD", "LD_LIBRARY_PATH")}
+    env["XDG_CONFIG_PATH"] = str(COMET_CFG)
+    env.setdefault("COMET_LOG", "info")
+    COMET_LOG.parent.mkdir(parents=True, exist_ok=True)
+    if COMET_LOG.is_file() and COMET_LOG.stat().st_size > (1 << 20):
+        COMET_LOG.write_text("")
+    with open(COMET_LOG, "ab") as log:
+        proc = subprocess.Popen([str(COMET_BIN), "--from-heroic", "--username", name], env=env,
+                                stdin=subprocess.DEVNULL, stdout=log, stderr=log,
+                                start_new_session=True, preexec_fn=_comet_dies_with_us)
+    for _ in range(40):                                 # up to 10 s to start listening
+        if port_listening(COMET_PORT):
+            break
+        if proc.poll() is not None:
+            return None, f"Comet stopped at once (exit {proc.returncode}); see {COMET_LOG}"
+        time.sleep(0.25)
+    if not COMET_PEER_DONE.is_file():                   # first time: Comet fetches GOG's Galaxy files
+        say("Fetching the Galaxy files this game needs from GOG (once, about 30 MB)…")
+        for _ in range(240):                            # up to 2 minutes
+            if COMET_PEER_DONE.is_file() or proc.poll() is not None:
+                break
+            time.sleep(0.5)
+        if not COMET_PEER_DONE.is_file():
+            return proc, "Comet is up, but the Galaxy files didn't finish downloading"
+    return proc, "Comet started"
+
+
+def comet_stop(proc):
+    if proc is None or proc.poll() is not None:
+        return
+    proc.send_signal(signal.SIGINT)                     # (it finishes what it's saving, then exits)
+    try:
+        proc.wait(10)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+
+
+def cmd_run(args):
+    cmd = list(args.command or [])
+    if cmd[:1] == ["--"]:
+        cmd = cmd[1:]
+    if not cmd:
+        die("usage: bottle-stores run [--epic ID] -- COMMAND [ARGUMENTS...]")
+    comet, extra = None, []
+    if args.epic:
+        try:
+            extra, note = epic_launch_args(args.epic)
+            log_note(EPIC_LOG, f"{args.epic}: {note}")
+        except (Exception, SystemExit) as e:            # whatever goes wrong, the game still starts
+            log_note(EPIC_LOG, f"{args.epic}: couldn't get Epic's launch arguments: {e!r}")
+    else:
+        try:
+            comet, note = comet_start()
+            comet_note(note)
+        except (Exception, SystemExit) as e:
+            comet_note(f"couldn't start Comet: {e!r}")
+    try:
+        child = subprocess.Popen(cmd + extra)
+    except OSError as e:
+        comet_stop(comet)
+        say(f"error: can't run {cmd[0]}: {e}")
+        return 127
+
+    def forward(sig, _frame):
+        try:
+            child.send_signal(sig)
+        except ProcessLookupError:
+            pass
+    for s in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP, signal.SIGQUIT, signal.SIGUSR1, signal.SIGUSR2):
+        signal.signal(s, forward)
+    rc = child.wait()
+    comet_stop(comet)
+    return 128 - rc if rc < 0 else rc
+
+
+def steam_libraries():
+    out = [STEAM / "steamapps"]
+    vdf = STEAM / "steamapps/libraryfolders.vdf"
+    if vdf.is_file():
+        out += [Path(p) / "steamapps" for p in re.findall(r'"path"\s+"([^"]+)"', vdf.read_text(errors="replace"))]
+    return [p for p in out if p.is_dir()]
+
+
+def cmd_status(args):
+    have = all_installed()
+    if not have:
+        say("No games from other stores installed.")
+    for key, rec in sorted(have.items(), key=lambda kv: kv[1]["title"].lower()):
+        ok = "" if Path(rec["exe"]).is_file() else "  (files missing: is the drive connected?)"
+        say(f"  {STORES[rec['store']]} {rec['id']}: {rec['title']}  [{rec['appid']}]  {rec['dir']}{ok}")
+    return 0
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Games from other stores in Steam's library.")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    g = sub.add_parser("gog").add_subparsers(dest="gcmd", required=True)
+    p = g.add_parser("status"); p.add_argument("--json", action="store_true"); p.set_defaults(fn=gog_status)
+    p = g.add_parser("login-url"); p.set_defaults(fn=lambda a: say(GOG_LOGIN_URL) or 0)
+    p = g.add_parser("login"); p.add_argument("code"); p.set_defaults(fn=gog_login)
+    p = g.add_parser("logout"); p.set_defaults(fn=gog_logout)
+    p = g.add_parser("list"); p.add_argument("--json", action="store_true"); p.add_argument("--refresh", action="store_true"); p.set_defaults(fn=gog_list)
+    p = g.add_parser("folders"); p.add_argument("--json", action="store_true"); p.set_defaults(fn=gog_folders)
+    p = g.add_parser("install"); p.add_argument("id"); p.add_argument("--folder"); p.add_argument("--lang"); p.set_defaults(fn=gog_install)
+    p = g.add_parser("remove"); p.add_argument("id"); p.add_argument("--purge", action="store_true"); p.set_defaults(fn=gog_remove)
+    e = sub.add_parser("epic").add_subparsers(dest="ecmd", required=True)
+    p = e.add_parser("status"); p.add_argument("--json", action="store_true"); p.set_defaults(fn=epic_status)
+    p = e.add_parser("login-url"); p.set_defaults(fn=lambda a: say(EPIC_LOGIN_URL) or 0)
+    p = e.add_parser("login"); p.add_argument("code"); p.set_defaults(fn=epic_login)
+    p = e.add_parser("logout"); p.set_defaults(fn=epic_logout)
+    p = e.add_parser("list"); p.add_argument("--json", action="store_true"); p.add_argument("--refresh", action="store_true"); p.set_defaults(fn=epic_list)
+    p = e.add_parser("folders"); p.add_argument("--json", action="store_true"); p.set_defaults(fn=gog_folders)
+    p = e.add_parser("install"); p.add_argument("id"); p.add_argument("--folder"); p.set_defaults(fn=epic_install)
+    p = e.add_parser("remove"); p.add_argument("id"); p.add_argument("--purge", action="store_true"); p.set_defaults(fn=epic_remove)
+    p = sub.add_parser("sync"); p.add_argument("--force", action="store_true"); p.set_defaults(fn=cmd_sync)
+    p = sub.add_parser("run", help="run a game with Comet (GOG) or Epic's sign-in beside it")
+    p.add_argument("--epic", metavar="ID", help="an Epic game: add Epic's sign-in to its arguments")
+    p.add_argument("command", nargs=argparse.REMAINDER); p.set_defaults(fn=cmd_run)
+    p = sub.add_parser("ids"); p.set_defaults(fn=cmd_ids)
+    p = sub.add_parser("status"); p.set_defaults(fn=cmd_status)
+    args = ap.parse_args()
+    return args.fn(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main() or 0)

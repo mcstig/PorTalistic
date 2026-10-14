@@ -1,0 +1,4 @@
+libVkLayer_bottle_present.so: built 2026-10-14 from ../bottle_present.c (sha1 first 16: 4671f9279fbf7a2e) with build-i386.sh (gcc 13.3 -m32, Ubuntu 24.04).
+vk-probe: guest/tests/vk32-probe.c (same build line, -ldl, no libxcb).
+Tested 2026-10-14: under FEX with the 32-bit Venus driver (layer loads, "managed (CPU-copy swapchain)", feature stand-ins for DXVK) and
+Blades of Time (GOG, 32-bit) through Steam: it starts and renders. install-x86.sh warns when ../bottle_present.c no longer hashes to the line above.

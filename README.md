@@ -11,7 +11,7 @@ your Mac, drawing with the Mac's GPU, and Steam plays Windows games through Prot
   share of it (2 GB on a 4 GB Mac, 8 GB on a 16 GB one); bigger games want a Mac with 16 GB.
 - Unzip it and move Portalistic to Applications. Its first launch downloads its Linux system (a
   little over 2 GB), then Steam installs itself and asks you to sign in.
-- Games go in Games/Portalistic in your home folder. Bottle > Add a Game Folder adds another
+- Games go in Games/Portalistic in your home folder. Game Folders > Add a Game Folder adds another
   folder or an external drive (Steam's own Add Drive can't see your Mac's drives; Portalistic
   offers a drive when you connect it). The Linux system's own drive (Steam's "Internal Drive") is 20 GB:
   Linux, Steam and Proton, not games.
@@ -132,16 +132,25 @@ the first time (games with a Linux version default to it).
 | `bottle xcode` | Opens the app's Xcode project and sets your signing team; from then on the app is built with Xcode, signed with your team |
 | `bottle steam-gpu [on\|off]` | Steam's interface (Big Picture) on the Mac's GPU through zink, after checking it works; off goes back |
 | `bottle ui [bigpicture\|desktop]` | Steam's interface in the bottle: Big Picture (default, as on SteamOS) or its desktop windows |
+| `bottle mode [game\|desktop\|install\|status]` | Game Mode (Steam's Big Picture fills the screen; the default) or Desktop Mode (KDE Plasma, as on a Steam Deck; the first switch to it downloads about 550 MB); no argument: which one |
 | `bottle library` / `bottle play APP_ID` | The installed games (app id, name, state, last played) / start one |
 | `bottle library folders` | Where games go: each game folder, the VM's disk, the free space on each, how many games each has, and the default for new games |
-| `bottle library add PATH [--default]` | A new place for games: a folder on this Mac (`~/Games/Portalistic`) or a drive (`/Volumes/SSD`: Portalistic makes a "Portalistic Library" folder on it). Restarts the VM. Also in the app: Bottle > Add a Game Folder… (see "Where games go" below) |
+| `bottle library add PATH [--default]` | A new place for games: a folder on this Mac (`~/Games/Portalistic`) or a drive (`/Volumes/SSD`: Portalistic makes a "Portalistic Library" folder on it). Restarts the VM. Also in the app: Game Folders > Add a Game Folder… (see "Where games go" below) |
 | `bottle library default NAME` | Where new games install (a name from `bottle library folders`, or `vm` for the VM's disk); restarts Steam. Steam's own Settings > Storage > Make Default works too |
 | `bottle library remove NAME` | Stop using a game folder; its games stay in it, and `bottle library add` brings them back. Restarts the VM |
 | `bottle disk` | What fills the VM's disk, how much of the Mac it takes, and the Mac's free space |
 | `bottle version GAME linux\|windows` | Run a game (app ID, part of its name or its initials: `cs2`, `w3`) as its Linux version (Counter-Strike 2: Valve's anti-cheat only accepts that one here) or as its Windows version through Proton (the default); restarts Steam, which downloads that version. No arguments: every game's. Steam's own setting (Properties > Compatibility, "Force the use of a specific Steam Play compatibility tool") works as well and now sticks |
+| `bottle gog login ADDRESS` / `bottle gog logout` | Sign in to GOG (`bottle gog login-url` prints where; ADDRESS is the page the browser ends on, or just its code) / forget the sign-in. Also in the app: Stores > GOG Games… (see "GOG games" below) |
+| `bottle gog list` / `bottle gog folders` | The games your GOG account owns that have a Windows version / the game folders they can go to |
+| `bottle gog install ID [--folder NAME]` | Downloads a GOG game into a game folder (`GOG Games` inside it) and adds it to Steam as a non-Steam game that runs through Proton; restarts Steam to show it. Running it again updates the game |
+| `bottle gog remove ID [--purge]` | Deletes the game and its Steam entry (`--purge`: also its Wine prefix, which holds saves and settings); restarts Steam |
+| `bottle epic login TEXT` / `bottle epic logout` | Sign in to Epic Games (`bottle epic login-url` prints where; TEXT is what Epic's page shows after signing in, or just its `authorizationCode`) / forget the sign-in. Also in the app: Stores > Epic Games… (see "Epic games" below) |
+| `bottle epic list` / `bottle epic folders` | The games your Epic account owns that have a Windows version Legendary can install / the game folders they can go to |
+| `bottle epic install ID [--folder NAME]` | Downloads an Epic game (ID: the name `list` shows) into a game folder (`Epic Games` inside it) and adds it to Steam as a non-Steam game that runs through Proton; restarts Steam to show it. Running it again updates the game |
+| `bottle epic remove ID [--purge]` | Deletes the game and its Steam entry (`--purge`: also its Wine prefix); restarts Steam |
 | `bottle update` | Copies this kit into the VM and brings it up to date (after unzipping a newer kit) |
 | `bottle setup [IMAGE]` | First launch on a Mac without the VM: downloads Portalistic's Linux image (`host/image.env`), makes the VM, starts it, installs Steam (the app runs it); IMAGE: a local image file |
-| `bottle prebuild` | Builds the VM's own programs in the VM into `guest/prebuilt/aarch64` (see "Portalistic.app" above) |
+| `bottle prebuild [PROGRAM...]` | Builds the VM's own programs in the VM into `guest/prebuilt/aarch64` (see "Portalistic.app" above); with names, only those |
 | `bottle shell` | A shell inside the VM |
 
 **Windows Steam on the Mac itself was tried and dropped (Oct 11-12).** A second bottle ran the
@@ -156,6 +165,154 @@ the VM (`PROTON_LOG=1`, `DXVK_HUD=fps`, `BOTTLE_PRESENT_DEBUG=1`, `BOTTLE_DXVK=0
 
 **Updating to a newer kit:** unzip it over `~/Documents/Projects/PORTALISTIC`, then `bottle update`
 and `bottle steam`.
+
+### GOG games (Oct 14)
+
+Steam in the bottle can't run GOG's own launcher, so Portalistic does what Heroic does. **Stores >
+GOG Games…** (or `bottle gog …`) signs in to GOG, lists the games you own that have a Windows
+version, and installs one: the VM downloads it with `gogdl` (Heroic's GOG downloader, in
+`guest/stores`) into a game folder (the one you chose as default, or another from the menu next to
+the Install button; a drive works, with the usual space check), under `GOG Games`. Then Steam
+restarts (unless a game is running) and the game is in its library as a **non-Steam game** in the
+collection "GOG", in Big Picture too, running through Proton Experimental like every Steam game,
+with DXVK 2.6.2 and vkd3d-proton 3.0.1 from the bottle.
+
+- **The list (both stores' windows)** shows the installed games first, in colour with an "Installed" badge;
+  the others follow in black and white. The menu next to All / Installed orders each group: name A to Z,
+  Z to A, or by year, newest or oldest first (games without a year go last); each store remembers its
+  choice. The year is the release year the store gives: GOG's release date, and for Epic the PC release date
+  of the game's offers in Epic's public store (asked once per game, without signing in, and kept in
+  `epic-years.json` in the stores folder; if the store can't be reached the list comes without years and
+  asks again an hour later). The bar under the grid says "Released YEAR" for a chosen game.
+- **Under the mouse** a cover pops: it swells about 7 % (rising, so it stays clear of its title) with a small
+  overshoot, lifts on a shadow above its neighbours, and eases back when the mouse leaves. With "Reduce
+  motion" on in System Settings it changes size at once instead. Only these two windows do this.
+- **Signing in** opens GOG's own page in your browser. The browser ends on an almost empty page;
+  you copy its address (it contains `code=`) and paste it in the window. Portalistic never sees
+  your password; the sign-in GOG hands back is kept in the VM (`~/.config/steamos-bottle/stores`,
+  readable only by you) and removed by Sign Out.
+- **How it's wired** (`guest/bottle-stores`): each installed game is a record in
+  `stores/games.json` (its folder, program, arguments, a Steam app ID); `bottle-stores sync` writes
+  those into every Steam user's `shortcuts.vdf` (the binary file for non-Steam games) while Steam
+  is stopped, and leaves the player's other shortcuts and everything Steam stored in ours (last
+  played...) alone. The app ID is Steam's own for a shortcut (a CRC of the quoted program path and
+  name, top bit set), which names the Proton setting `bottle-steamplay` writes and the artwork.
+  `steam-arm64` runs the sync before Steam starts, so a change shows after a Steam restart.
+- **Artwork** (Oct 14): Steam's library shows a non-Steam game only by the pictures in its grid folder
+  (`userdata/ID/config/grid`, named by the app ID), so without them a game is a blue tile with its
+  name. An install fetches four pictures from GOG's public game page (`api.gog.com/v2/games/ID`, no
+  sign-in): the tall cover (`IDp.jpg`, what the library's tiles and the home row show), the Galaxy
+  background (`ID_hero.jpg`, the banner of the game's page, and `ID.jpg`, the wide tile), the title
+  logo (`ID_logo.png`) and the icon. A game installed earlier gets them at the next Steam start (one
+  try an hour while GOG can't be reached). A picture the player set in Steam stays; ours are
+  replaced when GOG's change. Nothing from GOG is stored in this kit.
+- **Updating a game**: choose it and click Update (it downloads only what changed). **Removing**
+  deletes its files, its gogdl record and its Steam entry; its Wine prefix (saves, settings) stays
+  unless you tick the box.
+- **32-bit games** (Blades of Time is one) run on Wine's 32-bit side, which needs its own copy of the
+  Mac-patched GPU driver and of the bottle's Vulkan layer in the x86 system (`x86-venus.sh` and
+  `install-x86.sh` put both there; "32-bit games" under the Oct 14 GPU update below). Without them such
+  a game dies on its first buffer or sits on a white window. Steam games are no different.
+- **The Galaxy sign-in** (Gwent is one): a game with GOG's Galaxy SDK in its folder (`Galaxy.dll`
+  or `Galaxy64.dll`) asks the Galaxy client's background service for your sign-in, achievements and
+  leaderboards, and without it says "User is not signed in. To continue, start the GOG Galaxy
+  client". The VM can't run that client, so the kit carries **Comet**
+  (https://github.com/imLinguin/comet, Apache-2.0), the open-source stand-in Heroic uses, as a
+  ready-made arm64 build in `guest/comet` (pinned to its v0.3.2 commit; `build-aarch64.sh` rebuilds it
+  in the development VM; `update-guest.sh` installs it to `/usr/local/share/steamos-bottle/comet`;
+  `package-app.sh` refuses to package without it and its license notices). For such a game
+  `bottle-stores sync` sets the Steam shortcut's launch options to
+  `/usr/local/bin/bottle-stores run -- %command%` (other games keep plain options). `run` signs
+  Comet in with the GOG sign-in Portalistic already holds, through a private link where Comet looks
+  for Heroic's file (`stores/comet-cfg`; no token on a command line), starts it on port 9977 unless it
+  already runs, waits on the first use while Comet fetches GOG's Galaxy files (about 27 MB, kept in
+  `~/.local/share/comet`; GOG's, downloaded from GOG, not shipped), runs the game, and stops the Comet
+  it started when the game ends (Comet's log: `~/.cache/steamos-bottle/comet.log`). If Comet or the
+  sign-in is missing, the game starts anyway. Like the Galaxy client, Comet reports the game's
+  achievements and statistics to your GOG account. It doesn't offer GOG's overlay or friends list.
+- **Not done yet**: games' own redistributable installers (`__redist`: Visual C++, DirectX) aren't
+  run, which some games need; DLC and extras aren't downloaded; GOG cloud saves aren't synced;
+  games run as their Windows build only. gogdl's patch module (`gogdl_xdelta3`) is built with the
+  VM's other programs (`bottle prebuild gogdl_xdelta3.abi3.so`); without it a fresh install works,
+  and only an update that GOG ships as patches doesn't.
+
+### Epic games (Oct 14)
+
+The same way, for the Epic Games Store: **Stores > Epic Games…** (or `bottle epic …`) signs in to Epic,
+lists the games you own that have a Windows version, and installs one with **Legendary**
+(https://github.com/legendary-gl/legendary, GPL-3.0-or-later; version 0.21.1 is in `guest/stores/legendary`,
+its notice in `guest/stores/LICENSE-legendary`, the one change in `guest/stores/MODIFICATIONS.txt`) into a
+game folder, under `Epic Games`. Steam then lists it in the collection "Epic Games", running through
+Proton Experimental like the rest. Pictures come the same way as GOG's, from the catalog entry Legendary
+saves for the game (Epic's CDN; nothing is stored in this kit).
+
+- **Signing in** opens Epic's own page in your browser. After you sign in, Epic shows a short line of text
+  with `"authorizationCode"` in it; you copy all of it and paste it in the window (or paste just the code).
+  Portalistic never sees your password; Legendary's sign-in (`~/.config/steamos-bottle/stores/legendary/user.json`,
+  readable only by you) is removed by Sign Out. A sign-in lasts as long as you use it; if it runs out you sign in again.
+- **Starting a game**: an Epic game wants a sign-in token on its command line (`-AUTH_PASSWORD=...`), which
+  works once and for a few minutes. So the shortcut's launch options are
+  `/usr/local/bin/bottle-stores run --epic NAME -- %command%`: `run` asks Legendary for the game's arguments
+  (it signs in with the saved login and gets a fresh token) and starts the game with them. If that doesn't
+  work (no network, an expired sign-in) the game still starts, without the sign-in, and says why in
+  `~/.cache/steamos-bottle/epic.log`. The token is never written to a log; it can be seen in the game's
+  command line while it runs, which is how Epic's own launcher passes it too.
+- **How it's wired**: `guest/bottle-stores` runs Legendary as a program (`python3 -c` with the
+  `multiprocessing` start method set to `fork`, because Python 3.14's default doesn't suit Legendary's
+  downloader), its files in `stores/legendary`, the games in `stores/games.json` under `"epic"`, installed
+  with `update-guest.sh` into `/usr/local/share/steamos-bottle/legendary` (with `python3-filelock` and
+  `python3-pycryptodomex` from Fedora). Legendary asks `api.legendary.gl` for the launcher version to
+  present to Epic, once a day, as it always does.
+- **Updating a game**: the window says when Epic has a newer version; Update downloads only what changed.
+  **Removing** deletes its files, Legendary's record and its Steam entry.
+- **Not done**: DLC isn't downloaded, cloud saves aren't synced, prerequisites (Visual C++...) aren't
+  installed, and anti-cheat is left alone: a game that needs Easy Anti-Cheat or BattlEye to be set up by
+  Epic's launcher may not start, and Portalistic does nothing to get around that. Games Epic hands on to EA
+  or Ubisoft aren't listed. Downloads run one at a time (Legendary keeps a single lock on its list).
+
+Self-test (no network, no Steam): `python3 guest/tests/stores-selftest.py`.
+
+### Desktop Mode (Oct 14)
+
+The bottle has two modes, as a Steam Deck does. **Game Mode** is what it always was: Steam's Big
+Picture fills the screen. **Desktop Mode** is KDE Plasma (Fedora's packages, its X11 session) with
+Dolphin, Konsole, Kate, Firefox, Spectacle, the System Monitor and Discover (for Flatpak apps); Steam keeps running, in a window
+(it opens over the desktop; minimize it to see the desktop). Bottle > Switch to Desktop Mode (or
+`bottle mode desktop`) switches; the "Return to Game Mode" icon on the desktop, or Bottle > Switch to
+Game Mode (`bottle mode game`), switches back.
+
+- **Installed on first use, not shipped**: the first switch downloads about 550 MB with dnf (about
+  1.3 GB on the VM's disk; it wants 2 GB free) and sets Plasma up. Plasma takes about 800 MB of the
+  VM's memory while it's on. `bottle update` keeps its settings in step with the kit when it's there.
+- **Discover and Dolphin:** Discover installs Flatpak apps from Flathub for this user (no password; its
+  PackageKit part isn't installed, so it can't offer to update the system packages, such as the Mac-patched
+  Mesa). Dolphin's sidebar lists what the Mac shares with the VM: the game folders (`/mnt/portalistic/…`),
+  and for a VM set up with other Lima mounts those too, marked read-only when they are. Nothing else of the
+  Mac is visible to the VM, on purpose: Steam, games and Proton run there and could read or change it.
+- **Icons:** the desktop's "Steam" launcher and the taskbar's Steam entry use Steam's own icon; "Return to
+  Game Mode" and the Start button (Plasma's Application Launcher, which shows the distribution's logo by
+  default) use the round SteamOS mark. They're cut, each time Plasma's settings are applied, from picture
+  files in Steam's own folder (`public/steam_tray.ico`, `steamui/images/startup_steamos.png`) and kept in
+  `~/.local/share/steamos-bottle/icons`. No Valve artwork is in this kit; before Steam has installed those
+  files the launchers get a plain game icon from the theme and the Start button keeps Plasma's.
+  The Start button is set through Plasma's scripting interface (`bottle-session look`).
+- **How it works** (`guest/bottle-session`): `on` stops the window keeper, closes Big Picture
+  (`steam://close/bigpicture`), takes openbox/xfwm4 off the screen and starts `startplasma-x11` on its
+  own D-Bus (`dbus-run-session`, so leaving it leaves nothing behind). `off` logs Plasma out the normal
+  way (apps close, about 5 s), clears whatever is left of the session (never Steam, Wine or a game,
+  which can be started from the desktop), starts Game Mode's window manager and keeper again and
+  reopens Big Picture. The mode is `~/.config/steamos-bottle/session`; `bottle-desktop`
+  (`start-desktop`), `steam-arm64` and the window keeper read it, so a Steam restart or a re-run
+  desktop keeps the mode; a fresh screen (the VM just started) is Game Mode. Refused while a game runs.
+- **Plasma's settings here** (`bottle-session configure`): no desktop effects (every frame would cost
+  the VM's processors), no lock screen or sleep (nothing in the stream could unlock it), no file
+  indexing, no windows reopened from last time, and the "Return to Game Mode" and "Steam" icons.
+- **Tried** on a private second screen (`host/tests/mac-desktopmode1.sh`: on, start-desktop leaves
+  Plasma alone, off, a Steam-like process spared, the real screen untouched) and then once on the
+  real one (`mac-desktopmode3.sh`, with pictures). Plasma draws on the VM's processors like Big
+  Picture does; games started from the desktop run as always.
+- **Not done**: no volume control in the panel, no clipboard between the Mac and the VM (that's the
+  stream's, not Plasma's), nothing for Plasma 6.8 (it drops X11; Fedora 44 ships 6.7).
 
 ### The window, notices and the Mac's GPU numbers (Oct 11)
 
@@ -218,10 +375,12 @@ show broken geometry. `bottle start` adds the setting unless `bottle env --mac` 
 | `guest/bottle-dxvk` | VM | DXVK 2.6.2 next to Windows games' `.exe` (status / apply / remove) |
 | `guest/start-desktop` → `bottle-desktop` | VM | Desktop on `:1` (Xvnc, or Xvfb + x11vnc), VNC on `127.0.0.1:5901`; starts at the size the window last asked for |
 | `guest/bottle-resolution` | VM | The screen's size (xrandr; Xvnc takes any size as a new mode) |
+| `guest/bottle-session` | VM | Game Mode / Desktop Mode (status, install, on, off, configure, steam) |
 | `guest/bottle-whyquit` | VM | Why a game closed at launch, as a notice for the window; the DirectX 11 retry |
 | `guest/bottle-libraries` | VM | The Mac's game folders as Steam libraries, the default for new games, Steam's tools kept off them (run before Steam starts) |
 | `guest/nvml/` | VM | NVML stand-in with the Mac's GPU numbers, for Steam's performance monitor |
-| `guest/x86-venus.sh` | VM (root) | Mac-patched Venus driver for the x86 (FEX) side |
+| `guest/comet/` | VM (root) | Comet, the open-source stand-in for the GOG Galaxy client's service (`comet-aarch64`, its `MANIFEST`/`BUILT`, the licenses of everything compiled into it; `build-aarch64.sh` rebuilds it), started by `bottle-stores run` for GOG games that use the Galaxy SDK |
+| `guest/x86-venus.sh`, `guest/x86-venus/` | VM (root) | Mac-patched Venus driver for the x86 (FEX) side: the COPR's x86_64 build, and our own 32-bit build (`x86-venus/libvulkan_virtio.i686.so`, Mesa 25.3.6 + the COPR's three patches; `build-i686.sh` rebuilds it) for 32-bit Windows games |
 | `guest/present-layer/` | VM (root) | The bottle Vulkan layer: CPU-copy swapchain on a presenter thread (never blocks the game on the display; `BOTTLE_PRESENT_SYNC=1` = old path; `BOTTLE_PRESENT_SWAP_RB=1` in steam.env if a game's red and blue look swapped), DXVK feature stand-ins; and the kopper shim (`bottle_kopper.c`) for Big Picture on the GPU |
 | `guest/bench` → `bottle-bench` | VM | Baseline report: Vulkan device + features, GL, vkmark, FEX |
 | `guest/tso/` → `bottle-tso` | VM (root) | x86 memory ordering in hardware: `bottle_tso.c` (a small kernel module that sets Apple's TSO bit on every CPU of the VM), `bottle_tso_check.c` (static x86_64 test: message-passing litmus on every CPU pair, and a multithreaded memory benchmark; built into `bottle-tso-check.x86_64`) |
@@ -260,8 +419,8 @@ as they install, Steam's install window shows the drive's real free space and re
 that doesn't fit, and uninstalling gives the space straight back.
 
 - `bottle library add ~/Games/Portalistic --default`, `bottle library add /Volumes/SSD` (a
-  "Portalistic Library" folder on the drive), or Bottle > Add a Game Folder… in the app. The VM
-  restarts to share it. `bottle library folders` (Bottle > Show Game Folders) lists them.
+  "Portalistic Library" folder on the drive), or Game Folders > Add a Game Folder… in the app. The VM
+  restarts to share it. `bottle library folders` (Game Folders > Show Game Folders) lists them.
 - In Steam each one is a library under Settings > Storage, named as on the Mac ("Mac", "SSD").
   Steam's Storage page can move installed games between them, and its Make Default sticks.
 - `bottle-libraries` in the VM (run by steam-arm64 before Steam starts) adds each shared folder
@@ -1018,6 +1177,28 @@ DXVK 3.x (Proton's) also needs `VK_KHR_maintenance5/6`, which this GPU lacks, so
 runs DXVK 2.6.2 dropped into its game folder (`d3d11.dll`, `dxgi.dll`). 2.6.2 requires
 `VK_EXT_transform_feedback`: the layer advertises a no-op stand-in to DXVK (stream output
 is ignored) and maps `VK_KHR_load_store_op_none` to the `EXT` version the GPU has.
+
+**Update, 32-bit games (Oct 14):** Blades of Time (GOG, 32-bit) first died on its first GPU
+buffer, then showed a white window. Three separate causes, none of them GOG's:
+1. The 32-bit Vulkan driver in the x86 system (`usr/lib` of `/usr/share/guestos/fex-mesa`) was stock
+   Mesa, without the 16K alignment a Mac host needs: `mmap failed ... Invalid argument`, then Venus
+   aborts the game. The COPR has no 32-bit build, so `guest/x86-venus/` carries one built from the same
+   Mesa 25.3.6 and the same three patches (`build-i686.sh`; `x86-venus.sh` installs it, stock copy kept
+   as `.stock`, and sets the 32-bit ICD's `api_version` to 1.4.328).
+2. The bottle's layer only existed as x86_64 and arm64 builds. A 32-bit game saw the raw GPU, so DXVK
+   asked for `geometryShader`/`fillModeNonSolid`, which Venus lacks, and `vkCreateDevice` failed with
+   `VK_ERROR_FEATURE_NOT_PRESENT` (and nothing would have presented a frame anyway).
+   `present-layer/i386/` is the 32-bit build (`build-i386.sh`), installed as
+   `usr/lib/libVkLayer_bottle_present.so` with its own manifest and layer name
+   (`VK_LAYER_BOTTLE_cpu_present_i686`): the loader keeps one layer per name, and the x86_64 manifest's
+   library can't load in a 32-bit process.
+3. The Oct 13 Proton update left read-only `.bottle-orig` files; `bottle-dxvk` then failed halfway and
+   the DXVK 2.6.2 drop-in was gone from all Proton games. It keeps going now, file by file.
+Tried and dropped: `PROTON_USE_WOW64=1` (32-bit games on the 64-bit side): Wine's new WoW64 mode doesn't
+start under FEX ("Failed to create process", error 731). `guest/tests/vk32-probe.c` is a 32-bit Vulkan
+program for checking the 32-bit side without a game (run under FEX with `FEX_ROOTFS`; `dxvk` as the
+argument tries each extension and feature set DXVK uses; `VK32_ENGINE=DXVK` makes the layer apply its
+stand-ins); `install-x86.sh` runs it after installing.
 
 **Update, first playable run:** Abathor runs at a steady 60 fps at 1920x1080 on the GPU
 (DXVK 2.6.2 → Venus → KosmicKrisp → Metal; frames shown by the layer). Two desktop

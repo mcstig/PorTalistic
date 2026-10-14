@@ -253,6 +253,20 @@ def library_appids():
     return ids
 
 
+STORES_GAMES = Path.home() / ".config/steamos-bottle/stores/games.json"
+
+
+def store_games():
+    """appid -> title of the games from other stores (bottle-stores: GOG...). They are non-Steam
+    games in Steam's library, with app IDs of their own, and run through Proton like the rest."""
+    out = {}
+    for games in read_json(STORES_GAMES).values():
+        for rec in (games or {}).values() if isinstance(games, dict) else []:
+            if isinstance(rec, dict) and str(rec.get("appid", "")).isdigit():
+                out[str(rec["appid"])] = rec.get("title") or str(rec["appid"])
+    return out
+
+
 def native_wanted():
     try:
         return {l.split("#")[0].strip() for l in NATIVE_LIST.read_text().splitlines()} - {""}
@@ -295,7 +309,9 @@ def game_running():
 
 
 def steam_running():
-    r = subprocess.run(["pgrep", "-f", "[s]teamrtarm64/steam( |$)"], capture_output=True)
+    # (BOTTLE_STEAM_PROC: what the self-test points elsewhere, so a Steam running in the VM doesn't count there)
+    pat = os.environ.get("BOTTLE_STEAM_PROC", "[s]teamrtarm64/steam( |$)")
+    r = subprocess.run(["pgrep", "-f", pat], capture_output=True)
     return r.returncode == 0
 
 
@@ -455,8 +471,11 @@ def map_apps():
     current = {k: (vdf_value(v, "name") or "") for k, v in mapping if isinstance(v, list)}
     was_set, choices = read_json(SET_FILE), read_json(CHOICES_FILE)
     noticed = []
-    for appid, info in apps.items():
-        if info["tool"] or appid in keep_native:
+    store_names = store_games()
+    store_ids = set(store_names)
+    for appid in list(apps) + sorted(store_ids - set(apps)):
+        info = apps.get(appid)
+        if (info and info["tool"]) or appid in keep_native:
             continue
         cur = current.get(appid, "")
         if appid in choices:
@@ -470,7 +489,7 @@ def map_apps():
         elif appid in was_set and cur != was_set[appid]:
             choices[appid] = cur
             noticed.append(appid)
-    wanted = {a for a, info in apps.items() if not info["tool"]} - keep_native - set(choices)
+    wanted = ({a for a, info in apps.items() if not info["tool"]} | store_ids) - keep_native - set(choices)
 
     changed, redownload, removed = 0, [], 0
     # ours from earlier runs (every app in the library, the default "0", FEX...): out again
@@ -501,7 +520,7 @@ def map_apps():
             else:
                 entry.append([key, val])
         changed += 1
-        if apps[appid]["native"]:
+        if apps.get(appid, {}).get("native"):
             redownload.append(apps[appid]["name"])
     if changed or removed:
         if not backup.exists():
@@ -526,9 +545,9 @@ def map_apps():
         say(f"  left on their own setting (native-apps): {', '.join(sorted(keep_native))}")
     for appid in noticed:
         how = choices[appid] or "no forced tool (its Linux version, if it has one)"
-        say(f"  {apps[appid]['name']}: set in Steam to {how}; kept")
+        say(f"  {apps[appid]['name'] if appid in apps else store_names.get(appid, appid)}: set in Steam to {how}; kept")
     if choices:
-        say(f"  kept as set in Steam: {', '.join(apps[a]['name'] if a in apps else a for a in sorted(choices))}")
+        say(f"  kept as set in Steam: {', '.join(apps[a]['name'] if a in apps else store_names.get(a, a) for a in sorted(choices))}")
     return 0
 
 

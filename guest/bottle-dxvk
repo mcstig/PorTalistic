@@ -159,7 +159,31 @@ def installed_games():
             if path.is_dir():
                 games.append({"appid": appid.group(1), "name": name, "path": path,
                               "stamp": f"{acf.stat().st_mtime_ns}"})
+    games += store_games()
     return games
+
+
+STORES_GAMES = Path.home() / ".config/steamos-bottle/stores/games.json"
+
+
+def store_games():
+    """Games from other stores (bottle-stores: GOG...): non-Steam games, in a folder of their
+    own. Their stamp changes when they are installed again (an update)."""
+    try:
+        stores = json.loads(STORES_GAMES.read_text())
+    except (OSError, ValueError):
+        return []
+    out = []
+    for games in stores.values() if isinstance(stores, dict) else []:
+        for rec in games.values() if isinstance(games, dict) else []:
+            try:
+                path = Path(rec["dir"])
+                if path.is_dir():
+                    out.append({"appid": str(rec["appid"]), "name": rec.get("title") or path.name,
+                                "path": path, "stamp": str(rec.get("installed", 0))})
+            except (KeyError, TypeError):
+                continue
+    return out
 
 
 def exe_dirs(game_dir):
@@ -392,6 +416,17 @@ def put(src, dst, stamps, build=None):
     stamps[str(dst)] = f"{stamp(dst)}|{build or BUILD}"
 
 
+def keep_original(dst):
+    """Proton's own DLL kept as <dll>.bottle-orig. Proton's files are read-only (0555) and
+    copy2 keeps that mode, so the copy of an earlier Proton's DLL could not be overwritten
+    after a Proton update ("Permission denied", Oct 14): write a new file and swap it in."""
+    orig = dst.with_name(dst.name + ORIG)
+    tmp = dst.with_name(dst.name + ".bottle-tmp")
+    shutil.copyfile(dst, tmp)
+    shutil.copystat(dst, tmp)
+    os.replace(tmp, orig)
+
+
 def is_vkd3d_build(path):
     """vkd3d-proton's d3d12 (not Wine's own builtin d3d12.dll)."""
     try:
@@ -431,9 +466,13 @@ def apply_vkd3d(stamps, builtin, quiet):
                 src, dst = vkd3d_src(arch, dll), d / dll
                 if not src.is_file() or not dst.is_file() or dst.is_symlink() or is_ours(dst, src, stamps, VKD3D_BUILD):
                     continue
-                if not was_ours(dst, stamps) or not (d / (dll + ORIG)).is_file():
-                    shutil.copy2(dst, d / (dll + ORIG))   # Proton's (again after a Proton update)
-                put(src, dst, stamps, VKD3D_BUILD)
+                try:
+                    if not was_ours(dst, stamps) or not (d / (dll + ORIG)).is_file():
+                        keep_original(dst)   # Proton's (again after a Proton update)
+                    put(src, dst, stamps, VKD3D_BUILD)
+                except OSError as e:
+                    print(f"bottle-dxvk: {dst}: {e}", file=sys.stderr)
+                    continue
                 done.append(dll)
             if done:
                 changed += 1
@@ -451,7 +490,11 @@ def apply_vkd3d(stamps, builtin, quiet):
             if not is_vkd3d_build(dst):
                 builtin[str(dst)] = stamp(dst)
                 continue   # Wine's own builtin d3d12: leave it
-            put(src, dst, stamps, VKD3D_BUILD)
+            try:
+                put(src, dst, stamps, VKD3D_BUILD)
+            except OSError as e:
+                print(f"bottle-dxvk: {dst}: {e}", file=sys.stderr)
+                continue
             done.append(dll)
         if done:
             changed += 1
@@ -469,9 +512,13 @@ def apply_proton(stamps, quiet):
                 src, dst = CACHE / arch / dll, d / dll
                 if not src.is_file() or not dst.is_file() or dst.is_symlink() or is_ours(dst, src, stamps):
                     continue
-                if not was_ours(dst, stamps) or not (d / (dll + ORIG)).is_file():
-                    shutil.copy2(dst, d / (dll + ORIG))   # Proton's (again after a Proton update)
-                put(src, dst, stamps)
+                try:
+                    if not was_ours(dst, stamps) or not (d / (dll + ORIG)).is_file():
+                        keep_original(dst)   # Proton's (again after a Proton update)
+                    put(src, dst, stamps)
+                except OSError as e:
+                    print(f"bottle-dxvk: {dst}: {e}", file=sys.stderr)
+                    continue
                 done.append(dll)
             if done:
                 changed += 1
@@ -496,7 +543,11 @@ def apply_prefixes(stamps, builtin, quiet):
             if not is_dxvk_build(dst):
                 builtin[str(dst)] = stamp(dst)
                 continue   # Wine's own builtin (the game runs WineD3D): leave it
-            put(src, dst, stamps)
+            try:
+                put(src, dst, stamps)
+            except OSError as e:
+                print(f"bottle-dxvk: {dst}: {e}", file=sys.stderr)
+                continue
             done.append(dll)
         if done:
             changed += 1

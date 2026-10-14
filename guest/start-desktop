@@ -50,7 +50,9 @@ if [[ ! -f "$STATE/vnc.passwd" ]]; then
 fi
 umask 022
 
+fresh=0
 if ! pgrep -u "$ME" -f "(Xvnc|Xvfb) :$DISPLAY_NUM( |$)" >/dev/null; then
+  fresh=1
   if [[ "$MODE" == xvnc ]]; then
     spawn Xvnc ":$DISPLAY_NUM" -geometry "$RES" -depth 24 -nolisten tcp \
           -rfbport "$VNC_PORT" -localhost -SecurityTypes VncAuth \
@@ -65,6 +67,17 @@ if ! pgrep -u "$ME" -f "(Xvnc|Xvfb) :$DISPLAY_NUM( |$)" >/dev/null; then
 fi
 [[ -S "/tmp/.X11-unix/X$DISPLAY_NUM" ]] || { echo "The X server didn't start; see $LOG" >&2; exit 1; }
 export DISPLAY=":$DISPLAY_NUM"
+# A screen that has just started (the VM was started) is Game Mode, as on a Steam Deck's restart.
+(( fresh )) && echo game > "$STATE/session"
+
+# Run from inside a Plasma session (Desktop Mode's way back does that), this carries its D-Bus, session
+# manager and KDE names; the window manager and Steam started below need the ordinary ones (xfwm4 exits with
+# "Xfconf could not be initialized" on a bus that's going away).
+if [[ -n "${KDE_FULL_SESSION:-}" ]]; then
+  unset SESSION_MANAGER KDE_FULL_SESSION KDE_SESSION_VERSION KDE_SESSION_UID KDE_APPLICATIONS_AS_SCOPE \
+        XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP DESKTOP_SESSION XDG_MENU_PREFIX QT_QPA_PLATFORMTHEME
+  export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/bus"
+fi
 
 # A complete keyboard map, so every key a game might use exists before apps start.
 setxkbmap -model pc105 -layout "${XKB_LAYOUT:-us}" 2>/dev/null || true
@@ -73,44 +86,53 @@ setxkbmap -model pc105 -layout "${XKB_LAYOUT:-us}" 2>/dev/null || true
 # servers; this for one already running.
 command -v xset >/dev/null && { xset s off s noblank -dpms 2>/dev/null || true; }
 
-# openbox with its normal settings. An earlier version added a rule maximizing every window
-# titled "Steam", which also caught Steam's right-click menus and dialogs (they're separate
-# windows with that title) and broke them: take that rule out again.
-OB_RC="$HOME/.config/openbox/rc.xml"
-ob_changed=0
-if grep -q steamos-bottle "$OB_RC" 2>/dev/null; then
-  rm -f "$OB_RC"   # it was ours: the system rc.xml plus that rule
-  ob_changed=1
-fi
-# The window manager: openbox (default) or xfwm4, as chosen with `bottle wm` (saved in
-# $STATE/wm). Steam's menus misbehave under some window managers (openbox sends a focus change
-# before each click); switching replaces the running one in place (--replace), windows stay.
-WM="$(cat "$STATE/wm" 2>/dev/null || echo openbox)"
-case "$WM" in
-  xfwm4) wm_cmd=(xfwm4 --compositor=off --replace) ;;   # compositing would cost every frame
-  *)     WM=openbox; wm_cmd=(openbox --replace) ;;
-esac
-if ! command -v "${wm_cmd[0]}" >/dev/null; then
-  echo "No $WM installed (bottle update installs it); using openbox." >&2
-  WM=openbox; wm_cmd=(openbox --replace)
-fi
-if pgrep -u "$ME" -x "$WM" >/dev/null; then
-  [[ "$WM" == openbox ]] && (( ob_changed )) && { openbox --reconfigure 2>/dev/null || true; }
+# Desktop Mode (bottle-session on): KDE Plasma has the screen, with its own window manager and no
+# Steam keeper (Steam is in a window there). Re-running this doesn't touch that. Without Plasma
+# actually there (it crashed, or the VM restarted) the mode goes back to Game Mode.
+SESSION="$(cat "$STATE/session" 2>/dev/null || true)"
+if [[ "$SESSION" == desktop ]] && pgrep -u "$ME" -x kwin_x11 >/dev/null; then
+  :
 else
-  spawn "${wm_cmd[@]}"
-  for _ in $(seq 1 30); do pgrep -u "$ME" -x "$WM" >/dev/null && break; sleep 0.1; done
-  sleep 0.5
-fi
-for other in openbox xfwm4; do   # --replace makes the old one exit; make sure
-  [[ "$other" == "$WM" ]] || pkill -u "$ME" -x "$other" 2>/dev/null || true
-done
-# Steam's main window (only that one) fills the screen, and comes back when Steam's own buttons
-# minimize, close or shrink it (there's no taskbar to bring it back): bottle-maximize-steam
-# --keep, which steam-arm64 starts with Steam; started here too for a Steam already running.
-if command -v bottle-maximize-steam >/dev/null; then
-  bottle-maximize-steam || true
-  if pgrep -u "$ME" -f "[s]teamrtarm64/steam" >/dev/null; then
-    setsid -f bottle-maximize-steam --keep </dev/null >/dev/null 2>&1 || true
+  [[ "$SESSION" == desktop ]] && echo game > "$STATE/session"
+  # openbox with its normal settings. An earlier version added a rule maximizing every window
+  # titled "Steam", which also caught Steam's right-click menus and dialogs (they're separate
+  # windows with that title) and broke them: take that rule out again.
+  OB_RC="$HOME/.config/openbox/rc.xml"
+  ob_changed=0
+  if grep -q steamos-bottle "$OB_RC" 2>/dev/null; then
+    rm -f "$OB_RC"   # it was ours: the system rc.xml plus that rule
+    ob_changed=1
+  fi
+  # The window manager: openbox (default) or xfwm4, as chosen with `bottle wm` (saved in
+  # $STATE/wm). Steam's menus misbehave under some window managers (openbox sends a focus change
+  # before each click); switching replaces the running one in place (--replace), windows stay.
+  WM="$(cat "$STATE/wm" 2>/dev/null || echo openbox)"
+  case "$WM" in
+    xfwm4) wm_cmd=(xfwm4 --compositor=off --replace) ;;   # compositing would cost every frame
+    *)     WM=openbox; wm_cmd=(openbox --replace) ;;
+  esac
+  if ! command -v "${wm_cmd[0]}" >/dev/null; then
+    echo "No $WM installed (bottle update installs it); using openbox." >&2
+    WM=openbox; wm_cmd=(openbox --replace)
+  fi
+  if pgrep -u "$ME" -x "$WM" >/dev/null; then
+    [[ "$WM" == openbox ]] && (( ob_changed )) && { openbox --reconfigure 2>/dev/null || true; }
+  else
+    spawn "${wm_cmd[@]}"
+    for _ in $(seq 1 30); do pgrep -u "$ME" -x "$WM" >/dev/null && break; sleep 0.1; done
+    sleep 0.5
+  fi
+  for other in openbox xfwm4; do   # --replace makes the old one exit; make sure
+    [[ "$other" == "$WM" ]] || pkill -u "$ME" -x "$other" 2>/dev/null || true
+  done
+  # Steam's main window (only that one) fills the screen, and comes back when Steam's own buttons
+  # minimize, close or shrink it (there's no taskbar to bring it back): bottle-maximize-steam
+  # --keep, which steam-arm64 starts with Steam; started here too for a Steam already running.
+  if command -v bottle-maximize-steam >/dev/null; then
+    bottle-maximize-steam || true
+    if pgrep -u "$ME" -f "[s]teamrtarm64/steam" >/dev/null; then
+      setsid -f bottle-maximize-steam --keep </dev/null >/dev/null 2>&1 || true
+    fi
   fi
 fi
 
