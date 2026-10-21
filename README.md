@@ -9,8 +9,9 @@ your Mac, drawing with the Mac's GPU, and Steam plays Windows games through Prot
 
 - Needs an Apple Silicon Mac with macOS 26 or newer and 4 GB of memory or more. The VM gets its
   share of it (2 GB on a 4 GB Mac, 8 GB on a 16 GB one); bigger games want a Mac with 16 GB.
-- Unzip it and move Portalistic to Applications. Its first launch downloads its Linux system (a
-  little over 2 GB), then Steam installs itself and asks you to sign in.
+- Unzip it and open Portalistic. Outside Applications it offers to move itself there and opens
+  the copy. The first launch downloads its Linux system (a little over 2 GB), then Steam installs
+  itself and asks you to sign in. To remove it all: Portalistic > Uninstall Portalistic.
 - Games go in Games/Portalistic in your home folder. Game Folders > Add a Game Folder adds another
   folder or an external drive (Steam's own Add Drive can't see your Mac's drives; Portalistic
   offers a drive when you connect it). The Linux system's own drive (Steam's "Internal Drive") is 20 GB:
@@ -68,6 +69,53 @@ Measured on an M4 Max (Oct 12): about 35 s from image to "Ready". Before any gam
 **5.7 GB** of the Mac (the kit's way took 17 GB: a full Fedora with compilers, a second copy of
 the x86 system, Lima's image cache and the 2.5 GB Vulkan SDK). The first Windows game brings
 Proton and Steam's runtime (~2-2.5 GB more).
+
+**Installing and uninstalling (Oct 21, not in a release yet)**
+
+- **Moving to Applications** (`host/Portalistic/App/AppDelegate+Install.swift`). A packaged app that
+  starts outside `/Applications` and `~/Applications` (and isn't a copy built from the kit) asks
+  "Move Portalistic to your Applications folder?" before it does anything else: **Move to
+  Applications** or **Not Now** (this copy then starts as it is; the box "Don't ask again" stops the
+  question for good, the app menu's "Move to Applications…" still does it later). When the same
+  version is already in Applications the question is "Open that one instead?" (**Open That One**).
+  Moving copies the app with `ditto` to a hidden `.Portalistic-copying.app` next to the destination,
+  checks the copy (`codesign --verify --deep --strict`, then `spctl -a -t exec`) and only then puts
+  it in place; when Gatekeeper accepts it the download's quarantine mark comes off the copy, so
+  macOS doesn't ask again. The copy is made without the source's extended attributes (a folder
+  that iCloud or Dropbox looks after leaves marks that fail the strict check) and the quarantine
+  mark is put back before the check. A copy that doesn't pass is deleted and the app says so.
+  The copy opens with `--just-installed --moved-from <old path>` (a new instance; the old one
+  quits), and the new one moves the old one to the Trash (only if it's a Portalistic app with the
+  same bundle ID, isn't read-only translocated and can be deleted). An older Portalistic in the
+  destination is replaced (it goes to the Trash); the same version is left alone and opened; an app
+  with another bundle ID called Portalistic is never touched ("Move it away, then open this copy
+  again"). An app that macOS runs from a random read-only place (App Translocation, which happens
+  to a quarantined app opened straight from Downloads) is found at its real place first
+  (`SecTranslocateCreateOriginalPathForURL`). The app menu has "Move to Applications…" too, shown
+  only when it applies. `~/Applications` counts as installed.
+- **Uninstall** (Portalistic > Uninstall Portalistic…, `bottle uninstall --list | --yes`). The
+  dialog lists what goes: the Linux system (`~/.portalistic/lima/steamos-bottle`, or the
+  `steamos-bottle` VM in `~/.lima` on a Mac set up with the kit), then settings, logs, caches and
+  downloaded updates (`~/.portalistic`, `~/.config/steamos-bottle`, `~/Library/Caches/Portalistic`,
+  `~/Library/Logs/Portalistic`) with their sizes. Game folders stay unless "Also move my game
+  folders to the Trash" is ticked: then every game folder Portalistic made (one with the
+  `.portalistic-library` mark in it, not behind a link) goes to the Trash, not deleted, so it
+  can be got back until the Trash is emptied. Then the app goes to the Trash, its settings are
+  forgotten and it quits. `bottle uninstall` works only inside Portalistic.app (the kit, a
+  development folder, refuses), only inside the home folder, and deletes the VM through `limactl
+  delete` (falling back to stopping its processes and removing the folder).
+- **Tests** (all use made-up folders; nothing touches the real home folder or VM):
+  `host/tests/mac-installapp1.sh` (8 cases, 19 checks: fresh copy, same version present, older
+  version present, another app present, Not Now, already in Applications, just-moved, the Trash
+  step's refusals; against the packaged app in test mode), `mac-installapp2.sh` (the notarized
+  release's copy steps with a quarantine mark: Gatekeeper still accepts it, the mark goes),
+  `mac-uninstall1.sh` (the shell command, 24 checks) and `mac-uninstallapp1.sh` (the app's
+  Uninstall with a fake `limactl`, fake home and fake Trash, 13 checks). Test mode:
+  `PORTALISTIC_SELFTEST=install|installed|uninstall` (no window, no VM; `uninstall` refuses unless
+  `HOME` is under `/tmp`), `PORTALISTIC_APPLICATIONS_DIR`, `PORTALISTIC_TRASH_DIR`,
+  `PORTALISTIC_INSTALL_ANSWER=move|later`, `PORTALISTIC_SELFTEST_LOG`, `PORTALISTIC_SELFTEST_GAMES=1`.
+  Not tried: a real download in a browser (quarantine and translocation as macOS really does
+  them) and how the dialogs look.
 
 **Making a release** (on the development Mac, which has the kit's setup: Homebrew's lima and
 krunkit, KosmicKrisp, Xcode, a Developer ID certificate):

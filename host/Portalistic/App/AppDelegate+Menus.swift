@@ -69,9 +69,17 @@ extension AppDelegate {
         let update = NSMenuItem(title: "Check for Updates…", action: #selector(checkForUpdatesNow(_:)), keyEquivalent: "")
         update.target = self
         appMenu.addItem(update)
+        let move = NSMenuItem(title: "Move to Applications…", action: #selector(moveToApplicationsMenu(_:)), keyEquivalent: "")
+        move.target = self
+        move.isHidden = !Installation.canOfferMove          // (only a copy outside Applications offers it)
+        appMenu.addItem(move)
         let patreon = NSMenuItem(title: "Support Portalistic on Patreon", action: #selector(openPatreon(_:)), keyEquivalent: "")
         patreon.target = self
         appMenu.addItem(patreon)
+        appMenu.addItem(.separator())
+        let uninstall = NSMenuItem(title: "Uninstall Portalistic…", action: #selector(uninstallPortalistic(_:)), keyEquivalent: "")
+        uninstall.target = self
+        appMenu.addItem(uninstall)
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Hide Portalistic", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
         appMenu.addItem(withTitle: "Quit Portalistic", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
@@ -166,6 +174,7 @@ extension AppDelegate: NSMenuItemValidation {
             || item.action == #selector(removeGameFolder(_:)) {
             return !busy
         }
+        if item.action == #selector(uninstallPortalistic(_:)) || item.action == #selector(moveToApplicationsMenu(_:)) { return !busy }
         if item.action == #selector(steamSettings(_:)) { return !busy && view.connected }
         if item.action == #selector(switchToDesktopMode(_:)) || item.action == #selector(switchToGameMode(_:)) {
             return !busy && view.connected

@@ -137,6 +137,13 @@
 #                             VERSION URL", "replace VERSION URL" (this copy's version isn't a
 #                             release any more) or "current THIS LATEST"; install downloads it,
 #                             checks its signature and swaps it in (the app offers this itself)
+#   bottle uninstall --list | --yes
+#                             inside Portalistic.app only (the app's Portalistic > Uninstall
+#                             Portalistic… runs these). --list: what an uninstall deletes, one line
+#                             each (system, data, games). --yes: stops the VM and deletes the Linux
+#                             system and Portalistic's folders on this Mac (~/.portalistic, its
+#                             settings, caches and logs). Never the game folders, never the app:
+#                             the app moves those to the Trash itself, if asked
 #   bottle prebuild [PROGRAM...]
 #                             build the VM's own programs (C) in the VM, into the kit's
 #                             guest/prebuilt/aarch64: VMs then install those instead of compiling
@@ -1963,6 +1970,80 @@ cmd_app_update() {
   info "Portalistic is now $latest."
 }
 
+# ---- uninstalling Portalistic ----
+# `bottle uninstall --list` says what an uninstall deletes, a line for each: KIND<TAB>KILOBYTES<TAB>PATH<TAB>WHAT.
+#   system: the Linux system (the VM);  data: Portalistic's folders on this Mac;  games: a game folder
+#   (not deleted here: the app moves it to the Trash when asked; its size is 0, since counting a big
+#   drive's games would take minutes).
+# `bottle uninstall --yes` stops the VM and deletes the system and the data. Only inside Portalistic.app:
+# the kit is a development folder, and its VM is a developer's.
+dir_kb() { du -sk "$1" 2>/dev/null | awk '{print $1 + 0}'; }
+uninstall_what() {
+  case "$1" in
+    "$HOME/.portalistic")                 echo "Portalistic's working folder" ;;
+    "$HOME/Library/Caches/Portalistic")   echo "Downloaded updates and caches" ;;
+    "$HOME/Library/Logs/Portalistic")     echo "Logs" ;;
+    *)                                    echo "Settings (the list of game folders, and so on)" ;;
+  esac
+}
+uninstall_rows() {
+  local sys="$LIMA_HOME/$VM_NAME" sysk=0 kb p name label path
+  if [[ -d "$sys" && ! -L "$sys" ]]; then
+    sysk="$(dir_kb "$sys")"
+    printf 'system\t%s\t%s\tThe Linux system: Steam, your store sign-ins and any game installed on its own disk\n' "$sysk" "$sys"
+  fi
+  for p in "$HOME/.portalistic" "$STATE_DIR" "$HOME/Library/Caches/Portalistic" "$HOME/Library/Logs/Portalistic"; do
+    [[ -d "$p" && ! -L "$p" ]] || continue
+    kb="$(dir_kb "$p")"
+    case "$sys" in "$p"/*) kb=$(( kb > sysk ? kb - sysk : 0 )) ;; esac   # (the system is counted above)
+    printf 'data\t%s\t%s\t%s\n' "$kb" "$p" "$(uninstall_what "$p")"
+  done
+  while IFS=$'\t' read -r name label path; do
+    [[ -n "$path" && -d "$path" && ! -L "$path" && -f "$path/.portalistic-library" ]] || continue
+    case "$path" in "$HOME"|"$HOME/"|/|/Volumes|/Volumes/) continue ;; esac
+    printf 'games\t0\t%s\t%s\n' "$path" "$label"
+  done < <(lib_rows)
+}
+uninstall_remove() {  # $1: a folder inside the home folder
+  local p="$1"
+  case "$p" in "$HOME"/?*) ;; *) die "Not deleting $p: it isn't inside your home folder." ;; esac
+  [[ -e "$p" || -L "$p" ]] || return 0
+  if [[ -L "$p" ]]; then rm -f "$p"; else rm -rf "$p" 2>/dev/null || true; fi
+  [[ ! -e "$p" && ! -L "$p" ]] || { warn "Couldn't delete $p."; return 1; }
+}
+cmd_uninstall() {
+  local what="${1:-}" p bad=0 sys
+  [[ -n "$APP_BUNDLE" ]] || die "Only Portalistic.app uninstalls itself; this is the kit, a development folder: delete it yourself."
+  sys="$LIMA_HOME/$VM_NAME"
+  [[ "$HOME" == /?* && -d "$HOME" ]] || die "Can't tell where your home folder is."
+  case "$what" in
+    --list) uninstall_rows; return 0 ;;
+    --yes) ;;
+    *) die "usage: bottle uninstall --list | --yes" ;;
+  esac
+  info "Stopping Portalistic's VM and deleting it…"
+  audio_stop || true
+  awake_stop || true
+  if [[ -d "$sys" ]]; then
+    limactl delete --force "$VM_NAME" >/dev/null 2>&1 || true   # (stops it first)
+    if [[ -d "$sys" ]]; then
+      # Lima couldn't (a damaged instance, or a leftover process holds it): end what runs from it
+      pkill -TERM -f "$sys/" 2>/dev/null || true
+      sleep 2
+      pkill -KILL -f "$sys/" 2>/dev/null || true
+      uninstall_remove "$sys" || bad=1
+    fi
+  fi
+  for p in "$HOME/.portalistic" "$STATE_DIR" "$HOME/Library/Caches/Portalistic"; do
+    [[ -e "$p" ]] && info "Deleting ~${p#"$HOME"}…"
+    uninstall_remove "$p" || bad=1
+  done
+  (( bad == 0 )) || die "Something couldn't be deleted (see above); nothing else was touched."
+  info "Deleting the logs…"
+  uninstall_remove "$HOME/Library/Logs/Portalistic" || true   # last: this command's own log is in it
+  info "Portalistic's Linux system and its data are deleted."
+}
+
 # ---- Steam links and the window manager ----
 # Open a steam:// link in the running Steam: the Steam program hands it to the instance that
 # runs (as desktop shortcuts do). Gets to places without Steam's menus, e.g. its settings.
@@ -3147,6 +3228,7 @@ case "$cmd" in
   prebuild)     cmd_prebuild "$@" ;;
   setup)        cmd_setup "$@" ;;
   app-update)   cmd_app_update "$@" ;;
+  uninstall)    cmd_uninstall "$@" ;;
   _vmdisk-guard) need_vm; vm_disk_guard "${1:-idle}" "$(vm_disk_free_kb)" ;;   # one round of the watcher's (tests)
   kosmickrisp)  exec "$KIT_DIR/host/kosmickrisp.sh" "$@" ;;
   help|-h|--help) sed -n '2,/^# Written/p' "$src" | sed 's/^# \{0,1\}//' ;;

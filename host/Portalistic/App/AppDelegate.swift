@@ -47,6 +47,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         AppDelegate.adoptLegacySettings()
+        if let test = Installation.env["PORTALISTIC_SELFTEST"] { runSelfTest(test); return }   // (host/tests: AppDelegate+Install.swift)
+        if offerInstall() { return }            // opened from outside Applications: the copy there takes over
+        finishMove()                            // (this is that copy: the one it came from goes to the Trash)
         // One copy at a time: two would keep taking the VM's screen from each other (it serves
         // one window). A copy opened from elsewhere (Xcode's debug build, say) replaces the one
         // already open, as does a copy from before the identifier changed; the VM and the game

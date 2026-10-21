@@ -10,8 +10,8 @@ PRODUCT_NAME = Portalistic
 PRODUCT_BUNDLE_IDENTIFIER = io.github.mcstig.portalistic
 INFOPLIST_FILE = xcode/Info.plist
 GENERATE_INFOPLIST_FILE = NO
-MARKETING_VERSION = 0.7.0.4
-CURRENT_PROJECT_VERSION = 9
+MARKETING_VERSION = 0.7.0.5
+CURRENT_PROJECT_VERSION = 10
 
 SDKROOT = macosx
 // macOS 26: KosmicKrisp, the Mac side of the VM's GPU, needs it
