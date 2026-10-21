@@ -70,7 +70,7 @@ Measured on an M4 Max (Oct 12): about 35 s from image to "Ready". Before any gam
 the x86 system, Lima's image cache and the 2.5 GB Vulkan SDK). The first Windows game brings
 Proton and Steam's runtime (~2-2.5 GB more).
 
-**Installing and uninstalling (Oct 21, not in a release yet)**
+**Installing and uninstalling (Oct 21, in 0.7.0.5)**
 
 - **Moving to Applications** (`host/Portalistic/App/AppDelegate+Install.swift`). A packaged app that
   starts outside `/Applications` and `~/Applications` (and isn't a copy built from the kit) asks
@@ -116,6 +116,36 @@ Proton and Steam's runtime (~2-2.5 GB more).
   `PORTALISTIC_INSTALL_ANSWER=move|later`, `PORTALISTIC_SELFTEST_LOG`, `PORTALISTIC_SELFTEST_GAMES=1`.
   Not tried: a real download in a browser (quarantine and translocation as macOS really does
   them) and how the dialogs look.
+
+**Games stay off the Linux system's drive (Oct 21, in 0.7.0.6)**
+
+Steam lists its own drive (the VM's 20 GB disk: Linux, Steam, Proton and its runtimes) next to the
+game folders in the install window. On a new laptop a Rocket League install filled it: Steam said
+it was out of space at every start, and Settings > Storage > Move sat at 0% (a game that isn't fully
+installed can't be moved, and nothing could be written).
+
+- **The guard** (`homegames_guard` in `host/bottle`, run by the watcher every round with the same
+  question that asks for the VM's free space and Steam's state). The VM lists the app manifests in
+  `~/.local/share/Steam/steamapps` (`homegames_cmd`: appid, StateFlags, installdir, name). Tools
+  (names starting `Proton`, `Steam Linux Runtime`, `Steamworks Common`, `FEX`) belong there. Anything
+  else whose StateFlags lack 4 (fully installed) is a game being installed or interrupted: Steam is
+  stopped, the manifest, `downloading/<appid>`, `downloading/state_<appid>_*` and `common/<installdir>`
+  are deleted (an installdir with a slash or `..` is ignored), Steam is started again, and a banner
+  says why and to set Install to a game folder. A fully installed game there is left alone. Nothing
+  happens while a game runs (Steam would have to quit). The same app three times in ten minutes
+  (Steam keeps starting it): one banner, no more cancelling. `BOTTLE_HOME_GAMES=0` turns it off;
+  `bottle _homegames-guard [STATE]` runs one round by hand.
+- **The log cap** (`vm_logs_cap_cmd`, also in the tidy that `bottle disk clean` and the low-space
+  guard run). Steam's web helper logs `eglGetMscRateANGLE: glXGetMscRateOML failed` (our X server has
+  no GLX_OML_sync_control) about every frame into `config/htmlcache/chrome_debug.log` and
+  `logs/steamwebhelper.log`: 8 GB and 3.3 GB in two weeks on the development Mac. Both only hold that
+  noise, so either over 50 MB is emptied in place. `bottle disk` now lists those folders and the
+  biggest folders on the whole disk.
+- **Tests** (`host/tests/`, made-up folders, bash 5 and the Mac's 3.2): `mac-homegames1.sh` (20
+  checks: the VM's list, a game cancelled while tools and an installed game stay, a running game, the
+  off switch, odd lines, an installdir like `../outside`, the third-time rule), `mac-vmlogs1.sh` (12:
+  the cap with a log held open for appending, and the watcher's exact line run locally),
+  `mac-homegames2.sh` (the question through limactl into a real VM, listing only).
 
 **Making a release** (on the development Mac, which has the kit's setup: Homebrew's lima and
 krunkit, KosmicKrisp, Xcode, a Developer ID certificate):

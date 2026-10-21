@@ -1280,14 +1280,17 @@ disk_status() {
     echo "== Biggest (games, downloads in progress, Windows prefixes, caches, logs):"
     S=$HOME/.local/share/Steam/steamapps
     { du -sh "$S"/common/* "$S"/downloading/* "$S"/temp "$S"/shadercache "$S"/compatdata \
-          "$HOME"/steam-*.log "$HOME"/.cache 2>/dev/null
+          "$HOME"/steam-*.log "$HOME"/.cache "$HOME"/.local/share/Steam/config/htmlcache \
+          "$HOME"/.local/share/Steam/logs "$HOME"/.local/share/Steam/package 2>/dev/null
       sudo -n du -sh /var/cache/libdnf5 /var/cache/dnf /var/log/journal /var/lib/systemd/coredump 2>/dev/null
-    } | sort -rh | head -15 | sed "s#$S/##; s#$HOME/#~/#"'
+    } | sort -rh | head -15 | sed "s#$S/##; s#$HOME/#~/#"
+    echo "== Biggest folders on the whole disk (over 0.25 GB):"
+    sudo -n du -xk --max-depth=2 / 2>/dev/null | sort -rn | awk "\$1 > 262144 {printf \"%7.1f GB  %s\\n\", \$1/1048576, \$2}" | head -16'
 }
 
-# only what nothing needs: package caches, old system logs, crash dumps, huge game logs
+# only what nothing needs: package caches, old system logs, crash dumps, huge game logs, Steam's runaway web logs
 vm_disk_tidy() {
-  vsh_for 120 bash -c '
+  vsh_for 120 bash -c "$(vm_logs_cap_cmd)"'
     sudo -n dnf clean all -q >/dev/null 2>&1
     sudo -n journalctl --vacuum-size=100M -q >/dev/null 2>&1
     sudo -n sh -c "rm -f /var/lib/systemd/coredump/*" 2>/dev/null
@@ -1298,7 +1301,7 @@ vm_disk_free_kb() { vsh_for 30 bash -c 'df -Pk / | awk "NR == 2 {print \$4}"' 2>
 disk_clean() {
   need_vm
   [[ "$(vm_status)" == Running ]] || die "The VM isn't running. Use: bottle start"
-  info "Clearing package caches, old system logs, crash dumps and game logs over 50 MB in the VM…"
+  info "Clearing package caches, old system logs, crash dumps, game logs over 50 MB and Steam's web logs in the VM…"
   vm_disk_tidy
   echo "In the VM now: $(( $(vm_disk_free_kb) / 1048576 )) GB free"
 }
@@ -1745,7 +1748,7 @@ vm_disk_guard() {  # $1 = what Steam does: game, download, idle; $2 = the VM dis
     echo "$(date '+%F %T') the VM's disk has $(( free_kb / 1024 )) MB free and Steam is downloading: stopping Steam"
     steam_stop >/dev/null 2>&1 || true
     vm_disk_tidy
-    vm_notice 1 60 "Steam stopped: the VM's disk is full" "Only $(( free_kb / 1024 )) MB were left on it. Games go in a game folder (Game Folders > Show Game Folders); Steam's Settings > Storage moves a game there. Bottle > Restart Steam brings Steam back."
+    vm_notice 1 60 "Steam stopped: the VM's disk is full" "Only $(( free_kb / 1024 )) MB were left on it. Games go in a game folder (Game Folders > Show Game Folders): set Install to a game folder when you install one. Bottle > Restart Steam brings Steam back."
     VG_WARNED="$now"
     return 0
   fi
@@ -1757,8 +1760,120 @@ vm_disk_guard() {  # $1 = what Steam does: game, download, idle; $2 = the VM dis
   [[ "$free_kb" =~ ^[0-9]+$ ]] || return 0
   echo "$(date '+%F %T') the VM's disk now has $(( free_kb / 1024 )) MB free"
   (( free_kb < low )) || return 0
-  vm_notice 1 30 "The VM's disk is almost full ($(( free_kb / 1048576 )) GB left)" "It holds Linux, Steam and Proton; games go in a game folder (Game Folders > Show Game Folders), and Steam's Settings > Storage moves a game there. Or make the disk bigger: bottle disk grow."
+  vm_notice 1 30 "The VM's disk is almost full ($(( free_kb / 1048576 )) GB left)" "It holds Linux, Steam and Proton; games go in a game folder (Game Folders > Show Game Folders): set Install to a game folder when you install one. Or make the disk bigger: bottle disk grow."
 }
+
+# ---- Steam's two runaway logs (the watcher, every round, and bottle disk clean) ----
+# Steam's web helper (the browser that draws Steam's windows) logs "eglGetMscRateANGLE:
+# glXGetMscRateOML failed" about every frame: our X server has no GLX_OML_sync_control. Oct 21: its
+# chrome_debug.log (8 GB, since Oct 6) and /s/logs/steamwebhelper.log (3.3 GB) filled most of this
+# Mac's 20 GB VM disk, with the cache the web helper really needs at 0.2 GB. Both only hold that
+# noise, so any over 50 MB is emptied in place (the helper keeps writing to the same, now small, file).
+# >>> vmlogs
+vm_logs_cap_cmd() {  # the script the VM runs
+  cat <<'VLEOF'
+for f in ~/.local/share/Steam/config/htmlcache/chrome_debug.log ~/.local/share/Steam/logs/steamwebhelper.log; do
+  if [ -f "$f" ] && [ "$(du -k "$f" 2>/dev/null | cut -f1)" -gt 51200 ]; then : > "$f"; fi
+done
+true
+VLEOF
+}
+# <<< vmlogs
+
+# ---- games never go on the Linux system's drive (the watcher, every round) ----
+# Steam offers its own drive (the VM's 20 GB disk: Linux, Steam, Proton and its runtimes) next to
+# the game folders when a game is installed, and once that drive is full Steam can't move
+# anything: on Oct 21 (a new laptop) Rocket League's download filled it, Steam said it was out of
+# space at every start, and Settings > Storage > Move sat at 0%. So each round the watcher asks
+# the VM which apps have a manifest on that drive (homegames_cmd). The tools (Proton, the Steam
+# Linux Runtimes, FEX) belong there; a game doesn't. A game that isn't fully installed yet (a new
+# install, or an interrupted one) is cancelled: Steam quits, the app's manifest, partial download
+# and folder are deleted, Steam starts again and a banner says why. A game fully installed there
+# already (an older VM) is left alone. Nothing happens while a game runs (Steam would have to
+# quit). BOTTLE_HOME_GAMES=0 turns it off; `bottle _homegames-guard [STATE]` runs one round.
+# >>> homegames
+HG_CANCELS=""    # "appid@epoch " of the cancellations in the last 10 minutes
+HG_GAVE_UP=""    # " appid " of the apps it stopped cancelling (Steam kept starting them)
+homegame_is_tool() {  # $1 = an app's name: Steam's own tools belong on that drive
+  case "$1" in
+    ""|Proton|"Proton "*|"Steam Linux Runtime"*|SteamLinuxRuntime*|"Steamworks Common"*|FEX|FEX-Emu|"FEX "*) return 0 ;;
+  esac
+  return 1
+}
+homegames_cmd() {  # the script the VM runs: a line per app manifest on Steam's own drive
+  cat <<'HGEOF'
+for f in ~/.local/share/Steam/steamapps/appmanifest_*.acf; do
+  [ -f "$f" ] || continue
+  awk -F'"' '$2 == "appid" && a == "" {a = $4} $2 == "name" && n == "" {n = $4} $2 == "installdir" && d == "" {d = $4} $2 == "StateFlags" && s == "" {s = $4}
+    END {if (a != "") printf "homegame\t%s\t%s\t%s\t%s\n", a, s, d, n}' "$f"
+done
+HGEOF
+}
+homegames_guard() {  # $1 = what Steam does (game, download, idle), $2 = the VM's lines (homegame TAB appid TAB StateFlags TAB installdir TAB name)
+  local state="$1" lines="$2" kind id flags dir name now keep="" e i n count title text list
+  local -a ids=() dirs=() names=() args=()
+  [[ "${BOTTLE_HOME_GAMES:-1}" != 0 ]] || return 0
+  while IFS=$'\t' read -r kind id flags dir name; do
+    [[ "$kind" == homegame && "$id" =~ ^[0-9]+$ && "$flags" =~ ^[0-9]+$ && -n "$name" ]] || continue
+    if homegame_is_tool "$name"; then continue; fi
+    if (( flags & 4 )); then continue; fi   # fully installed: it stays
+    ids+=("$id"); dirs+=("$dir"); names+=("$name")
+  done <<<"$lines"
+  (( ${#ids[@]} > 0 )) || return 0
+  [[ "$state" != game ]] || return 0
+  now="$(date +%s)"
+  for e in $HG_CANCELS; do
+    if (( now - ${e#*@} < 600 )); then keep="$keep$e "; fi
+  done
+  HG_CANCELS="$keep"
+  # the same app three times in ten minutes: Steam keeps starting it, so say so once and stop
+  i=0
+  while (( i < ${#ids[@]} )); do
+    count="$(printf '%s\n' $HG_CANCELS | grep -c "^${ids[$i]}@" || true)"
+    if (( count >= 3 )); then
+      if [[ "$HG_GAVE_UP" != *" ${ids[$i]} "* ]]; then
+        HG_GAVE_UP="$HG_GAVE_UP ${ids[$i]} "
+        echo "$(date '+%F %T') Steam keeps installing ${names[$i]} on the VM's own drive: not cancelling it again"
+        vm_notice 1 90 "${names[$i]} keeps installing on the Linux system's drive" "Portalistic cancelled it three times. Cancel it in Steam's Downloads, then install it again with Install to set to a game folder (Mac)."
+      fi
+      unset 'ids[$i]' 'dirs[$i]' 'names[$i]'
+      ids=(${ids[@]+"${ids[@]}"}); dirs=(${dirs[@]+"${dirs[@]}"}); names=("${names[@]+"${names[@]}"}")
+      continue
+    fi
+    i=$(( i + 1 ))
+  done
+  (( ${#ids[@]} > 0 )) || return 0
+  n="${#ids[@]}"
+  list="$(printf '%s, ' "${names[@]}")"
+  echo "$(date '+%F %T') $n game(s) installing on the VM's own drive (${list%, }): cancelling"
+  steam_stop >/dev/null 2>&1 || true
+  i=0
+  while (( i < n )); do
+    args+=("${ids[$i]}" "${dirs[$i]}")
+    HG_CANCELS="$HG_CANCELS${ids[$i]}@$now "
+    i=$(( i + 1 ))
+  done
+  # shellcheck disable=SC2016  # runs in the VM
+  vsh_for 120 bash -c '
+    S=~/.local/share/Steam/steamapps
+    while [ $# -ge 2 ]; do
+      id="$1"; dir="$2"; shift 2
+      case "$id" in ""|*[!0-9]*) continue ;; esac
+      rm -f "$S/appmanifest_$id.acf" "$S"/downloading/state_"$id"_*
+      rm -rf "$S/downloading/$id"
+      case "$dir" in ""|.|..|*/*) ;; *) rm -rf "$S/common/$dir" ;; esac
+    done
+    true' _ "${args[@]}" >/dev/null 2>&1 || true
+  steam_start >/dev/null 2>&1 || true
+  if (( n == 1 )); then
+    title="${names[0]} can't be installed on the Linux system's drive"
+  else
+    title="$n games can't be installed on the Linux system's drive"
+  fi
+  text="That drive (20 GB) holds Linux, Steam and Proton, so Portalistic cancelled the install and deleted what was downloaded. Install it again in Steam and set Install to a game folder (Mac)."
+  vm_notice 1 90 "$title" "$text"
+}
+# <<< homegames
 
 # ---- the first launch on a Mac: Portalistic's Linux system (bottle setup) ----
 # A Mac without the VM gets Portalistic's ready-made Linux image (host/build-image.sh made it;
@@ -2863,8 +2978,9 @@ awake_loop() {
     fi
     # (with a time limit: a VM that doesn't answer mustn't stop the watcher)
     # shellcheck disable=SC2016  # runs in the VM
-    out="$(vsh_for 40 bash -c 'echo "vmfree $(df -Pk / | awk "NR == 2 {print \$4}")"; command -v bottle-busy >/dev/null && bottle-busy || echo idle' 2>/dev/null || true)"
+    out="$(vsh_for 40 bash -c "$(vm_logs_cap_cmd); $(homegames_cmd)"'; echo "vmfree $(df -Pk / | awk "NR == 2 {print \$4}")"; command -v bottle-busy >/dev/null && bottle-busy || echo idle' 2>/dev/null || true)"
     state="$(tail -n 1 <<<"$out")"
+    homegames_guard "$state" "$out" || true   # a game installing on the VM's own drive (see homegames_guard)
     disk_guard "$state" || true   # the Mac's free space (see disk_guard)
     vm_disk_guard "$state" "$(sed -n 's/^vmfree //p' <<<"$out" | head -n 1)" || true   # the VM's own disk
     # a kit test asked for from outside (logs/.selftest holds its name): not while a game runs,
@@ -3230,6 +3346,7 @@ case "$cmd" in
   app-update)   cmd_app_update "$@" ;;
   uninstall)    cmd_uninstall "$@" ;;
   _vmdisk-guard) need_vm; vm_disk_guard "${1:-idle}" "$(vm_disk_free_kb)" ;;   # one round of the watcher's (tests)
+  _homegames-guard) need_vm; homegames_guard "${1:-idle}" "$(vsh_for 40 bash -c "$(homegames_cmd)")" ;;   # one round of the watcher's (tests)
   kosmickrisp)  exec "$KIT_DIR/host/kosmickrisp.sh" "$@" ;;
   help|-h|--help) sed -n '2,/^# Written/p' "$src" | sed 's/^# \{0,1\}//' ;;
   *) die "unknown command '$cmd' (bottle help)" ;;
