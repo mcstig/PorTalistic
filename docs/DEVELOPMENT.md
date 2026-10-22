@@ -101,6 +101,15 @@ Proton and Steam's runtime (~2-2.5 GB more).
   `mac-installapp8`, and the system log's "applicationShouldTerminate: NSTerminateNow" right after the answer).
   `installing` holds that rule off during the move. Each step is logged to `app-install.log` (the self-test's
   log file when set).
+- **Games from before come back (0.7.0.13, Oct 23).** Michael reinstalled on the M1 without deleting the games
+  and Steam showed none: Steam's first start (which installs Steam) comes before `bottle-libraries sync` can add
+  the folder, and the GOG/Epic records (`stores/games.json`, Legendary's `installed.json`) went with the VM. Now
+  the watcher's `libs_guard` (in the playmap block; the VM answers `libmissing TAB name` for a connected game
+  folder missing from `libraryfolders.vdf`) restarts Steam once per folder per hour, with a banner;
+  `bottle-stores adopt` (run by every `sync`) rebuilds a GOG record from `goggame-ID.info` (play task, Galaxy,
+  size from disk) and an Epic one through `legendary import --skip-dlcs` when signed in; `cmd_setup` adds a
+  drive's "Portalistic Library" folder (marker file) again. Tests: `stores-selftest.py` (adopt), `mac-playmap2`
+  section 4c, `mac-libguard1/2` (the VM's answer, with the SSD taken out of a copy of the vdf).
 - **Uninstall** (Portalistic > Uninstall Portalistic…, `bottle uninstall --list | --yes`). The
   dialog lists what goes: the Linux system (`~/.portalistic/lima/steamos-bottle`, or the
   `steamos-bottle` VM in `~/.lima` on a Mac set up with the kit), then settings, logs, caches and

@@ -457,6 +457,7 @@ def note_galaxy(games):
 
 
 def cmd_sync(args):
+    adopt_all()          # (games already in a folder that have no record yet: a reinstall)
     games = all_installed()
     note_galaxy(games)
     if steam_running() and not args.force:
@@ -764,6 +765,151 @@ def gog_folders(args):
     else:
         for c in out:
             say(f"{c['name']:<10} {c['label']:<20} {human(c['free']):>9} free  {c['path']}{'  (default)' if c['default'] else ''}")
+    return 0
+
+
+
+# ------------------------------------------------------------------ games already in a folder (adopt)
+
+def dir_size(d):
+    try:
+        return sum(f.stat().st_size for f in Path(d).rglob("*") if f.is_file())
+    except OSError:
+        return 0
+
+
+def adopt_gog(choice, have, quiet):
+    """GOG games sitting in CHOICE's "GOG Games" folder that games.json doesn't know (a reinstall, say):
+    a record each, from their goggame-ID.info. -> how many were adopted."""
+    base = Path(choice["path"]) / "GOG Games"
+    if not base.is_dir():
+        return 0
+    known_dirs = {str(Path(r.get("dir", ""))) for r in have.values() if isinstance(r, dict)}
+    cache = {g["id"]: g for g in read_json(LIBCACHE).get("games") or []}
+    n = 0
+    for dest in sorted(p for p in base.iterdir() if p.is_dir()):
+        if str(dest) in known_dirs or dest.name.endswith(".moving"):
+            continue
+        # the game's own goggame-ID.info (a DLC has one too, without play tasks)
+        gid, title = None, dest.name
+        for f in sorted(dest.glob("goggame-*.info")):
+            m = re.fullmatch(r"goggame-(\d+)\.info", f.name)
+            d = read_json(f)
+            if m and (gid is None or d.get("playTasks")):
+                gid, title = m.group(1), str(d.get("name") or dest.name)
+                if d.get("playTasks"):
+                    break
+        if gid is None or gid in have:
+            continue
+        task = play_task(dest)
+        if task is None:
+            if not quiet:
+                say(f"{dest.name}: a GOG game folder, but no goggame-*.info says what starts it; not adopted")
+            continue
+        exe, gargs, start = task
+        try:
+            installed_at = int(dest.stat().st_mtime)
+        except OSError:
+            installed_at = int(time.time())
+        rec = {"id": gid, "store": "gog", "title": title, "dir": str(dest), "exe": exe, "args": gargs, "startdir": start,
+               "folder": choice["name"], "size": dir_size(dest), "installed": installed_at, "lang": "",
+               "slug": (cache.get(gid) or {}).get("slug", ""), "icon": "", "art": 0, "art_try": 0}
+        rec["appid"] = shortcut_appid(f'"{exe}"', title)
+        rec["galaxy"] = bool(uses_galaxy(dest))
+        try:
+            fetch_art(rec)
+        except Exception:    # (no network, no sign-in: the pictures come later, as for any game)
+            pass
+        update_installed("gog", gid, rec)
+        have[gid] = rec
+        say(f"Adopted {title} (GOG) from {choice['label']} / GOG Games / {dest.name}")
+        n += 1
+    return n
+
+
+def adopt_epic(choice, have, quiet):
+    """Epic games sitting in CHOICE's "Epic Games" folder that games.json doesn't know: Legendary imports
+    each (it needs the sign-in), then a record as epic_install makes. -> how many were adopted."""
+    base = Path(choice["path"]) / "Epic Games"
+    if not base.is_dir():
+        return 0
+    known_dirs = {str(Path(r.get("dir", ""))) for r in have.values() if isinstance(r, dict)}
+    candidates = []
+    for dest in sorted(p for p in base.iterdir() if p.is_dir()):
+        if str(dest) in known_dirs or dest.name.endswith(".moving"):
+            continue
+        app = None
+        for f in sorted((dest / ".egstore").glob("*.mancpn")):
+            app = str(read_json(f).get("AppName") or "")
+            if app:
+                break
+        if app and EPIC_APP.fullmatch(app) and app not in have:
+            candidates.append((app, dest))
+    if not candidates:
+        return 0
+    if not epic_user():
+        if not quiet:
+            say(f"{len(candidates)} Epic game(s) in {choice['label']} / Epic Games need the Epic sign-in to be adopted "
+                "(Stores > Epic Games…: sign in; they are picked up at Steam's next start)")
+        return 0
+    if not legendary_available():
+        return 0
+    n = 0
+    with locked("epic"):
+        for app, dest in candidates:
+            igame = read_json(LGD_CONFIG / "installed.json").get(app)
+            if not isinstance(igame, dict) or not igame.get("install_path"):
+                code, out, err = legendary_run(["-y", "import", "--skip-dlcs", "--platform", "Windows", app, str(dest)], timeout=600)
+                igame = read_json(LGD_CONFIG / "installed.json").get(app)
+                if code != 0 or not isinstance(igame, dict) or not igame.get("install_path"):
+                    if not quiet:
+                        say(f"{dest.name}: Epic (Legendary) didn't take it over ({lgd_why(err or out)}); not adopted")
+                    continue
+            install_dir = Path(igame["install_path"])
+            rel = str(igame.get("executable") or "").replace("\\", "/").lstrip("/")
+            exe = find_nocase(install_dir, rel) if rel else None
+            if exe is None or not exe.is_file():
+                continue
+            title = igame.get("title") or dest.name
+            try:
+                installed_at = int(dest.stat().st_mtime)
+            except OSError:
+                installed_at = int(time.time())
+            rec = {"id": app, "store": "epic", "title": title, "dir": str(install_dir), "exe": str(exe), "args": "",
+                   "startdir": str(exe.parent), "folder": choice["name"],
+                   "size": int(igame.get("install_size") or 0) or dir_size(install_dir), "installed": installed_at,
+                   "version": str(igame.get("version") or ""), "icon": "", "art": 0, "art_try": 0}
+            rec["appid"] = shortcut_appid(f'"{exe}"', title)
+            try:
+                fetch_art(rec)
+            except Exception:
+                pass
+            update_installed("epic", app, rec)
+            have[app] = rec
+            say(f"Adopted {title} (Epic) from {choice['label']} / Epic Games / {dest.name}")
+            n += 1
+    return n
+
+
+def adopt_all(quiet=True):
+    """Games already in the game folders (a reinstall of Portalistic, a folder from another Mac): records for
+    them, so they get their Steam shortcuts like any installed game. -> how many were adopted."""
+    n = 0
+    gog_have, epic_have = installed("gog"), installed("epic")
+    for choice in folder_choices():
+        if choice["name"] == "vm":
+            continue
+        try:
+            n += adopt_gog(choice, gog_have, quiet)
+            n += adopt_epic(choice, epic_have, quiet)
+        except Exception as e:    # (one folder's trouble mustn't stop the rest, nor Steam's start)
+            say(f"{choice['label']}: looking for games to adopt didn't finish ({e})")
+    return n
+
+
+def cmd_adopt(args):
+    n = adopt_all(quiet=False)
+    say(f"{n} game(s) adopted." if n else "Nothing to adopt: every GOG and Epic game in the game folders is known.")
     return 0
 
 
@@ -1673,6 +1819,7 @@ def main():
     p = e.add_parser("install"); p.add_argument("id"); p.add_argument("--folder"); p.set_defaults(fn=epic_install)
     p = e.add_parser("remove"); p.add_argument("id"); p.add_argument("--purge", action="store_true"); p.set_defaults(fn=epic_remove)
     p = sub.add_parser("sync"); p.add_argument("--force", action="store_true"); p.set_defaults(fn=cmd_sync)
+    p = sub.add_parser("adopt", help="records for GOG/Epic games already in the game folders (after a reinstall)"); p.set_defaults(fn=cmd_adopt)
     p = sub.add_parser("run", help="run a game with Comet (GOG) or Epic's sign-in beside it")
     p.add_argument("--epic", metavar="ID", help="an Epic game: add Epic's sign-in to its arguments")
     p.add_argument("command", nargs=argparse.REMAINDER); p.set_defaults(fn=cmd_run)

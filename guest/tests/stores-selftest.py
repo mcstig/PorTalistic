@@ -226,6 +226,15 @@ elif cmd == "uninstall":
     inst = installed()
     inst.pop(argv[-1], None)
     json.dump(inst, open(cfg + "/installed.json", "w"))
+elif cmd == "import":
+    app, d = argv[-2], argv[-1]
+    if app not in FOLDERS or not os.path.isdir(d):
+        sys.stderr.write(f'[cli] ERROR: Could not find "{app}" in list of available games.\n'); sys.exit(1)
+    inst = installed()
+    inst[app] = {"app_name": app, "title": "Alpha Quest" if app == "alphaquest" else "Zeta Battle", "version": VER,
+                 "install_path": d, "executable": "Binaries\\win64\\game.EXE", "install_size": 4242, "platform": "Windows"}
+    json.dump(inst, open(cfg + "/installed.json", "w"))
+    json.dump({"app_name": app, "app_title": app, "metadata": {"keyImages": imgs(app)}}, open(f"{cfg}/metadata/{app}.json", "w"))
 '''
 
 
@@ -745,6 +754,31 @@ def main():
         check(json.loads(r.stdout)["downloader"] is True, "epic: the tool finds the kit's Legendary")
     else:
         print("skip  the real Legendary needs requests, filelock and pycryptodomex")
+
+    # adopt: games already in the folders with no record (a reinstall of Portalistic)
+    run("gog", "install", "1207658930", check_code=0)
+    run("epic", "install", "zetabattle", check_code=0)
+    games_file = tmp / "state/games.json"
+    all_games = json.loads(games_file.read_text())
+    had_gog, had_epic = set(all_games.get("gog", {})), set(all_games.get("epic", {}))
+    check("1207658930" in had_gog and "zetabattle" in had_epic, "adopt: one GOG and one Epic game installed first")
+    egstore = mounts / "mac/Epic Games/ZetaBattle/.egstore"
+    egstore.mkdir(parents=True, exist_ok=True)
+    (egstore / "abc.mancpn").write_text(json.dumps({"FormatVersion": 0, "AppName": "zetabattle", "CatalogItemId": "x", "CatalogNamespace": "ns-zetabattle"}))
+    games_file.write_text("{}")
+    lgd_inst = tmp / "state/legendary/installed.json"
+    if lgd_inst.exists():
+        lgd_inst.write_text("{}")
+    r = run("adopt", check_code=0)
+    all_games = json.loads(games_file.read_text())
+    got_gog, got_epic = set(all_games.get("gog", {})), set(all_games.get("epic", {}))
+    check("1207658930" in got_gog and "Adopted Alpha Quest (GOG)" in r.stdout, f"adopt: the GOG game in the folder gets its record back ({r.stdout.strip()[-200:]})")
+    rec = all_games.get("gog", {}).get("1207658930", {})
+    check(rec.get("exe", "").endswith("Bin/Game.EXE") and rec.get("args") == "-windowed" and rec.get("folder") == "mac",
+          "adopt: exe, arguments and folder from goggame-*.info")
+    check(had_epic <= got_epic, f"adopt: the Epic games in the folder are imported again ({sorted(got_epic)} vs {sorted(had_epic)})")
+    r2 = run("adopt", check_code=0)
+    check("Nothing to adopt" in r2.stdout, "adopt: nothing the second time")
 
     # logout
     run("gog", "logout", check_code=0)

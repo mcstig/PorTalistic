@@ -65,7 +65,8 @@ Proton like the rest.
 ## Removing Portalistic
 
 **Portalistic > Uninstall Portalistic…** deletes the Linux system and Portalistic's files and
-moves the app to the Trash; your game folders stay unless you tick the box.
+moves the app to the Trash; your game folders stay unless you tick the box. Install Portalistic
+again later and the games in them are back, GOG and Epic ones included.
 
 ## Support, license, credits
 
