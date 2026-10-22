@@ -69,13 +69,18 @@ TARGET_HOME="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
 STATE="$TARGET_HOME/.config/steamos-bottle"
 FAILED=()
 
-step() {  # step "description" command... : run, record failure, keep going
-  local what="$1"; shift
+SPLASH_STATUS="$TARGET_HOME/.cache/steamos-bottle/splash-status"   # bottle-splash's text, when it's on
+STEP_N=0
+step() {  # step "description" command... : run, record failure, keep going (each step's time in the log)
+  local what="$1" t0=$SECONDS; shift
+  STEP_N=$(( STEP_N + 1 ))
   info "$what"
+  [[ -f "$SPLASH_STATUS" ]] && printf '# Updating Portalistic\x27s Linux system (step %s of about 25): %s\n' "$STEP_N" "$what" >> "$SPLASH_STATUS" 2>/dev/null
   if ! "$@"; then
     warn "$what: failed (see above)"
     FAILED+=("$what")
   fi
+  echo "  ($(( SECONDS - t0 )) s)"
 }
 
 # --- Desktop packages --------------------------------------------------------
@@ -285,6 +290,7 @@ tools() {
   install -m 0755 "$HERE/bottle-whyquit"   /usr/local/bin/bottle-whyquit   || return 1
   install -m 0755 "$HERE/bottle-session"   /usr/local/bin/bottle-session   || return 1
   install -m 0755 "$HERE/bottle-libraries" /usr/local/bin/bottle-libraries || return 1
+  install -m 0755 "$HERE/bottle-splash"    /usr/local/bin/bottle-splash    || return 1
   install -m 0755 "$HERE/bottle-stores"    /usr/local/bin/bottle-stores    || return 1
   install -m 0755 "$HERE/tso/bottle-tso"   /usr/local/bin/bottle-tso       || return 1
   install -d -m 0755 /usr/local/share/steamos-bottle/tso || return 1

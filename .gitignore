@@ -15,3 +15,6 @@ host/tests/
 host/swift-check/
 guest/tests/dx12-venus/libs/
 guest/tests/dx12-venus/tests/
+host/krunkit/krunkit
+host/krunkit/BUILT
+host/share/

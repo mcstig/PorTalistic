@@ -1,0 +1,31 @@
+diff --git a/src/virtio.rs b/src/virtio.rs
+index 1d3baf3..68220b0 100644
+--- a/src/virtio.rs
++++ b/src/virtio.rs
+@@ -221,11 +221,25 @@ impl FromStr for BlkConfig {
+ /// Set the virtio-blk device to be the krun VM's root disk.
+ impl KrunContextSet for BlkConfig {
+     unsafe fn krun_ctx_set(&self, id: u32) -> Result<(), anyhow::Error> {
++        // Portalistic: the block id must be unique per disk (libkrun registers one MMIO device per
++        // id), but Lima names every additional disk's file "datadisk": then the folder's name
++        // ("pg-mac/datadisk") tells them apart. Also the serial the guest sees.
+         let basename = match self.path.file_name() {
+             Some(osstr) => osstr.to_str().unwrap_or("disk"),
+             None => "disk",
+         };
+-        let block_id_cstr = CString::new(basename).context("can't convert basename to cstring")?;
++        let parent = self
++            .path
++            .parent()
++            .and_then(|p| p.file_name())
++            .and_then(|p| p.to_str())
++            .unwrap_or("");
++        let block_id_owned = if basename == "datadisk" && !parent.is_empty() {
++            format!("{parent}-{basename}")
++        } else {
++            basename.to_string()
++        };
++        let block_id_cstr = CString::new(block_id_owned).context("can't convert basename to cstring")?;
+         let path_cstr = path_to_cstring(&self.path)?;
+ 
+         if krun_add_disk2(

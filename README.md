@@ -245,6 +245,54 @@ took 9 minutes there), so:
 - Still open: why libkrun's share loses those requests (libkrun main has an eventfd fix for macOS, 137f84b, that
   isn't in 1.19.6; whether it's related is not known). Game files themselves are still read through the share.
 
+**A "please wait" window while Steam gets ready (Oct 22, kit)**
+
+On the laptop, after updating to 0.7.0.8 and restarting Steam, the window stayed black for about 10 minutes before
+Steam's start animation. `guest/bottle-splash` now shows zenity's progress window (zenity is in the Linux image) on
+the bottle's screen: `show TEXT` (appears only after 3 s), `text TEXT`, `until-steam` (closes 2 s after a Steam
+window is mapped: `wmctrl -lx`, at most 10 minutes), `close`; at most 15 minutes in any case. `update_if_behind`
+shows it when Steam starts next (from the kit's copy, so the first update to this version has it too); each step
+of `update-guest.sh` writes its name to it and now prints its time; `steam-arm64` shows it at its start, names
+each part (game folders, other stores, Steam Play, DXVK) and logs their times in `steam-timing.log`.
+`BOTTLE_SPLASH=0` turns it off. The x86 Vulkan probes in `install-x86.sh` run only when the layers or the x86
+Venus driver changed (`/var/lib/steamos-bottle/x86-probe-stamp`; `BOTTLE_FORCE_PROBE=1`). The prefix copy now
+waits at most 20 s for the listing, 60 s for the size, 120 s per prefix and 240 s in all. Dev Mac, Oct 22 16:10:
+update 14 s, Steam's own steps 2 s, the window showed "Starting Steam…" and went with Big Picture.
+
+**A game folder is a drive (Oct 22, kit; 0.7.0.9)**
+
+The lost requests on the laptop's virtio-fs share (above) hit anything on the game path: Proton's chmod at a game's
+start, Steam's install step reading the game's installers (DMC5 sat "finishing" for 20 minutes), the watcher's
+find. Moving the prefixes (0.7.0.8) wasn't enough. The VM's own 20 GB drive, a plain file through virtio-blk,
+never hung on either Mac, so games now live on drives too:
+
+- **Mac side** (`lib_disk_prepare`, from `lib_mounts_expr` at every VM start): each game folder gets
+  `Portalistic Games.img`, a sparse raw file as big as the volume it's on (`df -k`; 1 TB when unknown), starting
+  with the header `PORTALISTIC-GAMES NAME`; `~/.lima/_disks/pg-NAME/datadisk` is a symlink to it and
+  `additionalDisks: [{name: pg-NAME, format: false}]` goes to Lima next to the mounts. The folder itself is still
+  shared, now at `/mnt/portalistic-folders/NAME`. `libraries.json` carries `"disk": true` and the Mac's `"free"`
+  bytes per folder. A failed start leaves Lima's `in_use_by` note on the disk; it's removed when the VM isn't
+  running. `bottle library remove` forgets the Lima disk (`lib_disk_forget`); the image stays in the folder.
+  `BOTTLE_GAME_DISKS=0`: the plain share, as before.
+- **krunkit patched** (`host/krunkit/`): Lima names every additional disk's file `datadisk`, krunkit uses the file
+  name as the block id, and libkrun keeps one MMIO device per id, so only the last disk reached the VM. The patch
+  (`krunkit-datadisk-id.patch`, 15 lines) makes the id `pg-NAME-datadisk`. `build.sh` builds it on the development
+  Mac (Homebrew's rust, installed if missing; libkrun from Homebrew; firmware linked at `host/share/krunkit`);
+  `package-app.sh` takes it when it's newer than the patch, else Homebrew's with a warning. The kit's `bottle`
+  puts `host/krunkit` first on PATH. The binary and `host/share` are gitignored.
+- **VM side** (`bottle-libraries sync`, before Steam starts): the disk is found by its label `portalistic-NAME`
+  or, unformatted, by the header (`sudo dd`), formatted once (`mkfs.btrfs -L`), mounted at `/mnt/portalistic/NAME`
+  (`noatime,discard=async`; `btrfs rescue fix-device-size` first when the mount fails: Lima trims the image by
+  4 KB at the first start, which btrfs refuses), and sized to what's in it plus the Mac's free space minus 2 GB
+  (`btrfs filesystem resize`), so Steam can't start a download the Mac can't hold; `tidy` (the watcher, every 10
+  minutes while no game runs) does `fstrim` and the resize again. Games in the folder itself move into the drive
+  once: per game `rsync -a --partial` (an hour at most, three tries; a lost request ends a try), its
+  compatdata/shadercache, then the manifest; the folder's copy is deleted once the game is in. Prefixes 0.7.0.8
+  had copied to the VM's disk go back into the drive. Dev Mac, Oct 22 17:21: Dead Cells moved in a minute, the
+  SSD's 156 GB at about 150 MB/s; `fstrim` after deleting 2 GB took the Mac file from 2 GB to 356 KB.
+- Tests: `guest/tests/libraries-disks-selftest.py` (15 checks: mount stand-in, the move, contentid kept, no bind
+  mount for a drive, prefixes back, the plain share, tidy), `host/tests/mac-disks1..20.sh` (the steps on the dev Mac).
+
 **Making a release** (on the development Mac, which has the kit's setup: Homebrew's lima and
 krunkit, KosmicKrisp, Xcode, a Developer ID certificate):
 

@@ -56,6 +56,16 @@ else
   echo "  (no i386 build in this kit or no 32-bit side in the rootfs: 32-bit games won't work)"
 fi
 
+# The probes only tell (they change nothing) and take a minute or more on a slow Mac: they run when
+# the layer or the x86 Vulkan driver changed since the last time, or with BOTTLE_FORCE_PROBE=1.
+PSTAMP_FILE=/var/lib/steamos-bottle/x86-probe-stamp
+PSTAMP="$(cat "$R/usr/lib64/libVkLayer_bottle_present.so" "$R/usr/lib/libVkLayer_bottle_present.so" \
+  "$R"/usr/lib64/libvulkan_virtio.so "$R"/usr/lib/libvulkan_virtio.so /usr/local/bin/vk-probe-x86 2>/dev/null | sha1sum | cut -c1-16)"
+if [[ "${BOTTLE_FORCE_PROBE:-0}" != 1 && "$(cat "$PSTAMP_FILE" 2>/dev/null)" == "$PSTAMP" ]]; then
+  info "x86 Vulkan probes skipped: nothing changed since they last ran (BOTTLE_FORCE_PROBE=1 runs them)"
+  exit 0
+fi
+mkdir -p "${PSTAMP_FILE%/*}" && echo "$PSTAMP" > "$PSTAMP_FILE"
 info "Probing the x86 Vulkan stack through FEX (thunks off, feature spoofing forced on)…"
 nothunks="$(mktemp)"; echo '{"ThunksDB": {"Vulkan": 0, "GL": 0}}' > "$nothunks"; chmod 644 "$nothunks"
 sudo -u "$USER_NAME" env DISPLAY=:1 FEX_ROOTFS="$R" FEX_THUNKCONFIG="$nothunks" BOTTLE_FAKE_FEATURES=1 \

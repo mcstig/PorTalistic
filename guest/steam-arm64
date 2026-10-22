@@ -561,6 +561,17 @@ SECONDS=0
 first_run=0
 [[ -d "${CLIENT_DIR}" ]] || first_run=1
 
+# A "please wait" window on the screen while the work below runs (it shows only after 3 s, and
+# goes once Steam's window is up), and how long each part took in the timing log.
+splash() { command -v bottle-splash >/dev/null && bottle-splash "$@" >/dev/null 2>&1; true; }
+timed() {  # timed "what" command...: run it, note its time (steam-timing.log)
+  local what="$1" t0=$SECONDS; shift
+  splash text "$what"
+  "$@"
+  echo "$(date -Is) $what: $(( SECONDS - t0 ))s" >> "${TIMING_LOG}"
+}
+splash show "Starting Steam…"
+
 install_steam_runtime_arm64
 symlink_libraries
 install_steam_client_arm64
@@ -569,13 +580,15 @@ gpu_stats_lib
 link_dot_steam
 (( first_run )) && echo "$(date -Is) install: ${SECONDS}s" >> "${TIMING_LOG}"
 
-libraries_setup
-stores_setup
-steamplay_setup
+timed "Getting your game folders ready…" libraries_setup
+timed "Adding games from other stores…" stores_setup
+timed "Setting your games to their Windows versions…" steamplay_setup
 perf_graphs_off
 proton_overlay_settings
-start_dxvk_watch
+timed "Getting DXVK ready for your games…" start_dxvk_watch
 start_logkeep
+splash text "Starting Steam…"
+splash until-steam
 # Steam stays on the screen the Mac app shows: Big Picture up and full screen (or the desktop
 # main window maximized), coming back when it's left, minimized or closed, and Steam itself
 # starting again if it quits (bottle-maximize-steam --keep). This start isn't a stop any more.

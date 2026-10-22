@@ -65,6 +65,13 @@ LIMACTL="$LIMA/bin/limactl"
 DRIVER="$LIMA/libexec/lima/lima-driver-krunkit"
 AGENT="$LIMA/share/lima/lima-guestagent.Linux-aarch64.gz"
 KRUNKIT="$(cd "$(brew --prefix krunkit)/bin" && pwd -P)/krunkit"
+# Portalistic's own build of krunkit (host/krunkit: one patch, a block id of its own per Lima disk,
+# so every game folder's drive reaches the VM) when it's there and newer than its patch
+if [[ -x "$KIT/host/krunkit/krunkit" && "$KIT/host/krunkit/krunkit" -nt "$KIT/host/krunkit/krunkit-datadisk-id.patch" ]]; then
+  KRUNKIT="$KIT/host/krunkit/krunkit"
+else
+  echo "warning: host/krunkit/krunkit (the patched krunkit) is missing or older than its patch: packaging Homebrew's (one game drive at most reaches the VM). host/krunkit/build.sh makes it." >&2
+fi
 KRUNFW="$(brew --prefix libkrunfw)/lib/libkrunfw.5.dylib"
 KRUNKIT_FW="$(brew --prefix krunkit)/share/krunkit/KRUN_EFI.silent.fd"
 ICD_SRC="$(cat "$HOME/.config/steamos-bottle/kosmickrisp_icd" 2>/dev/null || true)"

@@ -207,6 +207,11 @@ if [[ -n "$APP_BUNDLE" ]]; then
   fi
 else
   LOGS_DIR="$KIT_DIR/logs"
+  # the kit's own krunkit (host/krunkit: Lima disks with ids of their own) ahead of Homebrew's, when built
+  if [[ -x "$KIT_DIR/host/krunkit/krunkit" ]]; then
+    PATH="$KIT_DIR/host/krunkit:$PATH"
+    export PATH
+  fi
 fi
 
 info() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
@@ -1136,7 +1141,15 @@ update_if_behind() {
     return 1
   fi
   info "The kit changed since the VM was last updated: updating it first${1:+ ($1)}…"
+  [[ "${1:-}" == *Steam* ]] && vm_splash show "Updating Portalistic's Linux system…"   # (Steam's start takes it over)
   cmd_update --now
+}
+
+# bottle-splash on the bottle's screen (a "please wait" window while Steam isn't there), from this
+# kit's copy: the VM may not have it yet (it comes with this very update).
+vm_splash() {
+  [[ -f "$KIT_DIR/guest/bottle-splash" ]] || return 0
+  vsh_for 15 bash -c "$(cat "$KIT_DIR/guest/bottle-splash")" bottle-splash "$@" >/dev/null 2>&1 || true
 }
 
 # Everything the app shows, running: the VM, its desktop and screen server, Steam, the sound on
@@ -1144,6 +1157,14 @@ update_if_behind() {
 # the bottle isn't there; its "==>" lines are the app's progress messages.
 cmd_up() {
   need_vm
+  # the game folders' drives (or shares) Lima should give the VM changed (an update made the folders
+  # drives, a folder was added by hand): Lima takes that only at a start, so the VM restarts once
+  if [[ "$(vm_status)" == Running && -f "$LIB_APPLIED" ]] && [[ "$(cat "$LIB_APPLIED")" != "$(lib_mounts_expr 2>/dev/null)" ]]; then
+    info "The game folders changed (drives for the VM): restarting the VM once…"
+    vm_splash show "Restarting Portalistic's Linux system for the game folders' drives…" 2>/dev/null || true
+    steam_stop
+    vm_stop
+  fi
   [[ "$(vm_status)" == Running ]] || vm_start
   # The VM side (built by bottle update): bottle-desktop starts the screen server and
   # maximizes Steam's window (safe to run again).
@@ -1407,7 +1428,9 @@ LIB_APPLIED="$STATE_DIR/libraries-mounted"   # the mounts last given to Lima
 LIB_MOUNT_ROOT=/mnt/portalistic
 LIB_MAC_DIR="$HOME/Games/Portalistic"
 LIB_DRIVE_DIR="Portalistic Library"
-LIB_HOME_ONLY='.mounts = [{"location": "~"}]'
+LIB_HOME_ONLY='.mounts = [{"location": "~"}] | .additionalDisks = []'
+LIB_FOLDER_ROOT=/mnt/portalistic-folders   # the folders themselves (virtiofs), for moving games into the drive
+LIB_IMAGE="Portalistic Games.img"          # in each game folder: the drive the VM gets (see lib_disk_prepare)
 MAC_STEAM_LIBS="$HOME/Library/Application Support/Steam/config/libraryfolders.vdf"
 
 json_str() {  # a JSON string
@@ -1436,13 +1459,61 @@ lib_save() {  # $1 default, $2 stamp; the rows on stdin
 
 # The VM's shares as Lima mounts (a yq expression): the home folder, read-only as always, and
 # each game folder that's there right now.
+# ---- a game folder is a drive (Oct 22) ----
+# The VM used to see each game folder straight (a virtiofs share at /mnt/portalistic/NAME). On a
+# 2020 M1 MacBook Pro that share sometimes never answered a request, and a game's start, Steam's
+# install step or the watcher waited forever (libkrun 1.19.6's virtio-fs; the cause is open). The
+# VM's own 20 GB drive, a plain file read through virtio-blk, never did that. So each game folder
+# now holds a drive image, "Portalistic Games.img": a sparse file (it takes Mac space as games fill
+# it, and gives it back when they're uninstalled: fstrim in the VM) as big as the Mac volume it's
+# on, registered with Lima as the disk pg-NAME (a symlink in ~/.lima/_disks/pg-NAME/datadisk) and
+# attached unformatted (format: false); the VM formats it btrfs, labelled portalistic-NAME, and
+# mounts it at /mnt/portalistic/NAME (bottle-libraries). The folder itself is still shared, at
+# /mnt/portalistic-folders/NAME, so games already in it move into the drive once. BOTTLE_GAME_DISKS=0
+# goes back to the plain share.
+lib_disk_dir() { echo "${LIMA_HOME:-$HOME/.lima}/_disks/pg-$1"; }
+lib_disk_prepare() {  # $1 = NAME, $2 = PATH: the image and Lima's disk entry; 0 when the VM can get it
+  local name="$1" path="$2" img="$2/$LIB_IMAGE" dir size
+  dir="$(lib_disk_dir "$name")"
+  if [[ ! -f "$img" ]]; then
+    # as big as the volume (Steam sees that as the drive's size; the VM shrinks the file system to
+    # what the Mac really has free, see bottle-libraries); sparse: no space taken yet
+    size="$(df -k "$path" 2>/dev/null | awk 'NR == 2 {print $2 * 1024}')"
+    [[ "$size" =~ ^[0-9]+$ ]] && (( size > 20000000000 )) || size=1000000000000
+    if ! { printf 'PORTALISTIC-GAMES %s\n' "$name" > "$img" && dd if=/dev/zero of="$img" bs=1 count=0 seek="$size" 2>/dev/null; }; then
+      rm -f "$img"
+      warn "Couldn't make the drive image in $path; the VM shares the folder itself instead."
+      return 1
+    fi
+    info "Made the drive for the game folder $name: $img ($(( size / 1000000000 )) GB at most, taking space as games fill it)"
+  fi
+  mkdir -p "$dir" || return 1
+  # a start that failed leaves Lima's "in use" note on the disk, and the next start refuses it
+  [[ -f "$dir/in_use_by" && "$(vm_status)" != Running ]] && rm -f "$dir/in_use_by"
+  if [[ "$(readlink "$dir/datadisk" 2>/dev/null)" != "$img" ]]; then
+    rm -f "$dir/datadisk"
+    ln -s "$img" "$dir/datadisk" || return 1
+  fi
+  return 0
+}
+lib_disk_forget() {  # $1 = NAME: Lima's disk entry (the image stays in the folder)
+  local dir; dir="$(lib_disk_dir "$1")"
+  [[ -d "$dir" ]] || return 0
+  rm -f "$dir/datadisk" "$dir/in_use_by" 2>/dev/null; rmdir "$dir" 2>/dev/null || true
+}
 lib_mounts_expr() {
-  local expr='.mounts = [{"location": "~"}' name label path
+  local expr='.mounts = [{"location": "~"}' disks="" sep="" name label path
   while IFS=$'\t' read -r name label path; do
     [[ -n "$name" && -d "$path" ]] || continue
-    expr="$expr, {\"location\": $(json_str "$path"), \"mountPoint\": \"$LIB_MOUNT_ROOT/$name\", \"writable\": true}"
+    if [[ "${BOTTLE_GAME_DISKS:-1}" != 0 ]] && lib_disk_prepare "$name" "$path"; then
+      expr="$expr, {\"location\": $(json_str "$path"), \"mountPoint\": \"$LIB_FOLDER_ROOT/$name\", \"writable\": true}"
+      disks="$disks$sep{\"name\": \"pg-$name\", \"format\": false}"
+      sep=", "
+    else
+      expr="$expr, {\"location\": $(json_str "$path"), \"mountPoint\": \"$LIB_MOUNT_ROOT/$name\", \"writable\": true}"
+    fi
   done < <(lib_rows)
-  echo "$expr]"
+  echo "$expr] | .additionalDisks = [$disks]"
 }
 # Before the VM starts (Lima reads its mounts then). $1 = none: the home folder only.
 lib_mounts_apply() {
@@ -1462,13 +1533,32 @@ lib_mounts_apply() {
   printf '%s\n' "$expr" > "$LIB_APPLIED"
 }
 # The list, as the VM's bottle-libraries reads it (~/.config/steamos-bottle/libraries.json there).
+LIB_TIDY_LAST=0
+lib_disks_tidy() {  # $1 = what Steam does: every 10 minutes while no game runs
+  local now args="" name label path
+  [[ "$1" != game && "${BOTTLE_GAME_DISKS:-1}" != 0 ]] || return 0
+  now="$(date +%s)"
+  (( now - LIB_TIDY_LAST >= 600 )) || return 0
+  LIB_TIDY_LAST=$now
+  while IFS=$'\t' read -r name label path; do
+    [[ -n "$name" && -d "$path" ]] || continue
+    args="$args --free $name=$(lib_mac_free "$path")"
+  done < <(lib_rows)
+  [[ -n "$args" ]] || return 0
+  # shellcheck disable=SC2086
+  vsh_for 120 bash -c "command -v bottle-libraries >/dev/null && bottle-libraries tidy $args" >/dev/null 2>&1 || true
+}
+lib_mac_free() {  # $1 = a path: the bytes free on its volume (0 when it isn't there)
+  local kb; kb="$(df -k "$1" 2>/dev/null | awk 'NR == 2 {print $4}')"
+  [[ "$kb" =~ ^[0-9]+$ ]] && echo $(( kb * 1024 )) || echo 0
+}
 lib_push_conf() {
   local json sep="" name label path
   [[ -f "$LIB_CONF" ]] || return 0
   json="{\"default\": $(json_str "$(lib_key default)"), \"stamp\": $(json_str "$(lib_key stamp)"), \"folders\": ["
   while IFS=$'\t' read -r name label path; do
     [[ -n "$name" ]] || continue
-    json="$json$sep{\"name\": $(json_str "$name"), \"label\": $(json_str "$label"), \"path\": $(json_str "$path")}"
+    json="$json$sep{\"name\": $(json_str "$name"), \"label\": $(json_str "$label"), \"path\": $(json_str "$path"), \"free\": $(lib_mac_free "$path"), \"disk\": $([[ "${BOTTLE_GAME_DISKS:-1}" != 0 && -f "$path/$LIB_IMAGE" ]] && echo true || echo false)}"
     sep=", "
   done < <(lib_rows)
   json="$json]}"
@@ -1643,8 +1733,9 @@ lib_remove() {
     [[ "$name" != mac && -n "$(lib_find mac)" ]] && def=mac
   fi
   lib_rows | awk -F'\t' -v n="$name" '$1 != n' | lib_save "$def" "$(date +%s)"
-  info "Steam stops using \"$label\". Its games stay in $dir (bottle library add $dir brings them back)."
   lib_restart_vm
+  lib_disk_forget "$name"   # (after the VM let go of it)
+  info "Steam stops using \"$label\". Its games stay in $dir (bottle library add $dir brings them back)."
 }
 
 lib_default_set() {  # $1 = NAME or vm
@@ -3253,6 +3344,7 @@ awake_loop() {
     homegames_guard "$state" "$out" || true   # a game installing on the VM's own drive (see homegames_guard)
     gpu_auto_guard "$state" "$out" || true   # Steam's interface on the Mac's GPU: confirm it, or go back (see gpuauto)
     playmap_guard "$state" "$out" || true   # a game installed while Steam ran, a game's first start (see playmap)
+    lib_disks_tidy "$state" || true   # the game folders' drives: space back to the Mac, size to its free space
     disk_guard "$state" || true   # the Mac's free space (see disk_guard)
     vm_disk_guard "$state" "$(sed -n 's/^vmfree //p' <<<"$out" | head -n 1)" || true   # the VM's own disk
     # a kit test asked for from outside (logs/.selftest holds its name): not while a game runs,

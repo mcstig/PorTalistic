@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# bottle-splash: a small "please wait" window on the bottle's screen while Steam isn't there yet,
+# so the Mac window isn't just black (an update of the Linux system, the work before Steam starts:
+# copying game prefixes, setting games to Proton, DXVK). It appears only after 3 s (a quick Steam
+# start shows nothing) and goes when Steam's own window is up.
+#
+#   bottle-splash show TEXT     the window, with TEXT (shown after 3 s; again: just TEXT)
+#   bottle-splash text TEXT     new TEXT (only if the window is on)
+#   bottle-splash until-steam   closes it once a Steam window appears (at most 10 minutes)
+#   bottle-splash close
+#
+# Zenity's progress window (part of the Linux image); TEXT lines go to it through a file it
+# follows. BOTTLE_SPLASH=0 turns it off.
+set -u
+D="${HOME}/.cache/steamos-bottle"
+ST="$D/splash-status"
+PID="$D/splash.pid"
+export DISPLAY="${DISPLAY:-:1}"
+[[ "${BOTTLE_SPLASH:-1}" == 0 ]] && exit 0
+command -v zenity >/dev/null || exit 0
+mkdir -p "$D"
+
+running() { local p; p="$(cat "$PID" 2>/dev/null)"; [[ -n "$p" ]] && kill -0 "$p" 2>/dev/null; }
+say() { printf '# %s\n' "$1" >> "$ST" 2>/dev/null; }
+
+steam_window() {  # Steam's own window is mapped (Big Picture or its desktop windows)
+  command -v wmctrl >/dev/null || return 1
+  wmctrl -lx 2>/dev/null | grep -qiE ' steamwebhelper\.| steam\.steam |Steam Big Picture Mode'
+}
+
+case "${1:-}" in
+  show)
+    text="${2:-Starting Steam…}"
+    if running; then say "$text"; exit 0; fi
+    : > "$ST"; say "$text"
+    # (in its own session: the caller may be a script that exits, or Steam's start that execs on)
+    setsid -f bash -c '
+      ST="$1"; PID="$2"
+      echo $$ > "$PID"
+      sleep 3
+      [ "$(cat "$PID" 2>/dev/null)" = "$$" ] || exit 0
+      tail -n +1 -F "$ST" 2>/dev/null | zenity --progress --pulsate --no-cancel --title=Portalistic \
+        --width=460 --text="Please wait…" >/dev/null 2>&1 &
+      # never longer than 15 minutes, and gone when closed (the pid file goes)
+      for i in $(seq 1 900); do
+        sleep 1
+        [ "$(cat "$PID" 2>/dev/null)" = "$$" ] || break
+      done
+      pkill -P $$ 2>/dev/null
+      rm -f "$PID"
+    ' _ "$ST" "$PID" </dev/null >/dev/null 2>&1
+    ;;
+  text)
+    running && say "${2:-}"
+    ;;
+  until-steam)
+    running || exit 0
+    setsid -f bash -c '
+      for i in $(seq 1 600); do
+        "$0" _steam-up && break
+        sleep 1
+      done
+      sleep 2
+      "$0" close
+    ' "$0" </dev/null >/dev/null 2>&1
+    ;;
+  _steam-up)
+    steam_window
+    ;;
+  close)
+    p="$(cat "$PID" 2>/dev/null)"
+    rm -f "$PID"
+    if [[ -n "$p" ]]; then pkill -P "$p" 2>/dev/null; kill "$p" 2>/dev/null; fi
+    pkill -u "$(id -u)" -f '^zenity --progress --pulsate --no-cancel --title=Portalistic' 2>/dev/null
+    pkill -u "$(id -u)" -f "tail -n \+1 -F $ST" 2>/dev/null
+    true
+    ;;
+  *)
+    sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'
+    exit 2
+    ;;
+esac

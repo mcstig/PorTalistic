@@ -35,6 +35,19 @@ space straight back to the Mac.
                              (else the VM's disk) is the default.
   bottle-libraries status [--json]
                              each Steam library: where, free space, games, the default
+  bottle-libraries tidy [--free NAME=BYTES ...]
+                             the drives (see below): unused space given back to the Mac, the file
+                             system sized to the Mac's free space (the watcher runs it)
+
+Since Oct 22 a game folder is a drive: the Mac puts a sparse image "Portalistic Games.img" in the
+folder and attaches it to the VM (Lima disk pg-NAME; the folder itself is shared at
+/mnt/portalistic-folders/NAME). sync formats it btrfs once (label portalistic-NAME), mounts it at
+/mnt/portalistic/NAME, keeps its file system at what's in it plus the Mac's free space minus 2 GB
+(so Steam can't start a download the Mac can't hold), and moves the games the folder itself holds
+into it once (rsync per game, three tries; the folder's copy goes once the game is in). On a 2020
+M1 MacBook Pro the folder's share (virtio-fs) sometimes never answered a request and games hung;
+a drive goes through virtio-blk, which never did. The Mac's libraries.json says "disk": true and
+"free": BYTES per folder.
 
 The Mac's list (written by `bottle library` on the Mac): ~/.config/steamos-bottle/libraries.json
   {"default": "mac", "stamp": "1791826000",
@@ -56,11 +69,15 @@ from pathlib import Path
 HOME = Path.home()
 STEAM = Path(os.environ.get("BOTTLE_STEAM_DIR", HOME / ".local/share/Steam"))
 MOUNT_ROOT = Path(os.environ.get("BOTTLE_LIBRARY_ROOT", "/mnt/portalistic"))
+FOLDER_ROOT = Path(os.environ.get("BOTTLE_FOLDER_ROOT", "/mnt/portalistic-folders"))   # the folders themselves, once they're drives
+DISK_HEADER = b"PORTALISTIC-GAMES "   # the first bytes of a drive image the Mac made and the VM hasn't formatted yet
+DISK_RESERVE = 2 * 10 ** 9             # the Mac keeps this much: the drive's file system is shrunk to the Mac's free space minus it
 CONF = HOME / ".config/steamos-bottle/libraries.json"
 STATE = HOME / ".config/steamos-bottle/libraries-state.json"
 TESTING = os.environ.get("BOTTLE_LIBRARIES_TEST") == "1"   # folders count as shared without a mount
 PREFIX_ROOT = Path(os.environ.get("BOTTLE_PREFIX_ROOT", HOME / ".local/share/steamos-bottle/compatdata"))
-PREFIX_COPY_SECS = 300           # copying one game's prefix off the share (a lost request ends it)
+PREFIX_COPY_SECS = 120           # copying one game's prefix off the share (a lost request ends it)
+PREFIX_BUDGET = 240              # all of it, before Steam starts: the rest waits for the next start
 PREFIX_FAILS = HOME / ".config/steamos-bottle/prefix-copy-failed.json"   # app ID -> failed copies
 PREFIX_ROOM = 2 * 10 ** 9        # what stays free on the VM's disk after the copies (its low-space banner starts under 3 GB)
 
@@ -181,9 +198,9 @@ def steam_running():
 
 
 def shared(p):
-    """The Mac shares this folder with the VM right now (its drive is there)."""
+    """The Mac shares this folder with the VM right now (its drive is there), or its drive is mounted."""
     if TESTING:
-        return p.is_dir() and (p / ".test-mounted").exists()
+        return p.is_dir() and ((p / ".test-mounted").exists() or (p / ".test-disk-mounted").exists())
     return os.path.ismount(p)
 
 
@@ -416,6 +433,16 @@ def bind(src, target):
     return r.returncode == 0 and os.path.ismount(target)
 
 
+def splash(text):
+    """The text of bottle-splash's "please wait" window, if it's on."""
+    if TESTING or not shutil.which("bottle-splash"):
+        return
+    try:
+        subprocess.run(["bottle-splash", "text", text], timeout=5, capture_output=True)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+
 def run_limited(cmd, secs):
     """A command on the share, killed if it doesn't finish (a lost request would hold it forever)."""
     try:
@@ -433,6 +460,16 @@ def local_prefixes(mp, name, label):
         return
     target = mp / "steamapps/compatdata"
     local = PREFIX_ROOT / name
+    if disk_mounted(mp):
+        # the folder is a drive (no lost requests there): prefixes live in it. Ones copied to the
+        # VM's own disk by 0.7.0.8 go back into it, once.
+        if local.is_dir() and any(local.iterdir()):
+            target.mkdir(parents=True, exist_ok=True)
+            rc, _ = sh(["rsync", "-a", "--", str(local) + "/", str(target) + "/"], 1800)
+            if rc == 0:
+                shutil.rmtree(local, ignore_errors=True)
+                say(f"{label}: the games' prefixes are back in the game folder's drive")
+        return
     if target.is_dir() and bound(target):
         return
     try:
@@ -441,14 +478,14 @@ def local_prefixes(mp, name, label):
     except OSError as e:
         say(f"{label}: can't set up the prefix folders ({e}); prefixes stay in the folder this time")
         return
-    rc, out = run_limited(["ls", "-1A", "--", str(target)], 60)
+    rc, out = run_limited(["ls", "-1A", "--", str(target)], 20)
     if rc != 0:
         say(f"{label}: the folder's prefixes couldn't be listed; they stay there this time")
         return
     todo = [e for e in out.splitlines() if e and not e.startswith(".") and not (local / e).exists()]
     copied = []
     if todo:
-        rc, out = run_limited(["du", "-sb", "--"] + [str(target / e) for e in todo], 600)
+        rc, out = run_limited(["du", "-sb", "--"] + [str(target / e) for e in todo], 60)
         size = sum(int(l.split()[0]) for l in out.splitlines() if l.split() and l.split()[0].isdigit()) if rc == 0 else None
         if size is None:
             say(f"{label}: the folder's prefixes couldn't be measured; they stay there this time")
@@ -457,46 +494,246 @@ def local_prefixes(mp, name, label):
             say(f"{label}: not enough room on the VM's disk for the games' prefixes ({gb(size)}); they stay in the folder")
             return
         say(f"{label}: copying {len(todo)} game prefix(es) ({gb(size)}) to the VM's disk (once)…")
+        splash(f"Moving your games' Windows folders to the Linux disk, once ({gb(size)})…")
+        t0 = time.time()
         staging = local / ".copying"
         shutil.rmtree(staging, ignore_errors=True)
         staging.mkdir()
         fails = load_json(PREFIX_FAILS, {})
-        given_up = []
+        done, given_up, late = [], [], False
         for e in todo:
+            if time.time() - t0 > PREFIX_BUDGET:
+                late = True     # the rest at the next Steam start; Steam shouldn't wait longer
+                break
             if TESTING and e == os.environ.get("BOTTLE_LIBRARIES_TEST_COPYFAIL"):
                 rc = None
             else:
                 rc, _ = run_limited(["cp", "-a", "--", str(target / e), str(staging / e)], PREFIX_COPY_SECS)
             if rc == 0:
+                done.append(e)
                 continue
             shutil.rmtree(staging / e, ignore_errors=True)
             key = f"{name}/{e}"
             fails[key] = int(fails.get(key, 0)) + 1
             if fails[key] < 2:
                 say(f"{label}: copying the prefix {e} didn't finish; trying again at the next Steam start")
-                if PREFIX_FAILS.parent.is_dir():
-                    write_atomic(PREFIX_FAILS, json.dumps(fails))
-                shutil.rmtree(staging, ignore_errors=True)
-                return
+                late = True
+                break
             # the second time: Proton sets that game up anew on the VM's disk (the old prefix stays
             # in the Mac folder, under the mount); Steam Cloud brings saves back for most games
             say(f"{label}: the prefix {e} couldn't be copied twice; Proton sets it up again (the old one stays in the folder on the Mac)")
             given_up.append(e)
-        for e in todo:
-            if e in given_up:
-                continue
+        if PREFIX_FAILS.parent.is_dir():
+            write_atomic(PREFIX_FAILS, json.dumps({k: v for k, v in fails.items()
+                                                   if k.split("/", 1)[-1] not in done}))
+        if late and any(e not in done and e not in given_up for e in todo):
+            # not all copied: no mount this time (the folder's prefixes stay the ones in use, so
+            # copies made now could go stale); all of it again at the next Steam start
+            shutil.rmtree(staging, ignore_errors=True)
+            say(f"{label}: some prefixes are still to copy; they stay in the folder until the next Steam start")
+            return
+        for e in done:
             os.rename(staging / e, local / e)
             copied.append(e)
-            fails.pop(f"{name}/{e}", None)
         shutil.rmtree(staging, ignore_errors=True)
-        if PREFIX_FAILS.parent.is_dir():
-            write_atomic(PREFIX_FAILS, json.dumps(fails))
     if not bind(local, target):
         for e in copied:             # not in use: the folder's own copies stay the ones Proton uses
             shutil.rmtree(local / e, ignore_errors=True)
         say(f"{label}: couldn't mount the VM-disk prefixes over the folder's; prefixes stay in the folder this time")
         return
     say(f"{label}: Proton's game prefixes are on the VM's disk" + (f" ({len(copied)} copied there)" if copied else ""))
+
+
+# ------------------------------------------------------------------ game folders as drives (Oct 22)
+
+def sh(cmd, secs=60, sudo=False):
+    """A command's (rc, stdout); rc None when it ran out of time (a lost request on a Mac share)."""
+    if sudo:
+        cmd = ["sudo", "-n"] + list(cmd)
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=secs)
+        return r.returncode, r.stdout
+    except subprocess.TimeoutExpired:
+        return None, ""
+    except OSError:
+        return 1, ""
+
+
+def block_devices():
+    """[(path, label, fstype)] of the whole disks the VM has (not partitions)."""
+    out = []
+    rc, text = sh(["lsblk", "-J", "-o", "NAME,TYPE,LABEL,FSTYPE,SIZE"])
+    if rc != 0:
+        return out
+    try:
+        for d in json.loads(text).get("blockdevices", []):
+            if d.get("type") == "disk":
+                out.append((Path("/dev") / d["name"], d.get("label") or "", d.get("fstype") or ""))
+    except (ValueError, KeyError):
+        pass
+    return out
+
+
+def disk_for(name):
+    """The drive the Mac attached for the game folder NAME: formatted (label portalistic-NAME) or
+    still raw with the Mac's header. (path, formatted) or (None, False)."""
+    if TESTING:
+        d = MOUNT_ROOT / name / ".test-disk"
+        return (d, True) if d.exists() else (None, False)
+    for dev, label, fstype in block_devices():
+        if label == f"portalistic-{name}" and fstype == "btrfs":
+            return dev, True
+    for dev, label, fstype in block_devices():
+        if fstype or label:
+            continue
+        rc, head = sh(["dd", f"if={dev}", "bs=64", "count=1", "status=none"], 10, sudo=True)
+        if rc != 0:
+            continue
+        if head.startswith(DISK_HEADER.decode()) and head[len(DISK_HEADER):].split("\n")[0] == name:
+            return dev, False
+    return None, False
+
+
+def disk_mounted(mp):
+    if TESTING:
+        return (mp / ".test-disk-mounted").exists()
+    rc, out = sh(["findmnt", "-n", "-o", "FSTYPE", "--", str(mp)], 10)
+    return rc == 0 and out.strip() == "btrfs"
+
+
+def mount_disk(name, label, want_free):
+    """Format (once), mount and size the drive for the game folder NAME at /mnt/portalistic/NAME."""
+    mp = MOUNT_ROOT / name
+    if disk_mounted(mp):
+        return True
+    dev, formatted = disk_for(name)
+    if dev is None:
+        return False
+    if TESTING:
+        mp.mkdir(parents=True, exist_ok=True)
+        (mp / ".test-disk-mounted").write_text("")
+        return True
+    if not formatted:
+        say(f"{label}: making the file system on its drive (once)…")
+        rc, _ = sh(["mkfs.btrfs", "-q", "-f", "-L", f"portalistic-{name}", str(dev)], 300, sudo=True)
+        if rc != 0:
+            say(f"{label}: couldn't make the file system on its drive; the folder itself is used")
+            return False
+    rc, _ = sh(["mkdir", "-p", str(mp)], 10, sudo=True)
+    rc, _ = sh(["mount", "-o", "noatime,discard=async", str(dev), str(mp)], 60, sudo=True)
+    if rc != 0:
+        # the image file's size can differ by a few KB from the size btrfs noted (Lima trims it):
+        # btrfs refuses such a device until its size note is fixed
+        sh(["btrfs", "rescue", "fix-device-size", str(dev)], 120, sudo=True)
+        rc, _ = sh(["mount", "-o", "noatime,discard=async", str(dev), str(mp)], 60, sudo=True)
+    if rc != 0:
+        say(f"{label}: couldn't mount its drive; the folder itself is used")
+        return False
+    sh(["chown", f"{os.getuid()}:{os.getgid()}", str(mp)], 10, sudo=True)
+    resize_disk(mp, label, want_free)
+    return True
+
+
+def resize_disk(mp, label, want_free):
+    """Steam takes the drive's free space for real: the file system is kept at what's in it plus
+    what the Mac has free (minus a reserve), so Steam doesn't start a download the Mac can't hold."""
+    if TESTING or not want_free:
+        return
+    try:
+        du = shutil.disk_usage(mp)
+    except OSError:
+        return
+    target = du.used + max(want_free - DISK_RESERVE, 5 * 10 ** 9)
+    target = max(target, 10 * 10 ** 9)
+    if abs(target - du.total) < max(du.total // 20, 2 * 10 ** 9):
+        return
+    rc, out = sh(["btrfs", "filesystem", "resize", f"{target // 1024 // 1024}m", str(mp)], 120, sudo=True)
+    if rc == 0:
+        say(f"{label}: Steam sees {gb(target)} on the drive ({gb(want_free)} free on the Mac)")
+
+
+def rsync_with_progress(srcdir, dstdir, name, size, secs):
+    """rsync -a --partial src/ dst/, the splash window told how far it is every few seconds."""
+    try:
+        # (--timeout: a lost request on the share stalls rsync for good; after 2 minutes without
+        # progress it gives up and the next try carries on from the partial file)
+        proc = subprocess.Popen(["rsync", "-a", "--partial", "--timeout=120", "--", str(srcdir) + "/", str(dstdir) + "/"],
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError:
+        return 1
+    t0 = time.time()
+    while True:
+        try:
+            return proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
+        if time.time() - t0 > secs:
+            proc.kill()
+            proc.wait()
+            return None
+        rc, out = sh(["du", "-sb", "--", str(dstdir)], 20)
+        done = int(out.split()[0]) if rc == 0 and out.split() and out.split()[0].isdigit() else 0
+        pct = min(99, done * 100 // size) if size else 0
+        splash(f"Moving {name} into the drive: {pct}% of {gb(size)} ({int(time.time() - t0) // 60} min so far)…")
+
+
+def move_games_in(src, mp, label):
+    """Games Steam had in the folder itself (the old share) go into the drive, once: each game's
+    folder with rsync (resumable; a lost request on the share ends a try, three tries each), then
+    its manifest; the folder's copy is deleted once it's in. compatdata/shadercache come along."""
+    sa, da = src / "steamapps", mp / "steamapps"
+    rc, out = sh(["ls", "-1A", "--", str(sa)], 20)
+    if rc != 0:
+        if rc is None:
+            say(f"{label}: the folder didn't answer; its games are moved into the drive at a later start")
+        return
+    entries = set(out.split())
+    if not entries:
+        return
+    da.mkdir(parents=True, exist_ok=True)
+    (da / "common").mkdir(exist_ok=True)
+    lf = src / "libraryfolder.vdf"
+    if lf.is_file() and not (mp / "libraryfolder.vdf").exists():
+        sh(["cp", "-p", "--", str(lf), str(mp / "libraryfolder.vdf")], 20)
+    manifests = sorted(e for e in entries if e.startswith("appmanifest_") and e.endswith(".acf"))
+    moved, failed = 0, []
+    for m in manifests:
+        info = acf_info(sa / m)
+        if not info:
+            continue
+        gamedir = info["installdir"]
+        srcdir, dstdir = sa / "common" / gamedir, da / "common" / gamedir
+        ok = not gamedir or not srcdir.is_dir()
+        for attempt in range(5):
+            if ok:
+                break
+            say(f"{label}: moving {info['name']} ({gb(info['size'])}) into the drive" + (f", try {attempt + 1}" if attempt else "") + "…")
+            rc = rsync_with_progress(srcdir, dstdir, info["name"], info["size"], 3600)
+            ok = rc == 0
+        if not ok:
+            failed.append(info["name"])
+            continue
+        for extra in ("compatdata", "shadercache"):
+            e = sa / extra / info["appid"]
+            if e.is_dir():
+                (da / extra).mkdir(exist_ok=True)
+                rc, _ = sh(["rsync", "-a", "--partial", "--timeout=120", "--", str(e) + "/", str(da / extra / info["appid"]) + "/"], 1800)
+                if rc == 0:
+                    sh(["rm", "-rf", "--", str(e)], 600)
+        rc, _ = sh(["cp", "-p", "--", str(sa / m), str(da / m)], 20)
+        if rc != 0:
+            failed.append(info["name"])
+            continue
+        if gamedir and srcdir.is_dir():
+            sh(["rm", "-rf", "--", str(srcdir)], 1800)
+        sh(["rm", "-f", "--", str(sa / m)], 20)
+        moved += 1
+    # anything else that stayed (downloads in progress, tools): the games that moved are in; what
+    # didn't move is left for a later start
+    if moved:
+        say(f"{label}: {moved} game(s) moved into the drive")
+    for n in failed:
+        say(f"{label}: {n} couldn't be moved into the drive (the folder didn't answer); again at the next Steam start, or Steam downloads it again")
 
 
 def wanted_default(conf, libs):
@@ -540,6 +777,16 @@ def cmd_sync(args):
     for f in folders:
         mp = MOUNT_ROOT / f["name"]
         label = f.get("label") or f["name"]
+        src = FOLDER_ROOT / f["name"]
+        if f.get("disk") and shared(src):
+            # the folder is a drive now: the VM mounts it itself (the folder's share stays for the games
+            # already in it, which move into the drive once)
+            if not mount_disk(f["name"], label, int(f.get("free") or 0)):
+                say(f"{label}: no drive for it yet; Steam gets the folder itself this time")
+                if libs.find(mp)[0] is None:
+                    continue
+            else:
+                move_games_in(src, mp, label)
         if not shared(mp):
             if libs.find(mp)[0] is not None:
                 say(f"{label} ({f.get('path', '?')}): not connected; Steam shows it as unavailable until it's back")
@@ -646,6 +893,26 @@ def cmd_status(args):
     return 0
 
 
+def cmd_tidy(args):
+    """The drives: unused space given back to the Mac (fstrim), the file system sized to what the
+    Mac has free (--free NAME=BYTES, from the Mac). The watcher runs it now and then, not during a game."""
+    conf = load_json(CONF, {"folders": []})
+    free = {}
+    for kv in args.free or []:
+        n, _, b = kv.partition("=")
+        if b.isdigit():
+            free[n] = int(b)
+    for f in conf.get("folders", []):
+        name = f.get("name", "")
+        mp = MOUNT_ROOT / name
+        if not name or not disk_mounted(mp):
+            continue
+        sh(["fstrim", "--", str(mp)], 600, sudo=True)
+        if name in free:
+            resize_disk(mp, f.get("label") or name, free[name])
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -653,8 +920,10 @@ def main():
     s.add_argument("--force", action="store_true", help=argparse.SUPPRESS)
     s = sub.add_parser("status")
     s.add_argument("--json", action="store_true")
+    s = sub.add_parser("tidy")
+    s.add_argument("--free", action="append", metavar="NAME=BYTES")
     args = ap.parse_args()
-    return {"sync": cmd_sync, "status": cmd_status}[args.cmd](args)
+    return {"sync": cmd_sync, "status": cmd_status, "tidy": cmd_tidy}[args.cmd](args)
 
 
 if __name__ == "__main__":
