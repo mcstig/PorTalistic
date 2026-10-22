@@ -14,7 +14,7 @@ final class Connection {
     var onCursor: ((Bool) -> Void)?              // main thread
     var onRumble: ((Int, Float, Float, Double) -> Void)?   // main thread: pad, strong, weak, seconds (0 = stop)
     var onPadStatus: ((Bool) -> Void)?           // main thread: false = the VM can't create controllers
-    var onNotice: ((Bool, String, String, Double) -> Void)?   // main thread: problem?, title, details, seconds
+    var onNotice: ((Int, String, String, Double) -> Void)?   // main thread: kind (0 news, 1 problem, 2 progress), title, details, seconds
     /// The screen server's protocol version (2: RESIZE, NOTICE, HOST_STATS); 0 while not connected.
     private(set) var serverVersion = 0           // main thread
 
@@ -159,13 +159,13 @@ final class Connection {
                     }
                 case ServerMsg.notice:
                     guard len > 4 else { break }
-                    let problem = payload.load(as: UInt8.self) != 0
+                    let kind = Int(payload.load(as: UInt8.self))
                     let seconds = Double(max(3, rd16(payload, 2)))
                     let text = String(decoding: Data(bytes: payload + 4, count: len - 4), as: UTF8.self)
                     let lines = text.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false)
                     let title = lines.first.map(String.init) ?? ""
                     let details = lines.count > 1 ? String(lines[1]).trimmingCharacters(in: .whitespacesAndNewlines) : ""
-                    DispatchQueue.main.async { self.onNotice?(problem, title, details, seconds) }
+                    DispatchQueue.main.async { self.onNotice?(kind, title, details, seconds) }
                 case ServerMsg.frame:
                     // The JPEG is the whole screen, or (bottle-screen with partial frames) just
                     // the rectangle at x, y that changed: drawn into the picture either way.

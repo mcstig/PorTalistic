@@ -119,12 +119,14 @@ extension AppDelegate {
     @objc func windowDidResize(_ notification: Notification) {
         guard (notification.object as? NSWindow) === window, !window.inLiveResize else { return }
         noticeView?.place()
+        progressCard?.place()
         if followsWindow { screenSizeMayChange() }
     }
 
     @objc func windowDidEndLiveResize(_ notification: Notification) {
         guard (notification.object as? NSWindow) === window else { return }
         noticeView?.place()
+        progressCard?.place()
         if followsWindow { screenSizeMayChange() }
     }
 

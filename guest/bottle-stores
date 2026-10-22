@@ -355,8 +355,11 @@ def make_entry(rec, old=None):
     e["icon"] = (1, rec.get("icon") or sval(e, "icon"))
     e["ShortcutPath"] = (1, f"{MARK}{rec.get('store', 'gog')}:{rec['id']}")
     e["LaunchOptions"] = (1, launch_options(rec))
+    # LastPlayTime: Steam sorts Big Picture's home row ("Recent Games") by it, and a Steam game
+    # gets there when it's installed; a new shortcut starts with its install time so a GOG or Epic
+    # game lands at the front too (Oct 22). Steam updates it when the game is played; kept then.
     for key, val in (("IsHidden", 0), ("AllowDesktopConfig", 1), ("AllowOverlay", 1), ("OpenVR", 0),
-                     ("Devkit", 0), ("DevkitOverrideAppID", 0), ("LastPlayTime", 0)):
+                     ("Devkit", 0), ("DevkitOverrideAppID", 0), ("LastPlayTime", int(rec.get("installed") or 0))):
         e[key] = (2, ival(e, key, val))
     for key in ("DevkitGameID", "FlatpakAppID"):
         e[key] = (1, sval(e, key))
@@ -503,7 +506,7 @@ def gogdl_available():
 def gogdl_run(args, timeout=300):
     """gogdl's output, without ever showing it (the sign-in prints tokens). -> (code, out, err)"""
     if not gogdl_available():
-        die("GOG's downloader isn't in the VM yet. Choose Bottle > Update the Bottle, then try again.")
+        die("GOG's downloader isn't in the VM yet. Choose Steam > Update the VM, then try again.")
     STATE.mkdir(parents=True, exist_ok=True)
     GOGDL_CONFIG.mkdir(parents=True, exist_ok=True)
     cmd = gogdl_cmd() + ["--auth-config-path", str(AUTH)] + args
@@ -582,7 +585,7 @@ def gog_status(args):
         say(f"GOG: {'signed in as ' + (info['user'] or 'an account') if signed else 'not signed in'}; "
             f"{len(games)} game(s) installed")
         if not info["downloader"]:
-            say("GOG's downloader isn't in the VM yet (Bottle > Update the Bottle).")
+            say("GOG's downloader isn't in the VM yet (Steam > Update the VM).")
     return 0
 
 
@@ -1129,7 +1132,7 @@ def legendary_env():
 def legendary_run(args, timeout=300):
     """Legendary's output, without ever showing it (a launch and a sign-in print tokens). -> (code, out, err)"""
     if not legendary_available():
-        die("Epic's downloader isn't in the VM yet. Choose Bottle > Update the Bottle, then try again.")
+        die("Epic's downloader isn't in the VM yet. Choose Steam > Update the VM, then try again.")
     private_dirs()
     try:
         r = subprocess.run(legendary_cmd() + args, capture_output=True, text=True, timeout=timeout,
@@ -1206,7 +1209,7 @@ def epic_status(args):
         say(f"Epic Games: {'signed in as ' + (info['user'] or 'an account') if user else 'not signed in'}; "
             f"{len(games)} game(s) installed")
         if not info["downloader"]:
-            say("Epic's downloader isn't in the VM yet (Bottle > Update the Bottle).")
+            say("Epic's downloader isn't in the VM yet (Steam > Update the VM).")
     return 0
 
 
@@ -1537,7 +1540,7 @@ def comet_start():
     if port_listening(COMET_PORT):
         return None, "Comet is already running"
     if not COMET_BIN.is_file():
-        return None, "Comet isn't installed in this VM (Bottle > Update the Bottle)"
+        return None, "Comet isn't installed in this VM (Steam > Update the VM)"
     if not AUTH.is_file():
         return None, "not signed in to GOG, so the game gets no Galaxy sign-in"
     saved = {k: os.environ.pop(k) for k in ("LD_PRELOAD", "LD_LIBRARY_PATH") if k in os.environ}

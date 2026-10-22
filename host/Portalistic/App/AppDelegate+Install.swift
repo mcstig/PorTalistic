@@ -464,7 +464,7 @@ extension AppDelegate {
             var box: NSButton?
             if !games.isEmpty {
                 let b = NSButton(checkboxWithTitle: "Also move my game folders to the Trash", target: nil, action: nil)
-                let names = NSTextField(wrappingLabelWithString: games.map { "\($0.what): \(Installation.shortPath($0.path))" }.joined(separator: "\n"))
+                let names = NSTextField(wrappingLabelWithString: games.map { "\($0.what): \(Installation.shortPath($0.path))" + ($0.kilobytes > 0 ? " (\(Installation.sizeText($0.kilobytes)) in its game drive)" : "") }.joined(separator: "\n"))
                 names.font = .systemFont(ofSize: 11)
                 names.textColor = .secondaryLabelColor
                 names.preferredMaxLayoutWidth = 340

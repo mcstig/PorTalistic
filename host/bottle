@@ -95,7 +95,7 @@
 #   bottle disk grow [GB]     make the VM's disk bigger (default: 10 GB more; stops and restarts the VM)
 #   bottle disk clean         clear package caches, old system logs, crash dumps, huge game logs
 #   bottle memory [GB]        the VM's memory (restarts the VM); no argument: how much it has, and
-#                             what's suggested (half the Mac's under 24 GB, 2-8 GB; a third from
+#                             what's suggested (half the Mac's under 24 GB, 4-8 GB; a third from
 #                             24 GB, 8-16 GB: the VM's file cache and the games' GPU memory both
 #                             live in the Mac's memory)
 #   bottle vnc                open the desktop again: TigerVNC Viewer when installed
@@ -398,7 +398,7 @@ vm_start_explain() {
     VM_START_WHY="macOS couldn't give the VM its memory ($(vm_memory_gb) GB). Quit some apps and try again."
   else
     line="$(grep -E 'ERROR|[Ee]rror' <<<"$new" | grep -v 'unexpected dgram' | tail -n 1 | sed -E 's/^\[[^]]*\] *//' | cut -c1-200 || true)"
-    VM_START_WHY="The VM stopped while it was starting${line:+ (krunkit: $line)}. Try again; if it happens again, Bottle > Save Logs saves what to attach to a bug report."
+    VM_START_WHY="The VM stopped while it was starting${line:+ (krunkit: $line)}. Try again; if it happens again, Steam > Save Logs saves what to attach to a bug report."
   fi
   err "$VM_START_WHY"
 }
@@ -1088,7 +1088,7 @@ app_build() {  # build the app bundle when it's missing or older than its source
   fi
   app_quit_running
   mv -f "$bin.new" "$bin"
-  # The app runs this kit's bottle command (starting the VM, the Bottle menu): it needs to know
+  # The app runs this kit's bottle command (starting the VM, the Steam menu): it needs to know
   # where the kit is, and the PATH (opened from the Dock it gets a bare one, without Homebrew).
   local xml_kit xml_path
   xml_kit="$(printf '%s' "$KIT_DIR" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')"
@@ -1150,7 +1150,10 @@ update_if_behind() {
 # kit's copy: the VM may not have it yet (it comes with this very update).
 vm_splash() {
   [[ -f "$KIT_DIR/guest/bottle-splash" ]] || return 0
-  vsh_for 15 bash -c "$(cat "$KIT_DIR/guest/bottle-splash")" bottle-splash "$@" >/dev/null 2>&1 || true
+  # (the kit's copy, put where the VM can run it again by path: its watcher re-runs itself)
+  # shellcheck disable=SC2016  # runs in the VM
+  vsh_for 15 bash -c 'd=~/.cache/steamos-bottle; mkdir -p "$d"; printf %s "$1" | base64 -d > "$d/bottle-splash.new" && chmod +x "$d/bottle-splash.new" && mv -f "$d/bottle-splash.new" "$d/bottle-splash"; shift; exec "$HOME/.cache/steamos-bottle/bottle-splash" "$@"' \
+    _ "$(base64 < "$KIT_DIR/guest/bottle-splash" | tr -d '\n')" "$@" >/dev/null 2>&1 || true
 }
 
 # Everything the app shows, running: the VM, its desktop and screen server, Steam, the sound on
@@ -1226,12 +1229,12 @@ screen_check() {
       vsh bash -c 'setsid -f bottle-screen -d :1 -p "$1" </dev/null >>~/.config/steamos-bottle/screen.log 2>&1' _ "$SCREEN_PORT" || true
       for i in $(seq 1 10); do screen_reachable && return 0; sleep 1; done
     fi
-    die "The VM's screen server doesn't start (why: Show Log). Bottle > Save Logs has the rest."
+    die "The VM's screen server doesn't start (why: Show Log). Steam > Save Logs has the rest."
   fi
   if ! vsh bash -c "ss -ltn 2>/dev/null | grep -q ':$SCREEN_PORT '"; then
-    die "The VM's screen server runs but doesn't open port $SCREEN_PORT. Bottle > Save Logs has its log."
+    die "The VM's screen server runs but doesn't open port $SCREEN_PORT. Steam > Save Logs has its log."
   fi
-  die "The VM's screen server runs, but Lima doesn't bring its port to this Mac. Bottle > Shut Down the VM, then start it again."
+  die "The VM's screen server runs, but Lima doesn't bring its port to this Mac. Steam > Shut Down the VM, then start it again."
 }
 
 cmd_window() {
@@ -1822,7 +1825,7 @@ lib_folders() {
 # any more stops working. Under BOTTLE_DISK_LOW_GB (10) free, the watcher has the VM hand back
 # what deleted files freed and puts a warning in the app (every 15 minutes at most); under
 # BOTTLE_DISK_STOP_GB (3), a Steam download that's making the VM's disk grow is stopped (Steam
-# quits; Bottle > Restart Steam brings it back). Game folders don't need this: Steam sees their
+# quits; Steam > Restart Steam brings it back). Game folders don't need this: Steam sees their
 # drive's real free space.
 VM_DIR="${LIMA_HOME:-$HOME/.lima}/$VM_NAME"
 vm_disk_kb() { local b; b="$(stat -f %b "$VM_DIR/disk" 2>/dev/null || echo 0)"; echo $(( b / 2 )); }
@@ -1845,7 +1848,7 @@ disk_guard() {  # $1 = what Steam does: game, download, idle
   if (( free < ${BOTTLE_DISK_STOP_GB:-3} && grew )) && [[ "$1" == download ]]; then
     echo "$(date '+%F %T') the Mac has ${free} GB free and a Steam download is filling the VM's disk: stopping Steam"
     steam_stop >/dev/null 2>&1 || true
-    vm_notice 1 60 "Steam stopped: your Mac is almost full" "Only ${free} GB left, and Steam was downloading onto the VM's disk. Free up space on the Mac, then Bottle > Restart Steam. Games in a game folder (Game Folders > Add a Game Folder) don't fill the VM's disk."
+    vm_notice 1 60 "Steam stopped: your Mac is almost full" "Only ${free} GB left, and Steam was downloading onto the VM's disk. Free up space on the Mac, then Steam > Restart Steam. Games in a game folder (Game Folders > Add a Game Folder) don't fill the VM's disk."
     DG_WARNED="$now"
     return 0
   fi
@@ -1876,7 +1879,7 @@ vm_disk_guard() {  # $1 = what Steam does: game, download, idle; $2 = the VM dis
     echo "$(date '+%F %T') the VM's disk has $(( free_kb / 1024 )) MB free and Steam is downloading: stopping Steam"
     steam_stop >/dev/null 2>&1 || true
     vm_disk_tidy
-    vm_notice 1 60 "Steam stopped: the VM's disk is full" "Only $(( free_kb / 1024 )) MB were left on it. Games go in a game folder (Game Folders > Show Game Folders): set Install to a game folder when you install one. Bottle > Restart Steam brings Steam back."
+    vm_notice 1 60 "Steam stopped: the VM's disk is full" "Only $(( free_kb / 1024 )) MB were left on it. Games go in a game folder (Game Folders > Show Game Folders): set Install to a game folder when you install one. Steam > Restart Steam brings Steam back."
     VG_WARNED="$now"
     return 0
   fi
@@ -2012,7 +2015,7 @@ homegames_guard() {  # $1 = what Steam does (game, download, idle), $2 = the VM'
 # (gpu_auto_guard) confirms it from Steam's own logs: its web helper reports zink after a few tries
 # (the first ones normally fail: 2 to 4 on the M4 Max, once 9). Else Steam goes back to the processor
 # and says so. One line in the VM keeps the state, ~/.config/steamos-bottle/steam-gpu-auto, "STATE VERSION":
-#   on | off   chosen by hand (bottle steam-gpu on|off, Bottle > Steam's Interface…): never changed by itself
+#   on | off   chosen by hand (bottle steam-gpu on|off, Steam > Steam's Interface…): never changed by itself
 #   pending    the Mac's GPU is set; waiting for Steam's web helper to confirm it
 #   ok         confirmed
 #   failed     the check or the confirmation failed with this VERSION of the kit: tried again at the next
@@ -2054,7 +2057,7 @@ gpu_auto_prepare() {  # at the start of steam_start: never fails, never stops a 
     info "Steam's interface will draw on the Mac's GPU. Portalistic checks it once Steam is up and goes back by itself if it can't."
   else
     gpu_auto_set failed
-    info "Steam's interface stays on the processor: the Mac's GPU didn't pass the check (Bottle > Save Logs has the details)."
+    info "Steam's interface stays on the processor: the Mac's GPU didn't pass the check (Steam > Save Logs has the details)."
   fi
   GPU_AUTO_BUSY=0
   return 0
@@ -2107,7 +2110,7 @@ gpu_auto_guard() {  # $1 = what Steam does (game, download, idle), $2 = the VM's
         log_export >/dev/null 2>&1 || true
         steam_stop >/dev/null 2>&1 || true
         steam_start >/dev/null 2>&1 || true
-        vm_notice 0 60 "Steam's interface is back on the processor" "Portalistic tried drawing it on the Mac's GPU, but Steam's web helper couldn't start OpenGL there. Bottle > Save Logs saves what helps to find out why."
+        vm_notice 0 60 "Steam's interface is back on the processor" "Portalistic tried drawing it on the Mac's GPU, but Steam's web helper couldn't start OpenGL there. Steam > Save Logs saves what helps to find out why."
       fi
       return 0 ;;
     *)  # never decided here, or failed with an older kit
@@ -2120,7 +2123,7 @@ gpu_auto_guard() {  # $1 = what Steam does (game, download, idle), $2 = the VM's
       steam_start >/dev/null 2>&1 || true
       word="$(vsh_for 20 bash -c 'head -n 1 ~/.config/steamos-bottle/steam-gpu-auto 2>/dev/null' 2>/dev/null | awk '{print $1}' || true)"
       if [[ "$word" == pending ]]; then
-        vm_notice 0 45 "Steam restarted to draw on the Mac's GPU" "Its interface is smoother there. If it can't, Portalistic goes back to the processor by itself. Bottle > Steam's Interface… lets you choose."
+        vm_notice 0 45 "Steam restarted to draw on the Mac's GPU" "Its interface is smoother there. If it can't, Portalistic goes back to the processor by itself. Steam > Steam's Interface… lets you choose."
       fi
       return 0 ;;
   esac
@@ -2262,7 +2265,7 @@ playmap_guard() {  # $1 = what Steam does (game, download, idle), $2 = the VM's 
 # A Mac without the VM gets Portalistic's ready-made Linux image (host/build-image.sh made it;
 # host/image.env says where it is, how big, and its checksum). Lima makes the VM from it; then the
 # VM starts as it always does, and its first start brings it up to this kit (for its new user)
-# and installs Steam. The VM: its share of the Mac's memory (memory_suggested_gb: 2 GB on a 4 GB
+# and installs Steam. The VM: its share of the Mac's memory (memory_suggested_gb: 4 GB on an 8 GB
 # Mac, 8 GB on a 16 GB one), its performance cores, a
 # 20 GB disk (Linux, Steam, Proton) that takes Mac space only as it fills, no Mac folders shared but the game folder
 # ~/Games/Portalistic (bottle library). Downloads resume where they stopped.
@@ -2385,7 +2388,7 @@ EOF
 #      accepted by Gatekeeper (notarized), and a newer version: else nothing changes;
 #   3. moves this copy aside and the new one into its place. The running app carries on from the
 #      old files until it opens the new copy, which closes it. The VM, Steam and a game keep
-#      running; the VM takes the new kit at its next start (or Bottle > Update the Bottle).
+#      running; the VM takes the new kit at its next start (or Steam > Update the VM).
 # Overrides (tests): BOTTLE_APP_RELEASES (the releases' address), BOTTLE_APP_LATEST (a version).
 APP_RELEASES="${BOTTLE_APP_RELEASES:-https://github.com/mcstig/PorTalistic/releases}"
 app_version_of() { /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$1/Contents/Info.plist" 2>/dev/null; }
@@ -2471,8 +2474,8 @@ cmd_app_update() {
 # ---- uninstalling Portalistic ----
 # `bottle uninstall --list` says what an uninstall deletes, a line for each: KIND<TAB>KILOBYTES<TAB>PATH<TAB>WHAT.
 #   system: the Linux system (the VM);  data: Portalistic's folders on this Mac;  games: a game folder
-#   (not deleted here: the app moves it to the Trash when asked; its size is 0, since counting a big
-#   drive's games would take minutes).
+#   (not deleted here: the app moves it to the Trash when asked; its size is its game drive's, 0 for
+#   a folder without one, since counting loose games would take minutes).
 # `bottle uninstall --yes` stops the VM and deletes the system and the data. Only inside Portalistic.app:
 # the kit is a development folder, and its VM is a developer's.
 dir_kb() { du -sk "$1" 2>/dev/null | awk '{print $1 + 0}'; }
@@ -2499,7 +2502,9 @@ uninstall_rows() {
   while IFS=$'\t' read -r name label path; do
     [[ -n "$path" && -d "$path" && ! -L "$path" && -f "$path/.portalistic-library" ]] || continue
     case "$path" in "$HOME"|"$HOME/"|/|/Volumes|/Volumes/) continue ;; esac
-    printf 'games\t0\t%s\t%s\n' "$path" "$label"
+    # the size is the game drive's (its file's used space; a folder's loose files would take minutes to count)
+    kb=0; [[ -f "$path/$LIB_IMAGE" ]] && kb="$(dir_kb "$path/$LIB_IMAGE")"
+    printf 'games\t%s\t%s\t%s\n' "$kb" "$path" "$label"
   done < <(lib_rows)
 }
 uninstall_remove() {  # $1: a folder inside the home folder
@@ -2551,7 +2556,7 @@ cmd_steam_url() {
   need_vm
   [[ "$(vm_status)" == Running ]] || die "The VM isn't running. Use: bottle start"
   if ! steam_running; then
-    [[ "${BOTTLE_FROM_APP:-}" == 1 ]] && die "Steam isn't running. Choose Bottle > Restart Steam, then try again."
+    [[ "${BOTTLE_FROM_APP:-}" == 1 ]] && die "Steam isn't running. Choose Steam > Restart Steam, then try again."
     die "Steam isn't running. Use: bottle steam"
   fi
   # shellcheck disable=SC2016  # runs in the VM
@@ -2644,7 +2649,7 @@ cmd_library() {
   have="$(vsh_for 30 bash -c 'command -v bottle-library >/dev/null && echo yes || echo no' || true)"
   case "$have" in
     *yes*) ;;
-    *no*) die "The VM doesn't have the library helper yet: Bottle > Update the Bottle (or: bottle update)" ;;
+    *no*) die "The VM doesn't have the library helper yet: Steam > Update the VM (or: bottle update)" ;;
     *) die "The VM didn't answer; try again in a few seconds." ;;
   esac
   if [[ "${1:-}" != --copy ]]; then
@@ -2729,7 +2734,7 @@ steam_gpu_check() {
       export DISPLAY=:1
       command -v glxinfo >/dev/null || sudo -n dnf install -y -q glx-utils >/dev/null 2>&1
       command -v xwd >/dev/null || sudo -n dnf install -y -q xwd >/dev/null 2>&1
-      command -v glxinfo >/dev/null || { echo "  glxinfo is missing: choose Bottle > Update the Bottle first"; exit 2; }
+      command -v glxinfo >/dev/null || { echo "  glxinfo is missing: choose Steam > Update the VM first"; exit 2; }
       C=~/.config/steamos-bottle; mkdir -p "$C"; D="$C/steam-gpu-check.txt"
       echo "== $(date) bottle steam-gpu on: check" > "$D"
       now="$(glxinfo -B 2>/dev/null | sed -n "s/^OpenGL renderer string: //p")"
@@ -2815,7 +2820,7 @@ cmd_steam_gpu() {
     return 0
   fi
   if [[ "$want" == on ]]; then
-    steam_gpu_check || die "OpenGL on the Mac's GPU doesn't work in this VM yet (above); Steam stays as it is. The details are saved with the logs (Bottle > Save Logs)."
+    steam_gpu_check || die "OpenGL on the Mac's GPU doesn't work in this VM yet (above); Steam stays as it is. The details are saved with the logs (Steam > Save Logs)."
     vsh bash -c 'mkdir -p ~/.config/steamos-bottle && echo zink > ~/.config/steamos-bottle/steam-gpu'
     # from here on Ctrl-C puts it back (Steam isn't left on a mode that wasn't checked)
     trap 'steam_gpu_back "Stopped before the check finished."' INT
@@ -2854,7 +2859,7 @@ cmd_steam_gpu() {
       info "Done: Big Picture shows with its interface on the Mac's GPU." ;;
     *)
       warn "Big Picture shows, but Steam's web views report $renderer, which is the VM's processors."
-      info "It may not be smoother. Steam's log is kept in the VM: Bottle > Save Logs." ;;
+      info "It may not be smoother. Steam's log is kept in the VM: Steam > Save Logs." ;;
   esac
   info "Back to the VM's processors any time: bottle steam-gpu off"
 }
@@ -2880,7 +2885,7 @@ steam_gpu_back() {
   steam_stop
   steam_start "$debug"
   log_export >/dev/null 2>&1 || true
-  die "Steam is back as it was. The GPU attempt's logs are saved with the logs (Bottle > Save Logs)."
+  die "Steam is back as it was. The GPU attempt's logs are saved with the logs (Steam > Save Logs)."
 }
 
 # Steam's Big Picture window is up and not all black (a look at the VM's screen with xwd): waits
@@ -2978,7 +2983,7 @@ cmd_version() {
   if [[ -f "$sp" ]]; then vsh python3 - version "$1" "$2" < "$sp" || return 1
   else vsh bottle-steamplay version "$1" "$2" || return 1; fi
   if [[ "$(vsh_for 30 bash -c 'command -v bottle-busy >/dev/null && bottle-busy || echo idle' 2>/dev/null | tail -n 1)" == game ]]; then
-    info "A game is running: this applies at Steam's next start (Bottle > Restart Steam after you quit it)."
+    info "A game is running: this applies at Steam's next start (Steam > Restart Steam after you quit it)."
     return 0
   fi
   info "Restarting Steam so it takes this up…"
@@ -3003,7 +3008,7 @@ stores_run() {
 # Steam keeps its shortcuts in memory: a changed list shows after it restarts (not under a game).
 steam_refresh_for() {  # $1 = what changed
   if [[ "$(vsh_for 30 bash -c 'command -v bottle-busy >/dev/null && bottle-busy || echo idle' 2>/dev/null | tail -n 1)" == game ]]; then
-    info "A game is running: $1 shows in Steam at its next start (Bottle > Restart Steam after you quit it)."
+    info "A game is running: $1 shows in Steam at its next start (Steam > Restart Steam after you quit it)."
     return 0
   fi
   info "Restarting Steam so it shows $1…"
@@ -3156,11 +3161,11 @@ cmd_disk() {
 # game, next to the game's GPU memory (also in the Mac's memory). On a 36 GB Mac that pushed
 # macOS into 21 GB of swap and The Witcher 3 from ~55 to ~15 fps after two minutes (Oct 9).
 # A smaller VM caps that and leaves the Mac room: a third of the Mac's memory from 24 GB (8-16 GB),
-# half below (2-8 GB: 2 GB on a 4 GB Mac, 4 on 8, 8 on 16). The VM's zram swap (as big as its
+# half below (4-8 GB: 4 GB on an 8 GB Mac, 8 on 16; the Mac needs 8 GB). The VM's zram swap (as big as its
 # memory, compressed) stretches a small VM: Steam's own client and pages take about 2.5 GB.
 vm_memory_gb() { echo $(( $(limactl list --format '{{.Memory}}' "$VM_NAME" 2>/dev/null || echo 0) / 1073741824 )); }
 mac_memory_gb() { echo $(( $(sysctl -n hw.memsize 2>/dev/null || echo 0) / 1073741824 )); }
-MAC_MEMORY_MIN_GB=4
+MAC_MEMORY_MIN_GB=8   # (4 until Oct 22: a 4 GB Mac left the VM 2 GB, too little for Steam and a game)
 memory_suggested_gb() {
   local t s
   t="$(mac_memory_gb)"
@@ -3169,7 +3174,7 @@ memory_suggested_gb() {
   else
     s=$(( t / 2 )); (( s > 8 )) && s=8
   fi
-  (( s < 2 )) && s=2
+  (( s < 4 )) && s=4   # (bottle memory 2 is still allowed by hand)
   echo "$s"
 }
 # what macOS keeps at least, whatever the VM is given (bottle memory)
@@ -3353,7 +3358,7 @@ awake_loop() {
       echo "$(date '+%F %T') the bottle command changed but doesn't read as whole yet: trying again next round"
     fi
     # logs asked for from outside (a file logs/.export-now in the kit, e.g. by whoever is
-    # helping look into a problem): saved like Bottle > Save Logs, in the background
+    # helping look into a problem): saved like Steam > Save Logs, in the background
     if [[ -f "$LOGS_DIR/.export-now" ]]; then
       rm -f "$LOGS_DIR/.export-now"
       echo "$(date '+%F %T') logs asked for: saving them to $LOGS_DIR"
@@ -3407,7 +3412,7 @@ awake_loop() {
       fi
       echo "$(date '+%F %T') Steam: $state${flags:+ (keeping the Mac awake: caffeinate $flags)}"
       # A game just ended (closed, crashed or quit by itself): save the logs into the kit's logs/
-      # now, as Bottle > Save Logs does, so nobody has to remember to (the game's own
+      # now, as Steam > Save Logs does, so nobody has to remember to (the game's own
       # log is replaced at its next start). In the background: ~30 s, the watcher carries on.
       # BOTTLE_GAME_LOGS=0 turns it off.
       if [[ "$last" == game && "${BOTTLE_GAME_LOGS:-1}" != 0 ]]; then
@@ -3494,7 +3499,7 @@ cmd_fps() {
       cmd_env "DXVK_FRAME_RATE=$v" >/dev/null ;;
   esac
   if [[ "$(vsh_for 30 bash -c 'command -v bottle-busy >/dev/null && bottle-busy || echo idle' 2>/dev/null | tail -n 1)" == game ]]; then
-    info "Saved. It applies from the next game start after Steam restarts (Bottle > Restart Steam once the game is closed)."
+    info "Saved. It applies from the next game start after Steam restarts (Steam > Restart Steam once the game is closed)."
     return 0
   fi
   update_if_behind "then Steam restarts" || true
@@ -3626,7 +3631,7 @@ cmd_update() {
   # what's installed now (update_if_behind compares with it)
   vsh bash -c 'mkdir -p ~/.cache/steamos-bottle && cat > ~/.cache/steamos-bottle/kit-stamp' <<<"$(kit_stamp)" || true
   if [[ "${BOTTLE_FROM_APP:-}" == 1 ]]; then
-    info "Done. If Steam's launcher changed, choose Bottle > Restart Steam."
+    info "Done. If Steam's launcher changed, choose Steam > Restart Steam."
   else
     info "Done. Restart Steam to pick up launcher changes: bottle steam"
   fi

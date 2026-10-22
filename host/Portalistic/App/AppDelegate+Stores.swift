@@ -105,8 +105,8 @@ final class StoreWindow: NSWindowController {
     }
 
     private func showStopped() {
-        content.showMessage("The bottle isn't running",
-                            "\(store.name) games are downloaded inside it. Choose Bottle > Start the Bottle, then try again.")
+        content.showMessage("The VM isn't running",
+                            "\(store.name) games are downloaded inside it. Choose Steam > Start the VM, then try again.")
     }
 
     // MARK: showing and loading
@@ -130,7 +130,7 @@ final class StoreWindow: NSWindowController {
             self.userName = st["user"] as? String ?? ""
             if (st["downloader"] as? Bool) == false {
                 self.content.showMessage("\(self.store.name)'s downloader isn't in the bottle yet",
-                                         "Choose Bottle > Update the Bottle, then open this window again.")
+                                         "Choose Steam > Update the VM, then open this window again.")
                 return
             }
             if (st["signedIn"] as? Bool) == true { self.loadGames(refresh: false) } else { self.content.showSignIn() }

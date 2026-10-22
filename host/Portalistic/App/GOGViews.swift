@@ -6,6 +6,7 @@
 // signing in to anything.
 
 import AppKit
+import CoreImage
 import ImageIO
 
 struct StoreGame {
@@ -269,7 +270,9 @@ final class StoreArt {
 /// cover with its percentage. Under the mouse the cover pops: it swells a little (with a small
 /// overshoot), lifts off the grid on a shadow, and shrinks back when the mouse leaves.
 final class StoreCoverView: NSView {
-    var image: NSImage? { didSet { needsDisplay = true } }
+    var image: NSImage? { didSet { gray = image.flatMap(StoreCoverView.grayscale); needsDisplay = true } }
+    /// The cover without its colours, for a game that isn't installed (made once per picture).
+    private var gray: NSImage?
     var title = "" { didSet { needsDisplay = true } }
     var installed = false { didSet { needsDisplay = true } }
     var progress: Double? { didSet { needsDisplay = true } }      // 0...100
@@ -354,11 +357,22 @@ final class StoreCoverView: NSView {
         }
         NSGraphicsContext.saveGraphicsState()
         shape.addClip()
-        if let img = image { drawFilled(img, in: r) } else { drawPlaceholder(in: r) }
-        if !installed {
-            // black and white: gray laid over in the "saturation" blend takes the colour out and keeps the light
-            NSColor(white: 0.5, alpha: 1).setFill()
-            r.fill(using: .saturation)
+        // Installed: in colour. Not installed: black and white, and under the mouse the colour
+        // fades in with the pop (Oct 22: the old "saturation" blend left blue and purple casts).
+        if let img = image {
+            if installed || gray == nil {
+                drawFilled(img, in: r)
+            } else {
+                drawFilled(gray!, in: r)
+                let colour = min(max(lift, 0), 1)
+                if colour > 0.01 { drawFilled(img, in: r, alpha: colour) }
+            }
+        } else {
+            drawPlaceholder(in: r)
+            if !installed && lift < 0.99 {
+                NSColor(white: 0.5, alpha: 1 - min(max(lift, 0), 1)).setFill()
+                r.fill(using: .saturation)
+            }
         }
         if let p = progress { drawProgress(p, in: r) } else if installed { drawBadge(in: r) }
         NSGraphicsContext.restoreGraphicsState()
@@ -373,7 +387,20 @@ final class StoreCoverView: NSView {
         }
     }
 
-    private func drawFilled(_ img: NSImage, in r: NSRect) {
+    /// A black-and-white copy of a cover (luminance only), the same size.
+    static func grayscale(_ img: NSImage) -> NSImage? {
+        guard let tiff = img.tiffRepresentation, let ci = CIImage(data: tiff),
+              let f = CIFilter(name: "CIColorControls") else { return nil }
+        f.setValue(ci, forKey: kCIInputImageKey)
+        f.setValue(0.0, forKey: kCIInputSaturationKey)
+        guard let out = f.outputImage else { return nil }
+        let rep = NSCIImageRep(ciImage: out)
+        let g = NSImage(size: img.size)
+        g.addRepresentation(rep)
+        return g
+    }
+
+    private func drawFilled(_ img: NSImage, in r: NSRect, alpha: CGFloat = 1) {
         let s = img.size
         guard s.width > 0, s.height > 0 else { return }
         let want = r.width / r.height
@@ -386,7 +413,7 @@ final class StoreCoverView: NSView {
             src.origin.y = (s.height - src.height) / 2
         }
         NSGraphicsContext.current?.imageInterpolation = .high
-        img.draw(in: r, from: src, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+        img.draw(in: r, from: src, operation: .sourceOver, fraction: alpha, respectFlipped: true, hints: nil)
     }
 
     private func drawPlaceholder(in r: NSRect) {

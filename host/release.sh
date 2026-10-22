@@ -130,7 +130,7 @@ if (( NEW_IMAGE )); then IMAGE_WHERE="the \`portalistic-linux\` files below"
 else IMAGE_WHERE="from release [$IMG_TAG](https://github.com/$REPO/releases/tag/$IMG_TAG)"; fi
 {
 cat <<EOF
-Portalistic $VERSION: Steam on an Apple Silicon Mac (macOS 26 or newer, 4 GB of memory or more).
+Portalistic $VERSION: Steam on an Apple Silicon Mac (macOS 26 or newer, 8 GB of memory or more).
 
 Download **Portalistic-$VERSION.zip**, unzip it and move Portalistic to Applications. On its first
 launch it downloads its Linux system ($(awk -v b="$PORTALISTIC_IMAGE_SIZE" 'BEGIN {printf "%.1f", b / 1e9}') GB, $IMAGE_WHERE: you don't need to download

@@ -13,7 +13,7 @@
 // rumble comes back to them.
 //
 // Opening the app starts whatever isn't running (the VM, Steam, the sound: `bottle _up`) and
-// shows its progress; the Bottle menu runs the kit's other commands (restart Steam, update,
+// shows its progress; the Steam menu runs the kit's other commands (restart Steam, update,
 // logs, shut down). What the window shows is Steam in Big Picture, as on SteamOS: the VM starts
 // Steam that way and keeps it there (guest/bottle-maximize-steam; `bottle ui desktop` switches to
 // Steam's desktop windows). When the kit has newer code than the running build, the app

@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var pads: Pads!
     var padsBlocked = false                       // the VM said it can't create controllers
     var noticeView: NoticeView!                   // a notice from the VM over the picture
+    var progressCard: ProgressCard!               // "please wait" while the VM gets Steam ready
     var hostStats: HostStats!                     // the Mac's GPU numbers, for Steam's performance monitor
 
     lazy var activity: ActivityWindow = {
@@ -74,6 +75,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         startView.logButton.target = self
         startView.logButton.action = #selector(showProblemLog(_:))
         content.addSubview(startView)
+        progressCard = ProgressCard(frame: NSRect(x: 0, y: 0, width: 420, height: 90))
+        content.addSubview(progressCard)          // what the VM is doing while Steam isn't there (bottle-splash)
         noticeView = NoticeView(frame: NSRect(x: 0, y: 0, width: 400, height: 60))
         content.addSubview(noticeView)            // above the picture and the starting screen
         hostStats = HostStats(conn: conn)
@@ -118,9 +121,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             if !self.followsWindow { self.window.contentAspectRatio = NSSize(width: w, height: h) }
             v.redraw()
         }
-        conn.onNotice = { [weak self] problem, title, details, seconds in
+        conn.onNotice = { [weak self] kind, title, details, seconds in
             guard let self = self else { return }
-            self.noticeView.show(problem: problem, title: title, detail: details, seconds: seconds)
+            if kind == 2 {   // progress: a card in the middle that stays until the next one (an empty one, or "-", takes it down)
+                let text = title == "-" ? "" : title
+                self.progressCard.show(text: text, detail: details)
+                return
+            }
+            self.noticeView.show(problem: kind == 1, title: title, detail: details, seconds: seconds)
             if !NSApp.isActive { NSApp.requestUserAttention(.informationalRequest) }
         }
         conn.onFrame = { [weak self] fb in self?.view.show(fb) }
@@ -208,7 +216,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if names.isEmpty {
             window.subtitle = ""
         } else if padsBlocked {
-            window.subtitle = "Controllers can't reach the VM yet: choose Bottle > Update the Bottle"
+            window.subtitle = "Controllers can't reach the VM yet: choose Steam > Update the VM"
         } else {
             // Several: in player order, since games listen to player 1 (the one in use, see Pads)
             window.subtitle = names.count == 1 ? "Controller: " + names[0]

@@ -434,7 +434,7 @@ cmd_on() {
     return 1
   fi
   spawn "${BASH_SOURCE[0]}" look
-  say "Desktop Mode is on. “Return to Game Mode” on the desktop, or the Bottle menu, switches back."
+  say "Desktop Mode is on. “Return to Game Mode” on the desktop, or the Steam menu, switches back."
 }
 
 cmd_off() {

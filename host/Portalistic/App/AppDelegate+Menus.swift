@@ -1,4 +1,4 @@
-// Portalistic — the menus: the Bottle menu's commands, the View menu, and which items
+// Portalistic — the menus: the Steam menu's commands, the View menu, and which items
 // are available when.
 
 import AppKit
@@ -53,7 +53,7 @@ extension AppDelegate {
     }
 
     @objc func updateBottle(_ sender: Any?) {
-        activity.run("Updating the bottle", ["update"], log: "update")
+        activity.run("Updating the VM", ["update"], log: "update")
     }
 
     @objc func saveLogs(_ sender: Any?) {
@@ -71,7 +71,7 @@ extension AppDelegate {
 
     @objc func shutDown(_ sender: Any?) {
         guard confirm("Shut down the VM?",
-                      "Steam and any game that's running quit, then the VM stops. Start it again from the Bottle menu, or by opening Portalistic.",
+                      "Steam and any game that's running quit, then the VM stops. Start it again from the Steam menu, or by opening Portalistic.",
                       "Shut Down") else { return }
         activity.run("Shutting down the VM", ["stop"], log: "stop")
     }
@@ -107,7 +107,7 @@ extension AppDelegate {
         appMenu.addItem(withTitle: "Quit Portalistic", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appItem.submenu = appMenu
 
-        /// A menu of plain items in the menu bar, after the Bottle's.
+        /// A menu of plain items in the menu bar, after the Steam menu.
         func makeMenu(_ title: String, _ entries: [(String, Selector)]) {
             let item = NSMenuItem()
             let menu = NSMenu(title: title)
@@ -122,20 +122,20 @@ extension AppDelegate {
 
         let bottleItem = NSMenuItem()
         main.addItem(bottleItem)
-        let bottleMenu = NSMenu(title: "Bottle")
+        let bottleMenu = NSMenu(title: "Steam")
         func add(_ title: String, _ action: Selector) {
             let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
             item.target = self
             bottleMenu.addItem(item)
         }
-        add("Start the Bottle", #selector(startBottle(_:)))
+        add("Start the VM", #selector(startBottle(_:)))
         add("Restart Steam…", #selector(restartSteam(_:)))
         add("Open Steam Settings", #selector(steamSettings(_:)))
         add("Steam's Interface: GPU or Processor…", #selector(chooseSteamInterface(_:)))
         add("Switch to Desktop Mode…", #selector(switchToDesktopMode(_:)))
         add("Switch to Game Mode", #selector(switchToGameMode(_:)))
         bottleMenu.addItem(.separator())
-        add("Update the Bottle", #selector(updateBottle(_:)))
+        add("Update the VM", #selector(updateBottle(_:)))
         add("Save Logs", #selector(saveLogs(_:)))
         add("Show Activity", #selector(showActivity(_:)))
         bottleMenu.addItem(.separator())

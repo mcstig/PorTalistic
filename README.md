@@ -7,8 +7,8 @@ your Mac, drawing with the Mac's GPU, and Steam plays Windows games through Prot
 
 **[Download the latest version](https://github.com/mcstig/PorTalistic/releases/latest)**
 
-- Needs an Apple Silicon Mac with macOS 26 or newer and 4 GB of memory or more. The VM gets its
-  share of it (2 GB on a 4 GB Mac, 8 GB on a 16 GB one); bigger games want a Mac with 16 GB.
+- Needs an Apple Silicon Mac with macOS 26 or newer and 8 GB of memory or more. The VM gets its
+  share of it (4 GB on an 8 GB Mac, 8 GB on a 16 GB one); bigger games want a Mac with 16 GB.
 - Unzip it and open Portalistic. Outside Applications it offers to move itself there and opens
   the copy. The first launch downloads its Linux system (a little over 2 GB), then Steam installs
   itself and asks you to sign in. To remove it all: Portalistic > Uninstall Portalistic.
@@ -58,7 +58,7 @@ download and sets up with one click (`bottle setup`):
 
 1. It downloads Portalistic's ready-made Linux image (2.3 GB, from the project's GitHub release,
    checked against its SHA-256) into `~/.portalistic/download`.
-2. Lima makes the VM from it in `~/.portalistic/lima`: half the Mac's memory under 24 GB (2-8 GB),
+2. Lima makes the VM from it in `~/.portalistic/lima`: half the Mac's memory under 24 GB (4-8 GB),
    a third from 24 GB (8-16 GB), its performance cores, and a 20 GB disk (Linux, Steam and Proton)
    that takes Mac space only as it fills. No Mac folders are
    shared except the game folder `~/Games/Portalistic`. The image file is deleted afterwards.
@@ -167,7 +167,7 @@ tries the Mac's GPU first, once per kit version, and goes back by itself if it c
   minutes and nothing is going on, one restart, which makes the same decision. A copy set to zink by hand is
   remembered as `on`.
 - **State** is one line in the VM, `~/.config/steamos-bottle/steam-gpu-auto`, `STATE VERSION`: `on`/`off` (chosen
-  by hand: `bottle steam-gpu on|off` or Bottle > Steam's Interface: GPU or Processor…; never changed by itself),
+  by hand: `bottle steam-gpu on|off` or Steam > Steam's Interface: GPU or Processor…; never changed by itself),
   `pending`, `ok`, `failed`. `BOTTLE_STEAM_GPU_AUTO=0` turns all of it off.
 - **Why the old check failed on the M1 laptop (Oct 21):** `bottle steam-gpu on` gave up after 2 failed web-helper
   tries (about 20 s) and put Steam back on the processor, just before the third try would have worked. It now
@@ -254,6 +254,15 @@ window is mapped: `wmctrl -lx`, at most 10 minutes), `close`; at most 15 minutes
 shows it when Steam starts next (from the kit's copy, so the first update to this version has it too); each step
 of `update-guest.sh` writes its name to it and now prints its time; `steam-arm64` shows it at its start, names
 each part (game folders, other stores, Steam Play, DXVK) and logs their times in `steam-timing.log`.
+- **0.7.0.11:** the zenity window never showed on the laptop (the VM's desktop wasn't up yet), so the card is the
+  Mac app's own: `bottle-splash` writes `~/.cache/steamos-bottle/notices/splash.txt` as a notice of kind 2
+  (`2 600\nTEXT`; `-` takes it down), `bottle-screen` passes the kind through, and the app's `ProgressCard`
+  (NoticeView.swift) shows it centered until the next kind-2 notice. `show|text` starts one watcher (`splash.pid`)
+  that closes the card 2 s after a Steam window is mapped, or after 15 minutes. The Activity window
+  (`ActivityWindow.swift`) shows the bottle command's `==>` lines as steps with a spinner/tick, the latest plain
+  line under the current step, and the raw output behind Details (opened on failure). The Bottle menu is the
+  **Steam** menu (Start the VM, Update the VM). Dev Mac, Oct 22 21:51: Restart Steam showed "Starting Steam…" from
+  21:47:26 until Steam's window at 21:47:40.
 `BOTTLE_SPLASH=0` turns it off. The x86 Vulkan probes in `install-x86.sh` run only when the layers or the x86
 Venus driver changed (`/var/lib/steamos-bottle/x86-probe-stamp`; `BOTTLE_FORCE_PROBE=1`). The prefix copy now
 waits at most 20 s for the listing, 60 s for the size, 120 s per prefix and 240 s in all. Dev Mac, Oct 22 16:10:
@@ -353,7 +362,7 @@ the first time (games with a Linux version default to it).
 | `bottle log list` / `bottle log prev [N]` | Earlier game launches: Proton starts its log over on every launch, so `bottle-logkeep` (runs with Steam) keeps the last 8 per game; `prev` summarizes the last one, e.g. a launch that crashed |
 | `bottle perf` | While a game runs: Mac CPU/GPU load (also per VM thread), the VM's busiest processes, busiest game threads, the game's frame pacing (hitches, shader compiling), and (with `--debug`) the game's swapchains, how each frame's time splits into GPU, screen and game, and what the game asks per frame (draws, submits, new pipelines). The keep-awake loop writes the same every 30 s of play to the kit's `logs/game-perf.log` |
 | `bottle fps [N\|off]` | Cap games at N fps (DXVK's limiter, `DXVK_FRAME_RATE` in steam.env; restarts Steam). A game that keeps the Mac's GPU flat out heats a MacBook until macOS slows it down; a cap a little under the game's early frame rate keeps it steady. One game only: `DXVK_FRAME_RATE=45 %command%` in its launch options |
-| `bottle memory [GB]` | The VM's memory (restarts the VM); no argument: how much it has and what's suggested (half the Mac's under 24 GB, 2-8 GB; a third from 24 GB, 8-16 GB). The VM's file cache and the games' GPU memory both live in the Mac's memory |
+| `bottle memory [GB]` | The VM's memory (restarts the VM); no argument: how much it has and what's suggested (half the Mac's under 24 GB, 4-8 GB; a third from 24 GB, 8-16 GB). The VM's file cache and the games' GPU memory both live in the Mac's memory |
 | `bottle tso [on\|off]` | x86 memory ordering in hardware (Apple's TSO mode, as Rosetta uses): tests that it works in the VM, measures what it's worth, keeps it on if it holds; FEX then stops ordering every memory access of x86 games in software. Restarts Steam. No argument: whether it's on |
 | `bottle gputrace` | While a game runs: records 3 s of the Mac GPU timeline with Instruments (needs Xcode) and packs the tables into `~/Desktop/bottle-gputrace-*.zip` for analysis |
 | `bottle window` | Open **Portalistic.app** (built once into ~/Applications): the VM's screen in a Mac window with keyboard, mouse and sound. When a game hides its pointer (mouse-look) the mouse is captured and sent as raw motion; ⌘Esc releases it, a click captures again; ⌃⌘F full screen |
@@ -508,8 +517,8 @@ Self-test (no network, no Steam): `python3 guest/tests/stores-selftest.py`.
 The bottle has two modes, as a Steam Deck does. **Game Mode** is what it always was: Steam's Big
 Picture fills the screen. **Desktop Mode** is KDE Plasma (Fedora's packages, its X11 session) with
 Dolphin, Konsole, Kate, Firefox, Spectacle, the System Monitor and Discover (for Flatpak apps); Steam keeps running, in a window
-(it opens over the desktop; minimize it to see the desktop). Bottle > Switch to Desktop Mode (or
-`bottle mode desktop`) switches; the "Return to Game Mode" icon on the desktop, or Bottle > Switch to
+(it opens over the desktop; minimize it to see the desktop). Steam > Switch to Desktop Mode (or
+`bottle mode desktop`) switches; the "Return to Game Mode" icon on the desktop, or Steam > Switch to
 Game Mode (`bottle mode game`), switches back.
 
 - **Installed on first use, not shipped**: the first switch downloads about 550 MB with dnf (about
@@ -678,7 +687,7 @@ that doesn't fit, and uninstalling gives the space straight back.
 **The free-space guard.** While the VM runs, the watcher checks the Mac's free space every
 minute. Under 10 GB (`BOTTLE_DISK_LOW_GB`) it has the VM hand back what deleted files freed and
 shows a warning in the app (at most every 15 minutes); under 3 GB (`BOTTLE_DISK_STOP_GB`) it stops
-a Steam download that's making the VM's disk grow (Steam quits; Bottle > Restart Steam brings it
+a Steam download that's making the VM's disk grow (Steam quits; Steam > Restart Steam brings it
 back), before the VM's disk can no longer grow and the VM stops working.
 
 **Staying awake.** A sleeping Mac freezes the VM (downloads, games). While the VM runs,
@@ -790,8 +799,8 @@ would cost every frame.
 Portalistic opens from the Dock, Launchpad or Spotlight like any app: when the bottle isn't
 running it runs `bottle _up` (VM, desktop, Steam, sound, keep-awake) and shows each step on its
 starting screen, or what went wrong (Show Log opens the output, in the kit's `logs/app-*.log`).
-Its **Bottle** menu has the everyday commands: Start the Bottle, Restart Steam, Open Steam
-Settings, Update the Bottle, Save Logs for Claude (shows the file in Finder), Show Activity (their
+Its **Steam** menu has the everyday commands: Start the VM, Restart Steam, Open Steam
+Settings, Update the VM, Save Logs for Claude (shows the file in Finder), Show Activity (their
 output) and Shut Down the VM. The app's Info.plist records the kit folder and the PATH at build
 time (opened from the Dock an app gets a bare PATH, without Homebrew's limactl). When a file in
 host/Portalistic/ is newer than the app (a kit update, or an edit in Xcode), the app rebuilds
@@ -982,7 +991,7 @@ a prefix with a builtin DLL, a Proton update and removal. A quick pass takes 0.0
 never installed: the try that followed still ran Proton's DXVK 3.1.1, under a Steam started
 before the fix arrived. bottle update now leaves a fingerprint of the kit's guest/ folder in the
 VM (~/.cache/steamos-bottle/kit-stamp). When the app starts the bottle (`_up`) or Steam is
-restarted (Bottle > Restart Steam, `bottle steam`), a VM that's behind the kit is updated first.
+restarted (Steam > Restart Steam, `bottle steam`), a VM that's behind the kit is updated first.
 It doesn't do this while a game runs: it says so, and the update waits for the next time.
 
 **Every launch leaves a light game log.** Without `--debug`, steam-arm64 now sets PROTON_LOG=1

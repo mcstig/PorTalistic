@@ -44,34 +44,34 @@ extension AppDelegate {
         lostTimer = nil
         guard !view.connected, starter == nil else { return }
         if activity.busy {
-            startView.show("The bottle is busy…", detail: "See Bottle > Show Activity.", busy: true)
+            startView.show("Portalistic is busy…", detail: "See Steam > Show Activity.", busy: true)
         } else {
             showStopped()
         }
     }
 
-    /// A Bottle menu job ended (an update, a shutdown...): if the screen is gone, say so.
+    /// A Steam menu job ended (an update, a shutdown...): if the screen is gone, say so.
     func activityEnded() {
         guard !view.connected, starter == nil, lostTimer == nil, !rebuilding else { return }
         showStopped()
     }
 
     func showStopped() {
-        startView.show("The bottle isn't running.",
-                       detail: "Steam and its games run in a Linux VM on this Mac.", busy: false, button: "Start the Bottle")
+        startView.show("The VM isn't running.",
+                       detail: "Steam and its games run in a Linux VM on this Mac.", busy: false, button: "Start the VM")
     }
 
     @objc func startBottle(_ sender: Any?) {
         guard starter == nil, !view.connected else { return }
         guard !activity.busy else {
-            startView.show("The bottle is busy…", detail: "See Bottle > Show Activity.", busy: true)
+            startView.show("Portalistic is busy…", detail: "See Steam > Show Activity.", busy: true)
             return
         }
         screenTimer?.invalidate()
         screenTimer = nil
         if needsSetup { runSetup(); return }
         guard BottleCommand.available else {
-            startView.show("The bottle isn't running.",
+            startView.show("The VM isn't running.",
                            detail: "This copy of the app doesn't know where the kit is. In Terminal: bottle window",
                            busy: false)
             return
@@ -108,7 +108,7 @@ extension AppDelegate {
             if code != 0 {
                 let alert = NSAlert()
                 alert.messageText = "Part of the bottle didn't start"
-                alert.informativeText = c.problem + "\n\nBottle > Restart Steam tries again; Bottle > Save Logs saves what helps find out why."
+                alert.informativeText = c.problem + "\n\nSteam > Restart Steam tries again; Steam > Save Logs saves what helps find out why."
                 alert.beginSheetModal(for: window, completionHandler: nil)
             }
             return
@@ -129,7 +129,7 @@ extension AppDelegate {
         guard !view.connected, starter == nil, let c = startedCommand else { return }
         lastProblemLog = c.logPath
         startView.show("The bottle started, but its screen didn't appear.",
-                       detail: "Bottle > Update the Bottle can fix a VM that's missing pieces.",
+                       detail: "Steam > Update the VM can fix a VM that's missing pieces.",
                        busy: false, button: "Try Again", log: true)
     }
 

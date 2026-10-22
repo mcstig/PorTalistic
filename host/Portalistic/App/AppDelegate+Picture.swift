@@ -62,7 +62,7 @@ extension AppDelegate {
             lines.append(String(format: "VM:   %.0f fps sent, capture %.1f ms, encode %.1f ms, send %.1f ms, %ld sharp stills/s",
                                 st.serverFPS, st.captureMs, st.encodeMs, st.sendMs, st.sharp))
         } else {
-            lines.append("VM:   no numbers (Bottle > Update the Bottle brings the newer screen server)")
+            lines.append("VM:   no numbers (Steam > Update the VM brings the newer screen server)")
         }
         view.setInfo(lines.joined(separator: "\n"))
     }

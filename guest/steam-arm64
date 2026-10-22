@@ -164,7 +164,7 @@ if [[ "$(cat "${LOG_DIR}/steam-gpu" 2>/dev/null)" == zink && -z "${MESA_LOADER_D
     BOTTLE_STEAM_GPU_FAKE="$(cat "${LOG_DIR}/steam-gpu-fake" 2>/dev/null)"
     export BOTTLE_STEAM_GPU=zink BOTTLE_STEAM_GPU_FAKE="${BOTTLE_STEAM_GPU_FAKE:-geometryShader}"
   else
-    echo "Steam's interface stays on the processors: the bottle's OpenGL shim is missing (Bottle > Update the Bottle)."
+    echo "Steam's interface stays on the processors: the bottle's OpenGL shim is missing (Steam > Update the VM)."
   fi
 fi
 # glibc reports fatal errors (heap corruption etc.) on /dev/tty, which games here don't have;

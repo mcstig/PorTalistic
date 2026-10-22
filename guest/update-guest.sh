@@ -69,13 +69,15 @@ TARGET_HOME="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
 STATE="$TARGET_HOME/.config/steamos-bottle"
 FAILED=()
 
-SPLASH_STATUS="$TARGET_HOME/.cache/steamos-bottle/splash-status"   # bottle-splash's text, when it's on
+SPLASH_ON="$TARGET_HOME/.cache/steamos-bottle/splash.pid"   # bottle-splash's card is up (the Mac's _up showed it)
 STEP_N=0
 step() {  # step "description" command... : run, record failure, keep going (each step's time in the log)
   local what="$1" t0=$SECONDS; shift
   STEP_N=$(( STEP_N + 1 ))
   info "$what"
-  [[ -f "$SPLASH_STATUS" ]] && printf '# Updating Portalistic\x27s Linux system (step %s of about 25): %s\n' "$STEP_N" "$what" >> "$SPLASH_STATUS" 2>/dev/null
+  if [[ -f "$SPLASH_ON" && -x /usr/local/bin/bottle-splash ]]; then
+    sudo -u "$TARGET_USER" HOME="$TARGET_HOME" /usr/local/bin/bottle-splash text "Updating Portalistic's Linux system (step $STEP_N of about 25): $what" >/dev/null 2>&1 || true
+  fi
   if ! "$@"; then
     warn "$what: failed (see above)"
     FAILED+=("$what")
@@ -416,7 +418,7 @@ comet_install() {
 # the image (about 300 MB). When it's there, its settings follow the kit.
 desktop_mode_settings() {
   if ! command -v startplasma-x11 >/dev/null; then
-    echo "  Desktop Mode isn't installed (Bottle > Switch to Desktop Mode installs it)"
+    echo "  Desktop Mode isn't installed (Steam > Switch to Desktop Mode installs it)"
     return 0
   fi
   sudo -u "$TARGET_USER" -H /usr/local/bin/bottle-session configure && echo "  Plasma's settings in place"

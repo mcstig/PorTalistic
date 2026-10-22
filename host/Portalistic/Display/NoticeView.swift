@@ -113,3 +113,100 @@ final class NoticeView: NSView {
         autoresizingMask = [.minXMargin, .maxXMargin, .minYMargin]   // stays at the top middle
     }
 }
+
+/// A card in the middle of the window while the VM gets Steam ready (an update of the Linux
+/// system, games moving into a drive, Steam's own start): a spinner, what is happening, and a
+/// line of detail. bottle-splash in the VM sends it (notice kind 2); the next kind-2 notice
+/// replaces the text, an empty one takes the card down. Nothing to click.
+final class ProgressCard: NSView {
+    private let heading = NSTextField(labelWithString: "Portalistic")
+    private let text = NSTextField(wrappingLabelWithString: "")
+    private let detail = NSTextField(wrappingLabelWithString: "")
+    private let spinner = NSProgressIndicator()
+    private var lastShown: Date = .distantPast
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        appearance = NSAppearance(named: .darkAqua)
+        wantsLayer = true
+        layer?.backgroundColor = NSColor(white: 0.10, alpha: 0.94).cgColor
+        layer?.cornerRadius = 16
+        layer?.borderWidth = 1
+        layer?.borderColor = NSColor(white: 1, alpha: 0.14).cgColor
+        heading.font = .systemFont(ofSize: 13, weight: .semibold)
+        heading.textColor = NSColor(white: 0.70, alpha: 1)
+        text.font = .systemFont(ofSize: 16, weight: .medium)
+        text.textColor = .white
+        text.maximumNumberOfLines = 3
+        text.preferredMaxLayoutWidth = 420
+        detail.font = .systemFont(ofSize: 12)
+        detail.textColor = NSColor(white: 0.72, alpha: 1)
+        detail.maximumNumberOfLines = 3
+        detail.preferredMaxLayoutWidth = 420
+        spinner.style = .spinning
+        spinner.controlSize = .regular
+        spinner.isDisplayedWhenStopped = false
+        let column = NSStackView(views: [heading, text, detail])
+        column.orientation = .vertical
+        column.alignment = .leading
+        column.spacing = 5
+        let row = NSStackView(views: [spinner, column])
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.spacing = 16
+        row.edgeInsets = NSEdgeInsets(top: 18, left: 22, bottom: 18, right: 26)
+        row.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(row)
+        NSLayoutConstraint.activate([
+            row.leadingAnchor.constraint(equalTo: leadingAnchor),
+            row.trailingAnchor.constraint(equalTo: trailingAnchor),
+            row.topAnchor.constraint(equalTo: topAnchor),
+            row.bottomAnchor.constraint(equalTo: bottomAnchor),
+            text.widthAnchor.constraint(lessThanOrEqualToConstant: 420),
+            detail.widthAnchor.constraint(lessThanOrEqualToConstant: 420),
+        ])
+        isHidden = true
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    /// The card with this text (empty: the card goes away).
+    func show(text t: String, detail d: String) {
+        if t.isEmpty { dismiss(); return }
+        text.stringValue = t
+        detail.stringValue = d
+        detail.isHidden = d.isEmpty
+        place()
+        if isHidden {
+            alphaValue = 0
+            isHidden = false
+            spinner.startAnimation(nil)
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.25
+                self.animator().alphaValue = 1
+            }
+        }
+        lastShown = Date()
+    }
+
+    func dismiss() {
+        guard !isHidden else { return }
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.3
+            self.animator().alphaValue = 0
+        }, completionHandler: { [weak self] in
+            self?.isHidden = true
+            self?.spinner.stopAnimation(nil)
+        })
+    }
+
+    /// In the middle of the window, at its text's size.
+    func place() {
+        guard let parent = superview else { return }
+        layoutSubtreeIfNeeded()
+        let size = fittingSize
+        let w = min(max(size.width, 360), parent.bounds.width - 40), h = size.height
+        frame = NSRect(x: ((parent.bounds.width - w) / 2).rounded(), y: ((parent.bounds.height - h) / 2).rounded(),
+                       width: w, height: h)
+    }
+}

@@ -177,22 +177,32 @@ final class BottleView: NSView {
         setCaptured(connected && !covered && focused && autoCapture && !remoteCursorVisible)
     }
 
+    private var pointerBeforeCapture: CGPoint?   // where the Mac pointer was (CG coordinates), put back on release
+
     private func setCaptured(_ on: Bool) {
         guard on != captured else { return }
         captured = on
         accX = 0; accY = 0
         skipMotion = on
+        let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
         if on {
-            // Park the Mac pointer over the middle of the picture, then freeze it there.
+            // Park the Mac pointer over the middle of the picture, then freeze it there; it goes
+            // back to where it was when the mouse is released (Oct 22: it used to reappear in the
+            // middle of the window every time, which Michael found annoying).
+            let m = NSEvent.mouseLocation
+            pointerBeforeCapture = CGPoint(x: m.x, y: primaryHeight - m.y)
             if let w = window {
                 let r = w.convertToScreen(convert(pictureRect(), to: nil))
-                let primaryHeight = NSScreen.screens.first?.frame.height ?? r.maxY
                 CGWarpMouseCursorPosition(CGPoint(x: r.midX, y: primaryHeight - r.midY))
             }
             _ = CGAssociateMouseAndMouseCursorPosition(0)
             NSCursor.hide()
         } else {
             _ = CGAssociateMouseAndMouseCursorPosition(1)
+            if let p = pointerBeforeCapture {
+                CGWarpMouseCursorPosition(p)
+                pointerBeforeCapture = nil
+            }
             NSCursor.unhide()
         }
         onCaptureChange?(on)
