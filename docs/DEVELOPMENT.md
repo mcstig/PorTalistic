@@ -94,6 +94,13 @@ Proton and Steam's runtime (~2-2.5 GB more).
   to a quarantined app opened straight from Downloads) is found at its real place first
   (`SecTranslocateCreateOriginalPathForURL`). The app menu has "Move to Applications…" too, shown
   only when it applies. `~/Applications` counts as installed.
+  **0.7.0.12 (Oct 23):** from 0.7.0.1 to 0.7.0.11 "Move to Applications" quit the app at once instead of copying:
+  the question is asked before the main window exists, so the alert closing was the last window closing and
+  `applicationShouldTerminateAfterLastWindowClosed` ended the app (the self-test `mac-installapp1` answers through
+  an environment variable, with no alert, so it never saw it; found on the dev Mac with the real download,
+  `mac-installapp8`, and the system log's "applicationShouldTerminate: NSTerminateNow" right after the answer).
+  `installing` holds that rule off during the move. Each step is logged to `app-install.log` (the self-test's
+  log file when set).
 - **Uninstall** (Portalistic > Uninstall Portalistic…, `bottle uninstall --list | --yes`). The
   dialog lists what goes: the Linux system (`~/.portalistic/lima/steamos-bottle`, or the
   `steamos-bottle` VM in `~/.lima` on a Mac set up with the kit), then settings, logs, caches and

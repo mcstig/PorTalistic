@@ -161,20 +161,25 @@ enum Installation {
 
     /// Copies the app into `folder` as Portalistic.app, checks the copy, and puts it in place (an older
     /// Portalistic.app there goes to the Trash first). Nothing is left behind if a step fails.
-    static func copyApp(from source: URL, into folder: String) throws -> URL {
+    static func copyApp(from source: URL, into folder: String, log: @escaping (String) -> Void = { _ in }) throws -> URL {
         let fm = FileManager.default
         let target = folder + "/Portalistic.app"
         let temp = folder + "/.Portalistic-copying.app"
         func failed(_ why: String) -> Failure {
-            try? fm.removeItem(atPath: temp)
+            log("failed: \(why)")
+            do { try fm.removeItem(atPath: temp) } catch { log("leftover \(temp) not removed: \(error.localizedDescription)") }
             return Failure(why: why)
         }
-        try? fm.removeItem(atPath: temp)
+        log("copy \(source.path) -> \(temp)")
+        if fm.fileExists(atPath: temp) {
+            do { try fm.removeItem(atPath: temp); log("old \(temp) removed") } catch { log("old \(temp) not removed: \(error.localizedDescription)") }
+        }
         // The copy is made without the source's extended attributes: a folder that iCloud or another sync
         // service looks after (the Desktop, say) leaves marks on the app that make `codesign --strict` fail
         // ("detritus not allowed"). The download's quarantine mark is the one that matters, so it is put back.
         let mark = run("/usr/bin/xattr", ["-p", "com.apple.quarantine", source.path])
         let copied = run("/usr/bin/ditto", ["--norsrc", "--noextattr", source.path, temp])
+        log("ditto: \(copied.status) \(copied.output.trimmingCharacters(in: .whitespacesAndNewlines).prefix(300))")
         guard copied.status == 0 else {
             throw failed("The copy didn't work (\(copied.output.trimmingCharacters(in: .whitespacesAndNewlines))).")
         }
@@ -182,20 +187,27 @@ enum Installation {
         if mark.status == 0, !markText.isEmpty {
             run("/usr/bin/xattr", ["-w", "com.apple.quarantine", markText, temp])
         }
-        guard run("/usr/bin/codesign", ["--verify", "--deep", "--strict", temp]).status == 0 else {
+        let signed = run("/usr/bin/codesign", ["--verify", "--deep", "--strict", temp])
+        log("codesign: \(signed.status) \(signed.output.trimmingCharacters(in: .whitespacesAndNewlines).prefix(300))")
+        guard signed.status == 0 else {
             throw failed("The copy's signature doesn't check out, so it wasn't kept.")
         }
         // Gatekeeper accepts a notarized copy; the mark the download left on it can go then. (One it
         // doesn't accept keeps the mark: it is what the user already opened, nothing more.)
-        if run("/usr/sbin/spctl", ["-a", "-t", "exec", temp]).status == 0 {
+        let policy = run("/usr/sbin/spctl", ["-a", "-t", "exec", temp])
+        log("spctl: \(policy.status) \(policy.output.trimmingCharacters(in: .whitespacesAndNewlines).prefix(200))")
+        if policy.status == 0 {
             run("/usr/bin/xattr", ["-dr", "com.apple.quarantine", temp])
         }
-        if fm.fileExists(atPath: target), !trash(URL(fileURLWithPath: target)) {
-            throw failed("The Portalistic in \(folder) couldn't be replaced.")
+        if fm.fileExists(atPath: target) {
+            let gone = trash(URL(fileURLWithPath: target))
+            log("older \(target) to the Trash: \(gone)")
+            if !gone { throw failed("The Portalistic in \(folder) couldn't be replaced.") }
         }
         do { try fm.moveItem(atPath: temp, toPath: target) } catch {
             throw failed("It couldn't be put in place (\(error.localizedDescription)).")
         }
+        log("in place: \(target)")
         return URL(fileURLWithPath: target)
     }
 
@@ -241,9 +253,17 @@ extension AppDelegate {
 
     var inSelfTest: Bool { return Installation.env["PORTALISTIC_SELFTEST"] != nil }
 
+    /// What installing does, step by step: the self-test's log, else app-install.log next to the
+    /// app's other logs (~/Library/Logs/Portalistic for a packaged app; Oct 23: so a move to
+    /// Applications that goes wrong says where).
     func installLog(_ text: String) {
-        guard let path = Installation.env["PORTALISTIC_SELFTEST_LOG"], !path.isEmpty,
-              let data = (text + "\n").data(using: .utf8) else { return }
+        var path = Installation.env["PORTALISTIC_SELFTEST_LOG"] ?? ""
+        if path.isEmpty {
+            path = BottleCommand.logDir + "/app-install.log"
+            try? FileManager.default.createDirectory(atPath: BottleCommand.logDir, withIntermediateDirectories: true)
+        }
+        let stamp = ISO8601DateFormatter().string(from: Date())
+        guard let data = (stamp + " " + text + "\n").data(using: .utf8) else { return }
         if let h = FileHandle(forWritingAtPath: path) {
             h.seekToEndOfFile()
             h.write(data)
@@ -255,7 +275,8 @@ extension AppDelegate {
 
     /// A message for the user; in a test, a line in its log.
     func installNotice(_ title: String, _ detail: String) {
-        if inSelfTest { installLog("notice: \(title) \(detail)") } else { tell(title, detail) }
+        installLog("notice: \(title) \(detail)")
+        if !inSelfTest { tell(title, detail) }
     }
 
     /// What a test run does instead of starting up. install: a copy outside Applications offers to move
@@ -303,10 +324,14 @@ extension AppDelegate {
 
     /// Copies the app into Applications and opens the copy. True when that copy is taking over.
     func moveToApplications(offered: Bool) -> Bool {
+        installing = true
+        defer { installing = false }
         let me = Bundle.main.bundleURL
         let myID = Bundle.main.bundleIdentifier ?? ""
         let myVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
+        installLog("move to Applications: from \(me.path) (translocated: \(Installation.isTranslocated(me))), version \(myVersion), offered: \(offered)")
         guard let folder = Installation.destinationFolder() else {
+            installLog("no writable Applications folder")
             installNotice("Portalistic can't copy itself to Applications.",
                           "You can't write to /Applications or ~/Applications. Drag Portalistic to the Applications folder yourself.")
             return false
@@ -315,19 +340,24 @@ extension AppDelegate {
         var already: String?                     // the version in Applications, when it is this app and not older
         if let there = Installation.bundleInfo(at: target.path) {
             guard there.id == myID else {
+                installLog("another app with id \(there.id) is at \(target.path)")
                 installNotice("There's another app called Portalistic in \(folder).", "Move it away, then open this copy again.")
                 return false
             }
             if !Installation.versionNewer(myVersion, than: there.version) { already = there.version }
         }
-        guard askToMove(into: folder, already: already, offered: offered) else { return false }
+        installLog("into \(folder); there already: \(already ?? "nothing")")
+        guard askToMove(into: folder, already: already, offered: offered) else { installLog("answer: not now"); return false }
+        installLog("answer: move")
         var movedFrom: URL?
         if already == nil {
             let panel = inSelfTest ? nil : Installation.workingPanel("Moving Portalistic to \(Installation.shortPath(folder))…")
             let outcome = Installation.Outcome()
             DispatchQueue.global(qos: .userInitiated).async {
                 do {
-                    let copy = try Installation.copyApp(from: me, into: folder)
+                    let copy = try Installation.copyApp(from: me, into: folder) { [weak self] line in
+                        DispatchQueue.main.async { self?.installLog("  " + line) }
+                    }
                     outcome.set(.success(copy))
                 } catch let f as Installation.Failure {
                     outcome.set(.failure(f))
@@ -343,6 +373,7 @@ extension AppDelegate {
             }
             let origin = Installation.untranslocated(me)
             if !Installation.isTranslocated(origin) { movedFrom = origin }
+            installLog("copied; the original is \(origin.path)")
         }
         openCopy(at: target, movedFrom: movedFrom)
         return true
@@ -383,6 +414,7 @@ extension AppDelegate {
             $0.bundleURL?.resolvingSymlinksInPath().path == there
         }
         config.createsNewApplicationInstance = !running
+        installLog("opening \(url.path) (a copy from there runs already: \(running))")
         config.arguments = [Installation.justInstalledFlag] + (movedFrom.map { [Installation.movedFromFlag, $0.path] } ?? [])
         var environment = Installation.env.filter { $0.key.hasPrefix("PORTALISTIC_") }
         if environment["PORTALISTIC_SELFTEST"] == "install" { environment["PORTALISTIC_SELFTEST"] = "installed" }
@@ -392,9 +424,10 @@ extension AppDelegate {
                 guard let self = self else { return }
                 if let error = error {
                     self.leaving = false
+                    self.installLog("the copy didn't open: \(error.localizedDescription)")
                     self.installNotice("Portalistic is in Applications but didn't open.", error.localizedDescription + " Open it from there.")
                 } else {
-                    self.installLog("opened \(url.path)")
+                    self.installLog("opened \(url.path); this copy quits")
                     NSApp.terminate(nil)
                 }
             }

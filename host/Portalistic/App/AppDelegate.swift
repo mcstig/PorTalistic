@@ -225,6 +225,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     var leaving = false
+    var installing = false                 // moving to Applications: no quitting when the alert closes (AppDelegate+Quitting)
     let dontAskKey = "QuitWithoutAsking"
 
     func windowDidChangeOcclusionState(_ notification: Notification) {

@@ -7,7 +7,11 @@
 import AppKit
 
 extension AppDelegate {
-    @objc func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+    // Not while the app is moving itself to Applications: that question is asked before the main
+    // window exists, so the alert closing counted as the last window closing and the app quit on
+    // the spot, before the copy started (Oct 23: "Move to Applications" did nothing on a real Mac;
+    // the self-test answers the question without a window, so it never saw it).
+    @objc func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { !installing }
 
     @objc func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         confirmLeaving() ? .terminateNow : .terminateCancel
