@@ -16,6 +16,16 @@ space straight back to the Mac.
                                  FEX, redistributables) move to the VM's disk: they need a Linux
                                  file system (the Mac's ignores upper/lower case, and the
                                  runtimes have files that differ only in case);
+                               * Proton's game prefixes (steamapps/compatdata: each game's
+                                 Windows folder, thousands of small files) stay on the VM's disk:
+                                 ~/.local/share/steamos-bottle/compatdata/NAME is mounted over the
+                                 folder's steamapps/compatdata (until the VM stops; every Steam
+                                 start does it again). Prefixes already in the folder are copied
+                                 there first; the originals stay in the folder on the Mac, hidden
+                                 under the mount. Writing them through the Mac share was slow (a
+                                 first start took 9 minutes on a 2020 M1 MacBook Pro) and, on that
+                                 Mac, some requests got lost and Proton waited forever (Oct 22).
+                                 BOTTLE_LOCAL_PREFIXES=0 turns it off;
                              entries for folders the Mac no longer lists go (their games stay
                              in the folder); and the default library for new games (Steam's
                              "Make Default", LastInstallFolderIndex in each user's
@@ -49,6 +59,10 @@ MOUNT_ROOT = Path(os.environ.get("BOTTLE_LIBRARY_ROOT", "/mnt/portalistic"))
 CONF = HOME / ".config/steamos-bottle/libraries.json"
 STATE = HOME / ".config/steamos-bottle/libraries-state.json"
 TESTING = os.environ.get("BOTTLE_LIBRARIES_TEST") == "1"   # folders count as shared without a mount
+PREFIX_ROOT = Path(os.environ.get("BOTTLE_PREFIX_ROOT", HOME / ".local/share/steamos-bottle/compatdata"))
+PREFIX_COPY_SECS = 300           # copying one game's prefix off the share (a lost request ends it)
+PREFIX_FAILS = HOME / ".config/steamos-bottle/prefix-copy-failed.json"   # app ID -> failed copies
+PREFIX_ROOM = 2 * 10 ** 9        # what stays free on the VM's disk after the copies (its low-space banner starts under 3 GB)
 
 # Steam's own tools, runtimes and redistributables (as in bottle-steamplay).
 TOOL_APPIDS = {
@@ -381,6 +395,110 @@ def move_tools(libs, root):
     return moved
 
 
+def bound(target):
+    """Our mount is over this compatdata folder already."""
+    if TESTING:
+        return (target / ".test-bound").exists()
+    return os.path.ismount(target)
+
+
+def bind(src, target):
+    if TESTING:
+        if os.environ.get("BOTTLE_LIBRARIES_TEST_BINDFAIL") == "1":
+            return False
+        (target / ".test-bound").write_text(str(src))
+        return True
+    try:
+        r = subprocess.run(["sudo", "-n", "mount", "--bind", str(src), str(target)],
+                           capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return r.returncode == 0 and os.path.ismount(target)
+
+
+def run_limited(cmd, secs):
+    """A command on the share, killed if it doesn't finish (a lost request would hold it forever)."""
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=secs)
+        return r.returncode, r.stdout
+    except subprocess.TimeoutExpired:
+        return None, ""
+    except OSError:
+        return 1, ""
+
+
+def local_prefixes(mp, name, label):
+    """Proton's prefixes for the games in a shared folder: on the VM's own disk (see the top)."""
+    if os.environ.get("BOTTLE_LOCAL_PREFIXES", "1") == "0":
+        return
+    target = mp / "steamapps/compatdata"
+    local = PREFIX_ROOT / name
+    if target.is_dir() and bound(target):
+        return
+    try:
+        local.mkdir(parents=True, exist_ok=True)
+        target.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        say(f"{label}: can't set up the prefix folders ({e}); prefixes stay in the folder this time")
+        return
+    rc, out = run_limited(["ls", "-1A", "--", str(target)], 60)
+    if rc != 0:
+        say(f"{label}: the folder's prefixes couldn't be listed; they stay there this time")
+        return
+    todo = [e for e in out.splitlines() if e and not e.startswith(".") and not (local / e).exists()]
+    copied = []
+    if todo:
+        rc, out = run_limited(["du", "-sb", "--"] + [str(target / e) for e in todo], 600)
+        size = sum(int(l.split()[0]) for l in out.splitlines() if l.split() and l.split()[0].isdigit()) if rc == 0 else None
+        if size is None:
+            say(f"{label}: the folder's prefixes couldn't be measured; they stay there this time")
+            return
+        if shutil.disk_usage(local).free < size * 1.1 + PREFIX_ROOM:
+            say(f"{label}: not enough room on the VM's disk for the games' prefixes ({gb(size)}); they stay in the folder")
+            return
+        say(f"{label}: copying {len(todo)} game prefix(es) ({gb(size)}) to the VM's disk (once)…")
+        staging = local / ".copying"
+        shutil.rmtree(staging, ignore_errors=True)
+        staging.mkdir()
+        fails = load_json(PREFIX_FAILS, {})
+        given_up = []
+        for e in todo:
+            if TESTING and e == os.environ.get("BOTTLE_LIBRARIES_TEST_COPYFAIL"):
+                rc = None
+            else:
+                rc, _ = run_limited(["cp", "-a", "--", str(target / e), str(staging / e)], PREFIX_COPY_SECS)
+            if rc == 0:
+                continue
+            shutil.rmtree(staging / e, ignore_errors=True)
+            key = f"{name}/{e}"
+            fails[key] = int(fails.get(key, 0)) + 1
+            if fails[key] < 2:
+                say(f"{label}: copying the prefix {e} didn't finish; trying again at the next Steam start")
+                if PREFIX_FAILS.parent.is_dir():
+                    write_atomic(PREFIX_FAILS, json.dumps(fails))
+                shutil.rmtree(staging, ignore_errors=True)
+                return
+            # the second time: Proton sets that game up anew on the VM's disk (the old prefix stays
+            # in the Mac folder, under the mount); Steam Cloud brings saves back for most games
+            say(f"{label}: the prefix {e} couldn't be copied twice; Proton sets it up again (the old one stays in the folder on the Mac)")
+            given_up.append(e)
+        for e in todo:
+            if e in given_up:
+                continue
+            os.rename(staging / e, local / e)
+            copied.append(e)
+            fails.pop(f"{name}/{e}", None)
+        shutil.rmtree(staging, ignore_errors=True)
+        if PREFIX_FAILS.parent.is_dir():
+            write_atomic(PREFIX_FAILS, json.dumps(fails))
+    if not bind(local, target):
+        for e in copied:             # not in use: the folder's own copies stay the ones Proton uses
+            shutil.rmtree(local / e, ignore_errors=True)
+        say(f"{label}: couldn't mount the VM-disk prefixes over the folder's; prefixes stay in the folder this time")
+        return
+    say(f"{label}: Proton's game prefixes are on the VM's disk" + (f" ({len(copied)} copied there)" if copied else ""))
+
+
 def wanted_default(conf, libs):
     """The library index new games should go to, from the Mac's choice and what's there now."""
     order = [conf.get("default") or "mac", "mac"]
@@ -439,6 +557,7 @@ def cmd_sync(args):
             vdf_set(e, "label", vdf_esc(label))
             vdf_set(e, "contentid", cid)
         move_tools(libs, mp)
+        local_prefixes(mp, f["name"], label)
     libs.save()
 
     # The default for new games. Portalistic sets it when the Mac's choice is new (its stamp

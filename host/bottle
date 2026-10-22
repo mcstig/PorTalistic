@@ -2020,7 +2020,7 @@ PM_FAST=0        # 1: look again in a few seconds (a game to restart Steam for w
 PM_FAST_N=0      # fast rounds in a row
 playmap_cmd() {  # the script the VM runs: "playmap TAB Steam's uptime"; with no game running a "pending TAB appid TAB name" line
                  # per game Steam would run as its Linux version; with a game starting a "launch TAB appid TAB pid TAB seconds TAB
-                 # prefix finished (0/1) TAB name" line per game
+                 # prefix finished (0/1) TAB play|install TAB name" line per game
   cat <<'PMEOF'
 pmp="$(pgrep -f "[s]teamrtarm64/steam" | head -n 1)"
 pmu=0
@@ -2035,6 +2035,8 @@ if [ -n "$pmp" ]; then
       case " $pmdone " in *" $pma "*) continue ;; esac   # (a launch has a shell, a wrapper and the reaper: the first, oldest, counts)
       pmdone="$pmdone $pma"
       pmt="$(ps -o etimes= -p "$pmr" 2>/dev/null | tr -d ' ')"
+      pmy=play   # Steam's install step (the game's Windows installers: Install=1, proton run) or a game start
+      tr '\0' ' ' < /proc/$pmr/cmdline 2>/dev/null | grep -qE " Install=1 |proton'? run " && pmy=install
       pmf="$( { echo "$HOME/.local/share/Steam"; sed -n 's/^[[:space:]]*"path"[[:space:]]*"\(.*\)"[[:space:]]*$/\1/p' "$HOME/.local/share/Steam/steamapps/libraryfolders.vdf" 2>/dev/null; } | while IFS= read -r pml; do
         [ -f "$pml/steamapps/appmanifest_$pma.acf" ] || continue
         printf '%s\t%s\n' "$(awk -F'"' '$2 == "name" {print $4; exit}' "$pml/steamapps/appmanifest_$pma.acf")" "$pml/steamapps/compatdata/$pma"
@@ -2045,7 +2047,7 @@ if [ -n "$pmp" ]; then
       pmd="$(printf '%s' "$pmf" | cut -f2-)"
       pmk=0
       [ -f "$pmd/pfx/creation_sync_guard" ] && pmk=1
-      printf 'launch\t%s\t%s\t%s\t%s\t%s\n' "$pma" "$pmr" "${pmt:-0}" "$pmk" "$pmn"
+      printf 'launch\t%s\t%s\t%s\t%s\t%s\t%s\n' "$pma" "$pmr" "${pmt:-0}" "$pmk" "$pmy" "$pmn"
     done
   elif ! pgrep -f "[w]ineserver" >/dev/null 2>&1; then
     command -v bottle-steamplay >/dev/null 2>&1 && bottle-steamplay pending 2>/dev/null
@@ -2055,19 +2057,29 @@ true
 PMEOF
 }
 playmap_guard() {  # $1 = what Steam does (game, download, idle), $2 = the VM's lines (see playmap_cmd)
-  local state="$1" lines="$2" kind a b c d e up now t keep="" fresh names title text n
+  local state="$1" lines="$2" kind a b c d k e up now t keep="" fresh names title text n
   local -a list=() ts=()
   PM_FAST=0
-  # a game starting without a finished Wine prefix: its first start builds one
+  # a game starting without a finished Wine prefix: its first start builds one. Steam's install
+  # step (the game's Windows installers, after the download): it can take minutes too.
   if [[ "${BOTTLE_PREFIX_NOTICE:-1}" != 0 ]]; then
-    while IFS=$'\t' read -r kind a b c d e; do
-      [[ "$kind" == launch && "$a" =~ ^[0-9]+$ && "$b" =~ ^[0-9]+$ && "$c" =~ ^[0-9]+$ && "$d" == 0 && -n "$e" ]] || continue
+    while IFS=$'\t' read -r kind a b c d k e; do
+      [[ "$kind" == launch && "$a" =~ ^[0-9]+$ && "$b" =~ ^[0-9]+$ && "$c" =~ ^[0-9]+$ && "$d" =~ ^[01]$ && -n "$e" ]] || continue
+      [[ "$k" == play || "$k" == install ]] || continue
       [[ "$PM_NOTICED" != *" $a@$b "* ]] || continue
-      if (( c < 15 )); then continue; fi   # (a start with a finished prefix has it from the first second)
-      PM_NOTICED="$PM_NOTICED $a@$b "
+      if [[ "$k" == install ]]; then
+        if (( c < 20 )); then continue; fi
+        PM_NOTICED="$PM_NOTICED $a@$b "
+        echo "$(date '+%F %T') $e: Steam's install step is still running after $c s: telling the player"
+        vm_notice 0 120 "Finishing the install of $e" "Steam is running the game's Windows installers (DirectX, Visual C++). The first time, this also sets up the game's Windows folder. It can take a few minutes; Play is ready when it's done."
+      else
+        [[ "$d" == 0 ]] || continue
+        if (( c < 15 )); then continue; fi   # (a start with a finished prefix has it from the first second)
+        PM_NOTICED="$PM_NOTICED $a@$b "
+        echo "$(date '+%F %T') $e starts without a finished Wine prefix: telling the player"
+        vm_notice 0 120 "Setting up $e for the first time" "Windows games need a one-time setup before they open. It can take several minutes, and the game starts by itself when it's done."
+      fi
       if (( ${#PM_NOTICED} > 400 )); then PM_NOTICED="${PM_NOTICED: -200}"; fi
-      echo "$(date '+%F %T') $e starts without a finished Wine prefix: telling the player"
-      vm_notice 0 120 "Setting up $e for the first time" "Windows games need a one-time setup before they open. It can take several minutes, and the game starts by itself when it's done."
     done <<<"$lines"
   fi
   [[ "${BOTTLE_PLAYMAP:-1}" != 0 ]] || return 0

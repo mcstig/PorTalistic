@@ -220,6 +220,31 @@ Found Oct 21 on a 2020 M1 MacBook Pro and confirmed on the development Mac.
   (that `creation_sync_guard` is missing for the whole prefix build, and that Steam has a just-installed game in
   its cache on disk).
 
+**Proton's prefixes on the VM's disk, and a banner for Steam's install step (Oct 22, in 0.7.0.8)**
+
+On the 2020 M1 MacBook Pro (macOS 26.3.1, 8 GB) the Mac game folder's share (virtio-fs in libkrun 1.19.6 / krunkit
+1.3.2) sometimes never answers a request: the guest process waits in `request_wait_answer` forever while krunkit's
+fs workers sit idle (a `sample` of krunkit showed both in `kevent`), and the same file answers the next time. Seen
+on Proton's `chmod` while starting Dead Cells, on `stat` by the watcher's `find` in `steamapps/downloading`, and on
+`proton run` (Steam's install step for Devil May Cry 5's DirectX/VC++ installers). Not reproduced on the M4 Max
+(macOS 26.6.2). The heaviest traffic on that share was Proton's prefixes (thousands of small files; a first start
+took 9 minutes there), so:
+
+- **`bottle-libraries sync`** (before every Steam start): for each shared game folder, `~/.local/share/steamos-bottle/
+  compatdata/NAME` is bind-mounted (`sudo -n mount --bind`) over `/mnt/portalistic/NAME/steamapps/compatdata`.
+  Prefixes already in the folder are copied first (`cp -a`, 5 minutes at most each, through a staging folder; the
+  space needed plus 2 GB must be free on the VM's disk, else nothing changes). A copy that doesn't finish: no mount
+  this time; the second time that game is set up anew (its old prefix stays in the Mac folder, hidden under the
+  mount; `prefix-copy-failed.json`). The originals are never deleted. `BOTTLE_LOCAL_PREFIXES=0` turns it off.
+  Dev Mac, Oct 22 13:47: four prefixes, 1.6 GB, copied in seconds; on btrfs with zstd they took about 0.2 GB.
+- **Steam's install step:** a launch with `Install=1` or `proton run` in the reaper's command line is `install` in
+  the watcher's lines (`launch ... play|install NAME`); after 20 s a banner says "Finishing the install of NAME".
+- Tests: `guest/tests/libraries-prefixes-selftest.py` (20 checks: copy, mount, a failed mount takes this run's
+  copies back, a stuck copy twice, the off switch, a folder not connected), `host/tests/mac-playmap2.sh` (54 checks
+  on Linux, 43 on the Mac's bash 3.2), `mac-prefixes1..3.sh` (the dev VM before and after).
+- Still open: why libkrun's share loses those requests (libkrun main has an eventfd fix for macOS, 137f84b, that
+  isn't in 1.19.6; whether it's related is not known). Game files themselves are still read through the share.
+
 **Making a release** (on the development Mac, which has the kit's setup: Homebrew's lima and
 krunkit, KosmicKrisp, Xcode, a Developer ID certificate):
 
