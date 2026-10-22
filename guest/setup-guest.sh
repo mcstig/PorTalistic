@@ -69,13 +69,13 @@ dnf copr enable -y slp/mesa-libkrun-vulkan
 REPOID="copr:copr.fedorainfracloud.org:slp:mesa-libkrun-vulkan"
 MESA_VERSION="$(dnf repoquery -q --available --repoid="$REPOID" --latest-limit=1 \
                  --qf '%{evr}' mesa-vulkan-drivers 2>/dev/null | head -n1)"
-[[ -n "$MESA_VERSION" ]] || die "The COPR has no mesa-vulkan-drivers build for Fedora $(rpm -E %fedora). See README → Troubleshooting."
+[[ -n "$MESA_VERSION" ]] || die "The COPR has no mesa-vulkan-drivers build for Fedora $(rpm -E %fedora). See docs/DEVELOPMENT.md → Troubleshooting."
 
 current="$(rpm -q --qf '%{evr}' mesa-vulkan-drivers)"
 if [[ "$current" != "$MESA_VERSION" ]]; then
   dnf downgrade -y "mesa-vulkan-drivers-${MESA_VERSION}" \
     || dnf install -y --allowerasing "mesa-vulkan-drivers-${MESA_VERSION}" \
-    || die "Couldn't switch to mesa-vulkan-drivers-${MESA_VERSION}. See README → Troubleshooting."
+    || die "Couldn't switch to mesa-vulkan-drivers-${MESA_VERSION}. See docs/DEVELOPMENT.md → Troubleshooting."
 fi
 dnf versionlock add "mesa-vulkan-drivers-${MESA_VERSION}" \
   || warn "versionlock failed: don't run 'dnf upgrade' or Mesa may lose Venus support."

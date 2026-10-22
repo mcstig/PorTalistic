@@ -66,7 +66,7 @@ lima_ver="$(limactl --version | awk '{print $NF}')"
 (( ${lima_ver%%.*} >= 2 )) || die "Lima 2.0+ is needed for the krunkit driver; found $lima_ver. Run: brew upgrade lima"
 
 if ! limactl info | jq -e '.vmTypesEx.krunkit // (.vmTypes | index("krunkit"))' >/dev/null; then
-  die "Lima's krunkit driver isn't installed. See README → Troubleshooting → 'krunkit driver missing'."
+  die "Lima's krunkit driver isn't installed. See docs/DEVELOPMENT.md → Troubleshooting → 'krunkit driver missing'."
 fi
 
 # --- 3. Create / start the bottle VM ---------------------------------------
