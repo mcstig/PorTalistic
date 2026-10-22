@@ -337,6 +337,7 @@ vm_start() {
   [[ ${#envs[@]} -gt 0 ]] && extra=" (settings: $(printf '%s ' "${envs[@]}"| sed 's/ $//'))"
   [[ -n "$icd" ]] && envs+=("VK_DRIVER_FILES=$icd" "VK_ICD_FILENAMES=$icd")
   lib_mounts_apply || true   # the game folders the VM shares (bottle library)
+  lib_moved_cleanup >/dev/null 2>&1 || true   # the folders' copies of games moved into their drives
   info "Starting the VM${icd:+ with KosmicKrisp}${extra}…"
   local t0=$SECONDS
   if env ${envs[@]+"${envs[@]}"} limactl start "$VM_NAME"; then
@@ -1170,17 +1171,23 @@ cmd_up() {
   # maximizes Steam's window (safe to run again).
   vsh bash -c 'command -v bottle-screen >/dev/null' \
     || die "The VM doesn't have the screen server yet. Run: bottle update"
+  # the desktop first: the "please wait" window (bottle-splash) can only show on it, and an update
+  # of the Linux system or the move of games into a drive may take minutes (Oct 22: a black window)
+  if vsh bash -c 'command -v bottle-desktop >/dev/null'; then
+    info "Starting the desktop…"
+    desktop_start >/dev/null
+  fi
   local broken
   broken="$(vm_tools_damaged)"
   if [[ -n "$broken" ]]; then
     info "Some of the bottle's programs in the VM were lost when it was last stopped; reinstalling them (a minute or two)…"
     printf '%s\n' "$broken" | sed 's/^/  lost: /'
+    vm_splash show "Reinstalling parts of Portalistic's Linux system…" || true
     cmd_update --now
   else
     update_if_behind "then Steam" || true
   fi
-  info "Starting the desktop…"
-  desktop_start >/dev/null
+  desktop_start >/dev/null   # (again: an update restarts the screen server)
   if steam_running; then info "Steam is running."; else steam_start "$debug"; fi
   audio_start
   awake_start
@@ -1533,6 +1540,34 @@ lib_mounts_apply() {
   printf '%s\n' "$expr" > "$LIB_APPLIED"
 }
 # The list, as the VM's bottle-libraries reads it (~/.config/steamos-bottle/libraries.json there).
+lib_moved_cleanup() {  # the folders' copies of games the VM moved into their drives (steamapps/.moved-into-drive)
+  local name label path list appid dir n
+  while IFS=$'\t' read -r name label path; do
+    [[ -n "$name" && -d "$path" ]] || continue
+    list="$path/steamapps/.moved-into-drive"
+    n=0
+    [[ -s "$list" ]] && while IFS=$'\t' read -r appid dir; do
+      [[ "$appid" =~ ^[0-9]+$ ]] || continue
+      case "$dir" in ""|.|..|*/*|*..*) dir="" ;; esac   # (a name inside common/, nothing else)
+      [[ -n "$dir" && -d "$path/steamapps/common/$dir" ]] && rm -rf "$path/steamapps/common/$dir"
+      rm -rf "$path/steamapps/compatdata/$appid" "$path/steamapps/shadercache/$appid" 2>/dev/null
+      n=$(( n + 1 ))
+    done < "$list"
+    rm -f "$list"
+    # GOG/Epic games: STORE<TAB>GAME lines in the folder's own .moved-into-drive
+    list="$path/.moved-into-drive"
+    if [[ -s "$list" ]]; then
+      while IFS=$'\t' read -r store dir; do
+        case "$store" in "GOG Games"|"Epic Games") ;; *) continue ;; esac
+        case "$dir" in ""|.|..|*/*|*..*) continue ;; esac
+        [[ -d "$path/$store/$dir" ]] && rm -rf "$path/$store/$dir" && n=$(( n + 1 ))
+      done < "$list"
+      rm -f "$list"
+    fi
+    (( n > 0 )) && echo "$(date '+%F %T') $label: deleted the folder's copies of $n game(s) moved into its drive"
+  done < <(lib_rows)
+  return 0
+}
 LIB_TIDY_LAST=0
 lib_disks_tidy() {  # $1 = what Steam does: every 10 minutes while no game runs
   local now args="" name label path
@@ -1540,6 +1575,7 @@ lib_disks_tidy() {  # $1 = what Steam does: every 10 minutes while no game runs
   now="$(date +%s)"
   (( now - LIB_TIDY_LAST >= 600 )) || return 0
   LIB_TIDY_LAST=$now
+  lib_moved_cleanup || true
   while IFS=$'\t' read -r name label path; do
     [[ -n "$name" && -d "$path" ]] || continue
     args="$args --free $name=$(lib_mac_free "$path")"
@@ -3717,6 +3753,7 @@ case "$cmd" in
   _homegames-guard) need_vm; homegames_guard "${1:-idle}" "$(vsh_for 40 bash -c "$(homegames_cmd)")" ;;   # one round of the watcher's (tests)
   _playmap-guard) need_vm; playmap_guard "${1:-idle}" "$(vsh_for 40 bash -c "$(playmap_cmd)")" ;;   # one round of the watcher's (tests)
   _playmap-lines) need_vm; vsh_for 40 bash -c "$(playmap_cmd)" ;;   # what the VM answers the watcher about it (tests)
+  _lib-cleanup) lib_moved_cleanup ;;   # delete the folders' copies of games moved into their drives (the watcher does it too)
   _steam-gpu-check) need_vm; steam_gpu_check "${1:-300}" ;;   # the VM-side check on its own (tests); 0 when it passes
   kosmickrisp)  exec "$KIT_DIR/host/kosmickrisp.sh" "$@" ;;
   help|-h|--help) sed -n '2,/^# Written/p' "$src" | sed 's/^# \{0,1\}//' ;;

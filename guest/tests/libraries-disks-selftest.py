@@ -36,6 +36,10 @@ with tempfile.TemporaryDirectory() as t:
     (src / "steamapps/common/Proton - Experimental/toolmanifest.vdf").write_text("x")
     (src / "steamapps/appmanifest_1493710.acf").write_text(acf("1493710", "Proton Experimental", "Proton - Experimental"))
     (src / "libraryfolder.vdf").write_text('"libraryfolder"\n{\n\t"contentid"\t\t"123456789"\n\t"label"\t\t"Mac"\n}\n')
+    (src / "GOG Games/Blades of Time/bin").mkdir(parents=True)
+    (src / "GOG Games/Blades of Time/bin/game.exe").write_text("gog")
+    (src / "Epic Games/BioShock").mkdir(parents=True)
+    (src / "Epic Games/BioShock/BioShock.exe").write_text("epic")
     (src / ".test-mounted").write_text("")
     mp = root / "mac"
     mp.mkdir(parents=True)
@@ -57,10 +61,15 @@ with tempfile.TemporaryDirectory() as t:
     check("Dead Cells moved into the drive, files intact", (mp / "steamapps/common/Dead Cells/data/a.pak").read_text() == "pak" * 100
           and (mp / "steamapps/appmanifest_588650.acf").is_file(), out)
     check("its prefix came along", (mp / "steamapps/compatdata/588650/pfx/user.reg").is_file())
-    check("the folder's copy is gone, manifest too", not (src / "steamapps/common/Dead Cells").exists()
-          and not (src / "steamapps/appmanifest_588650.acf").exists())
+    check("the folder's manifest is gone; its copy is listed for the Mac to delete", (src / "steamapps/common/Dead Cells").exists()
+          and not (src / "steamapps/appmanifest_588650.acf").exists()
+          and "588650\tDead Cells" in (src / "steamapps/.moved-into-drive").read_text())
     check("the library's contentid kept", "123456789" in (mp / "libraryfolder.vdf").read_text())
     check("said so", "game(s) moved into the drive" in out, out)
+    check("GOG and Epic games moved too", (mp / "GOG Games/Blades of Time/bin/game.exe").read_text() == "gog"
+          and (mp / "Epic Games/BioShock/BioShock.exe").read_text() == "epic", out)
+    check("listed for the Mac to delete", "GOG Games\tBlades of Time" in (src / ".moved-into-drive").read_text()
+          and "Epic Games\tBioShock" in (src / ".moved-into-drive").read_text())
     lf = (steam / "steamapps/libraryfolders.vdf").read_text()
     check("Steam's library list points at the drive's mount", str(mp) in lf, lf)
     check("the Steam tool (Proton) in the folder moved to the VM's disk, not the drive", (steam / "steamapps/appmanifest_1493710.acf").exists()

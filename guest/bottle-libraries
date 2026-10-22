@@ -718,16 +718,51 @@ def move_games_in(src, mp, label):
             if e.is_dir():
                 (da / extra).mkdir(exist_ok=True)
                 rc, _ = sh(["rsync", "-a", "--partial", "--timeout=120", "--", str(e) + "/", str(da / extra / info["appid"]) + "/"], 1800)
-                if rc == 0:
-                    sh(["rm", "-rf", "--", str(e)], 600)
         rc, _ = sh(["cp", "-p", "--", str(sa / m), str(da / m)], 20)
         if rc != 0:
             failed.append(info["name"])
             continue
-        if gamedir and srcdir.is_dir():
-            sh(["rm", "-rf", "--", str(srcdir)], 1800)
+        # The folder's copy is the Mac's to delete (instant there; through the share a deletion can
+        # hang like any request): steamapps/.moved-into-drive lists it, the Mac reads that at its
+        # next VM start or watcher round (lib_moved_cleanup). Only the manifest goes now, so Steam
+        # doesn't see the game twice; a lost request here costs 20 s.
+        try:
+            with open(sa / ".moved-into-drive", "a") as f:
+                f.write(f"{info['appid']}\t{gamedir}\n")
+        except OSError:
+            pass
         sh(["rm", "-f", "--", str(sa / m)], 20)
         moved += 1
+    # GOG and Epic games (bottle-stores): "GOG Games"/"Epic Games" next to steamapps, one folder
+    # per game; Steam's shortcuts and Legendary's records point at /mnt/portalistic/NAME/..., which
+    # is the drive now, so they must be there too
+    for store in ("GOG Games", "Epic Games"):
+        rc, out = sh(["ls", "-1A", "--", str(src / store)], 20)
+        if rc != 0:
+            continue
+        for g in out.splitlines():
+            if not g or g.startswith(".") or (mp / store / g).exists():
+                continue
+            rc, out2 = sh(["du", "-sb", "--", str(src / store / g)], 120)
+            size = int(out2.split()[0]) if rc == 0 and out2.split() and out2.split()[0].isdigit() else 0
+            (mp / store).mkdir(parents=True, exist_ok=True)
+            ok = False
+            for attempt in range(5):
+                say(f"{label}: moving {g} ({store}, {gb(size)}) into the drive" + (f", try {attempt + 1}" if attempt else "") + "…")
+                if rsync_with_progress(src / store / g, mp / store / (g + ".moving"), g, size, 3600) == 0:
+                    ok = True
+                    break
+            if not ok:
+                failed.append(g)
+                shutil.rmtree(mp / store / (g + ".moving"), ignore_errors=True)
+                continue
+            os.rename(mp / store / (g + ".moving"), mp / store / g)
+            try:
+                with open(src / ".moved-into-drive", "a") as f:
+                    f.write(f"{store}\t{g}\n")
+            except OSError:
+                pass
+            moved += 1
     # anything else that stayed (downloads in progress, tools): the games that moved are in; what
     # didn't move is left for a later start
     if moved:

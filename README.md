@@ -290,7 +290,14 @@ never hung on either Mac, so games now live on drives too:
   compatdata/shadercache, then the manifest; the folder's copy is deleted once the game is in. Prefixes 0.7.0.8
   had copied to the VM's disk go back into the drive. Dev Mac, Oct 22 17:21: Dead Cells moved in a minute, the
   SSD's 156 GB at about 150 MB/s; `fstrim` after deleting 2 GB took the Mac file from 2 GB to 356 KB.
-- Tests: `guest/tests/libraries-disks-selftest.py` (15 checks: mount stand-in, the move, contentid kept, no bind
+- **0.7.0.10:** `GOG Games`/`Epic Games` (bottle-stores' folders next to steamapps) move too, one game folder at a
+  time (`NAME.moving` until done). The folder's copies are no longer deleted through the share: the VM appends
+  `APPID<TAB>DIR` to `steamapps/.moved-into-drive` and `STORE<TAB>GAME` to the folder's `.moved-into-drive`, and the
+  Mac's `lib_moved_cleanup` (at `vm_start`, in `lib_disks_tidy` every 10 minutes, `bottle _lib-cleanup`) deletes
+  them. `cmd_up` starts the desktop before the update so the splash can show. Dev Mac, Oct 22 20:00: Blades of
+  Time, GWENT, Prey (GOG) and BioShock Remastered (Epic) moved (one `rm` through the share had hung on the laptop
+  for minutes); Blades of Time and BioShock started from the drive.
+- Tests: `guest/tests/libraries-disks-selftest.py` (17 checks: mount stand-in, the move, contentid kept, no bind
   mount for a drive, prefixes back, the plain share, tidy), `host/tests/mac-disks1..20.sh` (the steps on the dev Mac).
 
 **Making a release** (on the development Mac, which has the kit's setup: Homebrew's lima and
