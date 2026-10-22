@@ -61,6 +61,6 @@ fi
 [[ -n "$(git config user.email || true)" ]] \
   || die "git doesn't know your name for the commit: git config --global user.name NAME; git config --global user.email EMAIL"
 git commit -q -m "$MESSAGE"
-info "Pushing $(git rev-parse --short HEAD) \"$(git log -1 --format=%s)\" to $REPO's $BRANCH…"
+info "Pushing $(git rev-parse --short HEAD) \"$(git log -1 --format=%s)\" to $REPO's ${BRANCH}…"
 git "${CRED[@]}" push -q "$URL" "$BRANCH:$BRANCH"
 info "Done: https://github.com/$REPO/commits/$BRANCH"

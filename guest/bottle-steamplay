@@ -24,6 +24,10 @@ folder only where DXVK's DLLs are swapped; it's rebuilt when Proton Experimental
                             (Steam must not be running: it keeps its settings in memory and
                             writes them back when it quits)
   bottle-steamplay status   what's set up
+  bottle-steamplay pending  (Steam running) the games with a Linux version installed after Steam
+                            started: Steam reads these settings only at its start, so the watcher
+                            restarts it once for them. One line per game: pending TAB app ID TAB name.
+                            --mark notes them as tried: each is listed again at most every 30 min.
 
   bottle-steamplay version GAME linux|windows
                             run GAME (app ID or part of its name) as its Linux version or as its
@@ -47,6 +51,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 TOOL = "steamos_bottle"
@@ -58,6 +63,10 @@ STEAM = Path(os.environ.get("BOTTLE_STEAM_DIR", Path.home() / ".local/share/Stea
 NATIVE_LIST = Path.home() / ".config/steamos-bottle/native-apps"
 SET_FILE = Path.home() / ".config/steamos-bottle/steamplay-set.json"          # what this script set last
 CHOICES_FILE = Path.home() / ".config/steamos-bottle/steamplay-choices.json"  # the player's own, kept
+TRIED_FILE = Path.home() / ".config/steamos-bottle/playmap-tried"            # app ID -> when Steam was last restarted for it
+TRIED_SECS = 1800
+SEEN_FILE = Path.home() / ".config/steamos-bottle/playmap-seen"             # app ID -> when `pending` first listed it
+SEEN_SECS = 15       # a new manifest is listed only after this long (it may still be getting its Windows settings)
 PROTON_DIRS = ("Proton - Experimental",)
 # Steam's own tools, runtimes and redistributables: never mapped.
 TOOL_APPIDS = {
@@ -521,7 +530,7 @@ def map_apps():
                 entry.append([key, val])
         changed += 1
         if apps.get(appid, {}).get("native"):
-            redownload.append(apps[appid]["name"])
+            redownload.append(appid)
     if changed or removed:
         if not backup.exists():
             shutil.copy2(cfg, backup)
@@ -537,8 +546,11 @@ def map_apps():
     fixed = repair_tool_manifests(apps)
     say(f"Installed games set to {TOOL_NAME if tool == TOOL else tool}: {len(wanted)} "
         f"({changed} changed now{f', {removed} older entries taken out' if removed else ''})")
-    for name in redownload:
-        say(f"  {name}: was its Linux version; Steam now downloads its Windows version")
+    linux = app_oslists(redownload) if redownload else {}
+    for appid in redownload:
+        if appid in linux and "linux" not in linux[appid].replace(" ", "").split(","):
+            continue        # for Windows only: nothing changes for it
+        say(f"  {apps[appid]['name']}: may have been its Linux version; Steam now downloads its Windows version")
     for name in fixed:
         say(f"  repaired the tool {name} (it had been set to a Windows version)")
     if keep_native:
@@ -608,6 +620,133 @@ def version():
     return 0
 
 
+def app_oslists(appids):
+    """appid -> its supported systems ("windows,macos,linux"; "" when the entry has none) from Steam's own
+    cache, appcache/appinfo.vdf (binary VDF, version 41: entries of appid, size and a key/value tree whose
+    keys are numbers into a string table at the end of the file). Only the asked-for apps are read. An app
+    that is not in the cache (or a file in another version, or unreadable) is missing from the answer.
+    (App manifests don't say which build was installed: they have no platform_override on this Steam.)"""
+    out = {}
+    try:
+        d = (STEAM / "appcache/appinfo.vdf").read_bytes()
+        magic = int.from_bytes(d[0:4], "little")
+        if magic != 0x07564429:
+            return out
+        table = int.from_bytes(d[8:16], "little", signed=True)
+        count = int.from_bytes(d[table:table + 4], "little")
+        names, pos = [], table + 4
+        for _ in range(count):
+            end = d.index(b"\0", pos)
+            names.append(d[pos:end].decode("utf8", "replace"))
+            pos = end + 1
+    except (OSError, ValueError, IndexError):
+        return out
+
+    def tree(i, end):
+        node = {}
+        while i < end:
+            t = d[i]
+            i += 1
+            if t == 8:
+                return node, i
+            k = int.from_bytes(d[i:i + 4], "little")
+            i += 4
+            key = names[k] if k < len(names) else str(k)
+            if t == 0:
+                val, i = tree(i, end)
+            elif t == 1:
+                e = d.index(b"\0", i)
+                val, i = d[i:e].decode("utf8", "replace"), e + 1
+            elif t in (2, 3, 4, 6):
+                val, i = d[i:i + 4], i + 4
+            elif t in (7, 10):
+                val, i = d[i:i + 8], i + 8
+            else:
+                raise ValueError(t)
+            node[key] = val
+        return node, i
+
+    want = {int(a) for a in appids if str(a).isdigit()}
+    pos = 16
+    try:
+        while want and pos + 8 <= table:
+            appid = int.from_bytes(d[pos:pos + 4], "little")
+            size = int.from_bytes(d[pos + 4:pos + 8], "little")
+            if appid == 0:
+                break
+            body = pos + 8
+            pos = body + size
+            if appid in want:
+                try:
+                    root, _ = tree(body + 60, pos)       # (60 bytes of state, times, hashes first)
+                except (ValueError, IndexError):
+                    continue
+                info = root.get("appinfo", root)
+                common = info.get("common", {}) if isinstance(info, dict) else {}
+                oslist = common.get("oslist", "") if isinstance(common, dict) else ""
+                out[str(appid)] = oslist if isinstance(oslist, str) else ""
+                want.discard(appid)
+    except (ValueError, IndexError):
+        pass
+    return out
+
+
+def pending():
+    """Games with a Linux version, installed (or being installed) while this Steam session runs:
+    `map` (before Steam starts) hasn't seen them, so Steam installs the x86-64 Linux build, which
+    does nothing on this arm64 VM, until Steam restarts. Read-only apart from the notes in
+    playmap-seen / playmap-tried; prints nothing when Steam isn't running (its next start maps
+    everything). One line per game: pending TAB app ID TAB name."""
+    if not steam_running():
+        return 0
+    cfg = STEAM / "config/config.vdf"
+    mapped = {}
+    if cfg.is_file():
+        steam = vdf_get(vdf_get(vdf_get(vdf_get(vdf_parse(cfg.read_text(errors="replace")),
+                "InstallConfigStore") or [], "Software") or [], "Valve") or [], "Steam") or []
+        mapped = {k: vdf_value(v, "name") or "" for k, v in vdf_get(steam, "CompatToolMapping") or [] if isinstance(v, list)}
+    tool = TOOL if USE_TOOL and (tool_dir() / "compatibilitytool.vdf").is_file() else PROTON
+    keep_native, choices, was_set = native_wanted(), read_json(CHOICES_FILE), read_json(SET_FILE)
+    tried, seen, now = read_json(TRIED_FILE), read_json(SEEN_FILE), time.time()
+
+    def num(d, k):
+        try:
+            return float(d.get(k, 0))
+        except (TypeError, ValueError):
+            return 0.0
+
+    cands = []
+    for appid, info in sorted(installed_apps().items(), key=lambda kv: int(kv[0]) if kv[0].isdigit() else 0):
+        if info["tool"] or appid in keep_native or appid in choices:
+            continue
+        cur = mapped.get(appid, "")
+        if cur == tool:
+            continue
+        if cur and cur not in (PROTON, TOOL):
+            continue                    # another tool, picked by the player
+        if appid in was_set and cur != was_set[appid]:
+            continue                    # changed in Steam since we set it: the player's choice (map notices it)
+        if now - num(tried, appid) < TRIED_SECS:
+            continue
+        cands.append((appid, info))
+    # Only a game with a Linux version is a problem: Steam installs that one when no tool is set. A
+    # game for Windows only gets Proton from Steam by itself. (Not in Steam's cache: can't tell, so listed.)
+    oslists = app_oslists([a for a, _ in cands]) if cands else {}
+    found = [(a, i) for a, i in cands if a not in oslists or "linux" in oslists[a].replace(" ", "").split(",")]
+
+    first = {appid: (num(seen, appid) or now) for appid, _ in found}
+    if first != {a: num(seen, a) for a in seen} or set(first) != set(seen):
+        write_json(SEEN_FILE, first)
+    ready = [(appid, info) for appid, info in found if now - first[appid] >= SEEN_SECS]
+    for appid, info in ready:
+        print(f"pending\t{appid}\t{info['name']}")
+    if ARGS.mark and ready:
+        for appid, _ in ready:
+            tried[appid] = now
+        write_json(TRIED_FILE, {a: t for a, t in tried.items() if isinstance(t, (int, float)) and now - t < 86400})
+    return 0
+
+
 def status():
     proton = find_proton()
     print(f"Proton Experimental: {proton or 'not installed'}")
@@ -628,15 +767,16 @@ def status():
 def main():
     global ARGS
     ap = argparse.ArgumentParser(description="Every game through the SteamOS Bottle Steam Play tool.")
-    ap.add_argument("cmd", choices=["build", "map", "status", "version"])
+    ap.add_argument("cmd", choices=["build", "map", "status", "version", "pending"])
     ap.add_argument("game", nargs="?", help="version: the game's app ID or part of its name")
     ap.add_argument("want", nargs="?", choices=["linux", "windows"], help="version: which build")
     ap.add_argument("--quiet", action="store_true")
     ap.add_argument("--if-idle", action="store_true", help="build: don't rebuild while a game runs")
+    ap.add_argument("--mark", action="store_true", help="pending: note the games listed as tried")
     ARGS = ap.parse_args()
     if ARGS.cmd == "version" and not (ARGS.game and ARGS.want):
         ap.error("version needs a game and linux or windows")
-    return {"build": build, "map": map_apps, "status": status, "version": version}[ARGS.cmd]()
+    return {"build": build, "map": map_apps, "status": status, "version": version, "pending": pending}[ARGS.cmd]()
 
 
 ARGS = None

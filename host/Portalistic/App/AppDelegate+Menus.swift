@@ -10,6 +10,28 @@ extension AppDelegate {
         activity.run("Restarting Steam", ["steam"], log: "steam")
     }
 
+    /// Steam's own interface (Big Picture) is drawn either on the Mac's GPU or on the Linux system's
+    /// processor. Portalistic tries the GPU by itself and goes back if it can't; this lets people pick
+    /// by hand, or try again after it went back.
+    @objc func chooseSteamInterface(_ sender: Any?) {
+        let alert = NSAlert()
+        alert.messageText = "Where should Steam's interface be drawn?"
+        alert.informativeText = "On the Mac's GPU it is smoother and leaves the processor free. Portalistic tries that by itself "
+            + "and goes back to the processor if it doesn't work. Either way Steam restarts (about a minute, up to three "
+            + "when it tries the GPU); a game that's running closes."
+        alert.addButton(withTitle: "Use the Mac's GPU")
+        alert.addButton(withTitle: "Use the Processor")
+        alert.addButton(withTitle: "Cancel")
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            activity.run("Steam's interface on the Mac's GPU", ["steam-gpu", "on"], log: "steam-gpu")
+        case .alertSecondButtonReturn:
+            activity.run("Steam's interface on the processor", ["steam-gpu", "off"], log: "steam-gpu")
+        default:
+            break
+        }
+    }
+
     @objc func steamSettings(_ sender: Any?) {
         runQuietly(["settings"], log: "settings", failure: "Steam's settings didn't open.")
     }
@@ -109,6 +131,7 @@ extension AppDelegate {
         add("Start the Bottle", #selector(startBottle(_:)))
         add("Restart Steam…", #selector(restartSteam(_:)))
         add("Open Steam Settings", #selector(steamSettings(_:)))
+        add("Steam's Interface: GPU or Processor…", #selector(chooseSteamInterface(_:)))
         add("Switch to Desktop Mode…", #selector(switchToDesktopMode(_:)))
         add("Switch to Game Mode", #selector(switchToGameMode(_:)))
         bottleMenu.addItem(.separator())
@@ -171,7 +194,7 @@ extension AppDelegate: NSMenuItemValidation {
         if item.action == #selector(restartSteam(_:)) || item.action == #selector(updateBottle(_:))
             || item.action == #selector(saveLogs(_:)) || item.action == #selector(shutDown(_:))
             || item.action == #selector(addGameFolder(_:)) || item.action == #selector(showGameFolders(_:))
-            || item.action == #selector(removeGameFolder(_:)) {
+            || item.action == #selector(removeGameFolder(_:)) || item.action == #selector(chooseSteamInterface(_:)) {
             return !busy
         }
         if item.action == #selector(uninstallPortalistic(_:)) || item.action == #selector(moveToApplicationsMenu(_:)) { return !busy }

@@ -407,6 +407,7 @@ steam_running() { vsh bash -c 'pgrep -f "[s]teamrtarm64/steam" >/dev/null'; }
 
 steam_start() {  # $1 = 1 for --debug
   local -a envs=()
+  gpu_auto_prepare || true   # Steam's interface on the Mac's GPU, once per version (see gpuauto)
   if [[ "${1:-0}" == 1 ]]; then
     envs=(PROTON_LOG=1 DXVK_HUD=fps BOTTLE_PRESENT_DEBUG=1)
     info "Debug mode: game log in ~/steam-<appid>.log (bottle log), FPS counter in games."
@@ -1875,6 +1876,249 @@ homegames_guard() {  # $1 = what Steam does (game, download, idle), $2 = the VM'
 }
 # <<< homegames
 
+# ---- Steam's interface on the Mac's GPU, by itself (every Steam start; the watcher confirms) ----
+# Big Picture is a Chromium page drawn with OpenGL. In the VM that is the VM's processors (llvmpipe)
+# unless Steam starts with zink on the Mac's GPU (bottle steam-gpu on). On Oct 21 a 4-core M1
+# MacBook Pro (8 GB) spent most of its processor on that and Big Picture was choppy; with the Mac's
+# GPU it was fine. So every Steam start tries the Mac's GPU first, once per version (gpu_auto_prepare):
+# the VM-side check (steam_gpu_check) must pass, then Steam starts that way and the watcher
+# (gpu_auto_guard) confirms it from Steam's own logs: its web helper reports zink after a few tries
+# (the first ones normally fail: 2 to 4 on the M4 Max, once 9). Else Steam goes back to the processor
+# and says so. One line in the VM keeps the state, ~/.config/steamos-bottle/steam-gpu-auto, "STATE VERSION":
+#   on | off   chosen by hand (bottle steam-gpu on|off, Bottle > Steam's Interface…): never changed by itself
+#   pending    the Mac's GPU is set; waiting for Steam's web helper to confirm it
+#   ok         confirmed
+#   failed     the check or the confirmation failed with this VERSION of the kit: tried again at the next
+# BOTTLE_STEAM_GPU_AUTO=0 turns all of it off.
+# >>> gpuauto
+kit_version() {
+  local v
+  v="$(head -n 1 "$KIT_DIR/VERSION" 2>/dev/null || true)"
+  [[ -n "$v" ]] || v="$(sed -n 's/^MARKETING_VERSION *= *//p' "$KIT_DIR/host/xcode/Bottle.xcconfig" 2>/dev/null | head -n 1 || true)"
+  printf '%s' "${v:-dev}"
+}
+gpu_auto_set() {  # $1 = on|off|pending|ok|failed (written with this kit's version)
+  local v
+  v="$(kit_version)"
+  # shellcheck disable=SC2016  # runs in the VM
+  vsh_for 20 bash -c 'mkdir -p ~/.config/steamos-bottle && echo "$1 $2" > ~/.config/steamos-bottle/steam-gpu-auto' _ "$1" "$v" >/dev/null 2>&1 || true
+}
+GPU_AUTO_BUSY=0
+gpu_auto_prepare() {  # at the start of steam_start: never fails, never stops a start
+  local cur st="" ver="" setting="" kv
+  [[ "${BOTTLE_STEAM_GPU_AUTO:-1}" != 0 && "$GPU_AUTO_BUSY" != 1 ]] || return 0
+  # shellcheck disable=SC2016  # runs in the VM
+  cur="$(vsh_for 20 bash -c 'echo "state $(head -n 1 ~/.config/steamos-bottle/steam-gpu-auto 2>/dev/null)"; echo "setting $(cat ~/.config/steamos-bottle/steam-gpu 2>/dev/null)"' 2>/dev/null)" || return 0
+  [[ -n "$cur" ]] || return 0
+  read -r st ver <<<"$(sed -n 's/^state //p' <<<"$cur")" || true
+  setting="$(sed -n 's/^setting //p' <<<"$cur")"
+  kv="$(kit_version)"
+  case "$st" in
+    on|off|pending|ok) return 0 ;;
+    failed) [[ "$ver" != "$kv" ]] || return 0 ;;
+  esac
+  if [[ "$setting" == zink ]]; then gpu_auto_set on; return 0; fi   # set by hand before this existed
+  GPU_AUTO_BUSY=1
+  info "Trying Steam's interface on the Mac's GPU (smoother than on the processor)…"
+  desktop_start >/dev/null 2>&1 || true
+  if steam_gpu_check 120; then
+    vsh_for 20 bash -c 'mkdir -p ~/.config/steamos-bottle && echo zink > ~/.config/steamos-bottle/steam-gpu' >/dev/null 2>&1 || true
+    gpu_auto_set pending
+    info "Steam's interface will draw on the Mac's GPU. Portalistic checks it once Steam is up and goes back by itself if it can't."
+  else
+    gpu_auto_set failed
+    info "Steam's interface stays on the processor: the Mac's GPU didn't pass the check (Bottle > Save Logs has the details)."
+  fi
+  GPU_AUTO_BUSY=0
+  return 0
+}
+gpu_auto_cmd() {  # the script the VM runs: one line "gpuauto TAB state TAB version TAB setting TAB running TAB uptime TAB zink reports TAB GL failures TAB age"
+  cat <<'GAEOF'
+A=~/.config/steamos-bottle/steam-gpu-auto
+{ read -r gs gv < "$A"; } 2>/dev/null || { gs=""; gv=""; }
+gset="$(cat ~/.config/steamos-bottle/steam-gpu 2>/dev/null)"
+grun=0; gup=0; gz=0; gf=0; gage=-1
+gp="$(pgrep -f "[s]teamrtarm64/steam" | head -n 1)"
+if [ -n "$gp" ]; then
+  grun=1; gup="$(ps -o etimes= -p "$gp" 2>/dev/null | tr -d ' ')"
+fi
+if [ "$gs" = pending ] && [ "$grun" = 1 ]; then
+  GL=~/.local/share/Steam/logs
+  gs0="$(grep -h 'Startup - Steam Client launched' "$GL/bootstrap_log.txt" 2>/dev/null | tail -n 1 | cut -c2-20)"
+  if [ -n "$gs0" ]; then
+    gz="$(awk -v s="$gs0" 'substr($0, 2, 19) >= s && /GL_RENDERER/ && /zink/' "$GL/webhelper_gpu.txt" 2>/dev/null | wc -l)"
+    gf="$(awk -v s="$gs0" 'substr($0, 2, 19) >= s && /failed to initialize GL thread/' "$GL/webhelper.txt" 2>/dev/null | wc -l)"
+    gw="$(awk -v s="$gs0" 'substr($0, 2, 19) >= s && /Startup - webhelper launched/ {print substr($0, 2, 19); exit}' "$GL/webhelper.txt" 2>/dev/null)"
+    if [ -n "$gw" ]; then gage=$(( $(date +%s) - $(date -d "$gw" +%s) )); fi
+  fi
+fi
+printf 'gpuauto\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "${gs:--}" "${gv:--}" "${gset:--}" "$grun" "${gup:-0}" "$(echo $gz)" "$(echo $gf)" "$gage"
+GAEOF
+}
+gpu_auto_guard() {  # $1 = what Steam does (game, download, idle), $2 = the VM's lines (see gpu_auto_cmd)
+  local line gs gv gset grun gup gz gf gage kv word
+  [[ "${BOTTLE_STEAM_GPU_AUTO:-1}" != 0 ]] || return 0
+  line="$(grep '^gpuauto' <<<"$2" | head -n 1 || true)"
+  [[ -n "$line" ]] || return 0
+  IFS=$'\t' read -r _ gs gv gset grun gup gz gf gage <<<"$line" || true
+  [[ "$grun" =~ ^[01]$ && "$gup" =~ ^[0-9]+$ && "$gz" =~ ^[0-9]+$ && "$gf" =~ ^[0-9]+$ && "$gage" =~ ^-?[0-9]+$ ]] || return 0
+  kv="$(kit_version)"
+  case "$gs" in
+    on|off|ok) return 0 ;;
+    pending)
+      if (( gz > 0 )); then
+        echo "$(date '+%F %T') Steam's interface draws on the Mac's GPU (Steam's web helper reported zink)"
+        gpu_auto_set ok
+        return 0
+      fi
+      [[ "$grun" == 1 && "$1" != game ]] || return 0
+      # 12 failed tries (10 s apart) or 5 minutes since the web helper first started: it isn't going to work
+      if (( gf >= 12 || gage >= 300 )); then
+        echo "$(date '+%F %T') Steam's web helper can't use the Mac's GPU ($gf failed tries, $gage s): back to the processor"
+        vsh_for 20 bash -c 'rm -f ~/.config/steamos-bottle/steam-gpu' >/dev/null 2>&1 || true
+        gpu_auto_set failed
+        log_export >/dev/null 2>&1 || true
+        steam_stop >/dev/null 2>&1 || true
+        steam_start >/dev/null 2>&1 || true
+        vm_notice 0 60 "Steam's interface is back on the processor" "Portalistic tried drawing it on the Mac's GPU, but Steam's web helper couldn't start OpenGL there. Bottle > Save Logs saves what helps to find out why."
+      fi
+      return 0 ;;
+    *)  # never decided here, or failed with an older kit
+      if [[ "$gs" == failed && "$gv" == "$kv" ]]; then return 0; fi
+      if [[ "$gset" == zink ]]; then gpu_auto_set on; return 0; fi   # set by hand before this existed
+      # Steam already runs on the processor and nothing is going on: one restart to try the GPU
+      [[ "$grun" == 1 && "$1" == idle ]] && (( gup >= 180 )) || return 0
+      echo "$(date '+%F %T') Steam runs on the processor: restarting it once to try the Mac's GPU"
+      steam_stop >/dev/null 2>&1 || true
+      steam_start >/dev/null 2>&1 || true
+      word="$(vsh_for 20 bash -c 'head -n 1 ~/.config/steamos-bottle/steam-gpu-auto 2>/dev/null' 2>/dev/null | awk '{print $1}' || true)"
+      if [[ "$word" == pending ]]; then
+        vm_notice 0 45 "Steam restarted to draw on the Mac's GPU" "Its interface is smoother there. If it can't, Portalistic goes back to the processor by itself. Bottle > Steam's Interface… lets you choose."
+      fi
+      return 0 ;;
+  esac
+}
+# <<< gpuauto
+
+# ---- a game installed while Steam runs, and a game's first start (the watcher, every round) ----
+# Steam reads which Steam Play tool a game uses only when it starts (bottle-steamplay map runs
+# before every start and sets each installed game to Proton Experimental). A game installed while
+# Steam was already running therefore came as its Linux version when it has one (Dead Cells, Rocket
+# League...): an x86-64 Linux program on an arm64 VM, so Play did nothing until Steam was restarted.
+# Now the watcher asks the VM (bottle-steamplay pending) which games are in that state; when no game
+# is running it restarts Steam once (stop, then start: the map runs in between), and a banner says
+# why. Each game is restarted for at most every 30 minutes (in the VM), and Steam at most three
+# times an hour. BOTTLE_PLAYMAP=0 turns it off; `bottle _playmap-guard [STATE]` runs one round.
+# A Windows game's first start builds its Wine prefix (minutes, silent, 9 on a 2020 M1 MacBook Pro):
+# a game launched without a finished prefix (no pfx/creation_sync_guard) gets a banner saying so,
+# once per launch. BOTTLE_PREFIX_NOTICE=0 turns it off.
+# >>> playmap
+PM_TIMES=""      # epochs of the Steam restarts in the last hour
+PM_GAVE_UP=0     # 1 once it said it stopped
+PM_NOTICED=""    # " appid@pid " of the launches that had their first-start banner
+PM_FAST=0        # 1: look again in a few seconds (a game to restart Steam for was just seen)
+PM_FAST_N=0      # fast rounds in a row
+playmap_cmd() {  # the script the VM runs: "playmap TAB Steam's uptime"; with no game running a "pending TAB appid TAB name" line
+                 # per game Steam would run as its Linux version; with a game starting a "launch TAB appid TAB pid TAB seconds TAB
+                 # prefix finished (0/1) TAB name" line per game
+  cat <<'PMEOF'
+pmp="$(pgrep -f "[s]teamrtarm64/steam" | head -n 1)"
+pmu=0
+[ -n "$pmp" ] && pmu="$(ps -o etimes= -p "$pmp" 2>/dev/null | tr -d ' ')"
+printf 'playmap\t%s\n' "${pmu:-0}"
+if [ -n "$pmp" ]; then
+  if pgrep -f "[r]eaper SteamLaunch AppId=" >/dev/null 2>&1; then
+    pmdone=""
+    for pmr in $(pgrep -f "[r]eaper SteamLaunch AppId="); do
+      pma="$(tr '\0' ' ' < /proc/$pmr/cmdline 2>/dev/null | sed -n 's/.*SteamLaunch AppId=\([0-9][0-9]*\).*/\1/p')"
+      [ -n "$pma" ] || continue
+      case " $pmdone " in *" $pma "*) continue ;; esac   # (a launch has a shell, a wrapper and the reaper: the first, oldest, counts)
+      pmdone="$pmdone $pma"
+      pmt="$(ps -o etimes= -p "$pmr" 2>/dev/null | tr -d ' ')"
+      pmf="$( { echo "$HOME/.local/share/Steam"; sed -n 's/^[[:space:]]*"path"[[:space:]]*"\(.*\)"[[:space:]]*$/\1/p' "$HOME/.local/share/Steam/steamapps/libraryfolders.vdf" 2>/dev/null; } | while IFS= read -r pml; do
+        [ -f "$pml/steamapps/appmanifest_$pma.acf" ] || continue
+        printf '%s\t%s\n' "$(awk -F'"' '$2 == "name" {print $4; exit}' "$pml/steamapps/appmanifest_$pma.acf")" "$pml/steamapps/compatdata/$pma"
+        break
+      done)"
+      [ -n "$pmf" ] || continue   # (not a Steam game with a manifest: GOG and the like)
+      pmn="$(printf '%s' "$pmf" | cut -f1)"
+      pmd="$(printf '%s' "$pmf" | cut -f2-)"
+      pmk=0
+      [ -f "$pmd/pfx/creation_sync_guard" ] && pmk=1
+      printf 'launch\t%s\t%s\t%s\t%s\t%s\n' "$pma" "$pmr" "${pmt:-0}" "$pmk" "$pmn"
+    done
+  elif ! pgrep -f "[w]ineserver" >/dev/null 2>&1; then
+    command -v bottle-steamplay >/dev/null 2>&1 && bottle-steamplay pending 2>/dev/null
+  fi
+fi
+true
+PMEOF
+}
+playmap_guard() {  # $1 = what Steam does (game, download, idle), $2 = the VM's lines (see playmap_cmd)
+  local state="$1" lines="$2" kind a b c d e up now t keep="" fresh names title text n
+  local -a list=() ts=()
+  PM_FAST=0
+  # a game starting without a finished Wine prefix: its first start builds one
+  if [[ "${BOTTLE_PREFIX_NOTICE:-1}" != 0 ]]; then
+    while IFS=$'\t' read -r kind a b c d e; do
+      [[ "$kind" == launch && "$a" =~ ^[0-9]+$ && "$b" =~ ^[0-9]+$ && "$c" =~ ^[0-9]+$ && "$d" == 0 && -n "$e" ]] || continue
+      [[ "$PM_NOTICED" != *" $a@$b "* ]] || continue
+      if (( c < 15 )); then continue; fi   # (a start with a finished prefix has it from the first second)
+      PM_NOTICED="$PM_NOTICED $a@$b "
+      if (( ${#PM_NOTICED} > 400 )); then PM_NOTICED="${PM_NOTICED: -200}"; fi
+      echo "$(date '+%F %T') $e starts without a finished Wine prefix: telling the player"
+      vm_notice 0 120 "Setting up $e for the first time" "Windows games need a one-time setup before they open. It can take several minutes, and the game starts by itself when it's done."
+    done <<<"$lines"
+  fi
+  [[ "${BOTTLE_PLAYMAP:-1}" != 0 ]] || return 0
+  grep -q '^pending' <<<"$lines" || return 0
+  [[ "$state" != game ]] || return 0
+  up="$(grep '^playmap' <<<"$lines" | head -n 1 | cut -f2 || true)"
+  [[ "$up" =~ ^[0-9]+$ ]] || return 0
+  PM_FAST=1
+  if (( up < 30 )); then return 0; fi   # Steam is still starting
+  now="$(date +%s)"
+  for t in $PM_TIMES; do
+    if (( now - t < 3600 )); then keep="$keep$t "; fi
+  done
+  PM_TIMES="$keep"
+  # shellcheck disable=SC2206  # (the epochs are plain numbers)
+  ts=($PM_TIMES)
+  if (( ${#ts[@]} >= 3 )); then
+    if [[ "$PM_GAVE_UP" != 1 ]]; then
+      PM_GAVE_UP=1
+      echo "$(date '+%F %T') Steam was restarted three times in the last hour for games installed as their Linux version: not again for now"
+    fi
+    PM_FAST=0
+    return 0
+  fi
+  PM_GAVE_UP=0
+  # the question again, in the VM, with nothing running: it notes the games it lists, so a game
+  # is listed again after 30 minutes at the earliest (the lines above may be a round old)
+  fresh="$(vsh_for 20 bash -c 'pgrep -f "[r]eaper SteamLaunch AppId=|[w]ineserver" >/dev/null 2>&1 && exit 0; bottle-steamplay pending --mark 2>/dev/null' 2>/dev/null || true)"
+  while IFS=$'\t' read -r kind a b; do
+    [[ "$kind" == pending && "$a" =~ ^[0-9]+$ && -n "$b" ]] || continue
+    list+=("$b")
+  done <<<"$fresh"
+  n="${#list[@]}"
+  if (( n == 0 )); then return 0; fi
+  names="$(printf '%s, ' "${list[@]}")"
+  names="${names%, }"
+  PM_TIMES="$PM_TIMES$now "
+  PM_FAST=0
+  echo "$(date '+%F %T') $n game(s) installed as their Linux version while Steam ran ($names): restarting Steam so they use Proton"
+  steam_stop >/dev/null 2>&1 || true
+  steam_start >/dev/null 2>&1 || true
+  if (( n == 1 )); then
+    title="Steam restarted for $names"
+  else
+    title="Steam restarted for $n new games"
+  fi
+  text="It had installed the Linux version, which can't run on this Mac. Steam now uses the Windows version, so Play works. It may download the game again."
+  vm_notice 0 75 "$title" "$text"
+}
+# <<< playmap
+
 # ---- the first launch on a Mac: Portalistic's Linux system (bottle setup) ----
 # A Mac without the VM gets Portalistic's ready-made Linux image (host/build-image.sh made it;
 # host/image.env says where it is, how big, and its checksum). Lima makes the VM from it; then the
@@ -1930,7 +2174,7 @@ cmd_setup() {
   f="$dl/$PORTALISTIC_IMAGE_FILE"
   if [[ -n "$src" ]]; then
     [[ -f "$src" ]] || die "No image at $src"
-    info "Using the image $src…"
+    info "Using the image ${src}…"
     rm -f "$f"
     cp -c "$src" "$f" 2>/dev/null || cp "$src" "$f"
   elif [[ "$(stat -f %z "$f" 2>/dev/null || echo 0)" != "$PORTALISTIC_IMAGE_SIZE" ]]; then
@@ -2062,7 +2306,7 @@ cmd_app_update() {
   rm -rf "$dir"                         # (the copy an earlier update moved aside)
   mkdir -p "$dir"
   zip="$dir/Portalistic-$latest.zip"
-  info "Downloading Portalistic $latest…"
+  info "Downloading Portalistic ${latest}…"
   curl -fL --retry 3 --connect-timeout 20 -s -S -o "$zip" "$APP_RELEASES/download/v$latest/Portalistic-$latest.zip" \
     || die "The download stopped (network?). Try again."
   ditto -x -k "$zip" "$dir/new" 2>/dev/null || die "The download isn't a zip Portalistic can open. Try again."
@@ -2074,7 +2318,7 @@ cmd_app_update() {
   [[ "$(app_sign_field "$new" Identifier)" == "$(app_sign_field "$APP_BUNDLE" Identifier)" ]] || die "The download is a different app. Nothing was changed."
   spctl -a -t exec "$new" 2>/dev/null || die "macOS doesn't accept the new copy (it isn't notarized). Nothing was changed."
   [[ "$(app_version_of "$new")" == "$latest" ]] || die "The download is Portalistic $(app_version_of "$new"), not $latest. Nothing was changed."
-  info "Replacing Portalistic $cur with $latest…"
+  info "Replacing Portalistic $cur with ${latest}…"
   old="$dir/Portalistic-$cur.app"
   mv "$APP_BUNDLE" "$old" || die "Couldn't move this copy aside. Nothing was changed."
   if ! mv "$new" "$APP_BUNDLE"; then
@@ -2320,25 +2564,11 @@ cmd_ui() {
   info "Steam's interface: $want (also from Steam's next start)."
 }
 
-# Steam's interface draws with OpenGL (Chromium). The VM has OpenGL only in software (llvmpipe,
-# on the VM's processors), which makes Big Picture's animations stutter. Mesa's zink runs OpenGL
-# on Vulkan, which here is Venus on the Mac's GPU (presented by the bottle layer, like games).
-# "on" first checks that zink works in this VM (glxinfo; glxgears shows a window for a few
-# seconds), then starts Steam with it (~/.config/steamos-bottle/steam-gpu; steam-arm64 reads it).
-cmd_steam_gpu() {
-  local want="${1:-}" rc=0 since
-  need_vm
-  [[ "$(vm_status)" == Running ]] || die "The VM isn't running. Use: bottle start"
-  if [[ -z "$want" ]]; then
-    # shellcheck disable=SC2016  # runs in the VM
-    if [[ "$(vsh bash -c 'cat ~/.config/steamos-bottle/steam-gpu 2>/dev/null')" == zink ]]; then
-      info "Steam's interface: on the Mac's GPU (bottle steam-gpu off goes back)."
-    else
-      info "Steam's interface: on the VM's processors (bottle steam-gpu on tries the Mac's GPU)."
-    fi
-    return 0
-  fi
-  if [[ "$want" == on ]]; then
+# Does OpenGL on the Mac's GPU (zink) work in the VM? $1 = seconds the check may take (300).
+# 0 when it does (the stand-ins that worked are saved for steam-arm64), else 1; the reasons go to
+# steam-gpu-check.txt in the VM (and Save Logs). Used by `bottle steam-gpu on` and gpu_auto_prepare.
+steam_gpu_check() {
+  local rc=0
     # the VM's Steam launcher and the bottle's OpenGL shim must be this kit's: update them first
     # shellcheck disable=SC2016  # runs in the VM
     if ! vsh bash -c 'grep -q BOTTLE_STEAM_GPU_FAKE /usr/local/bin/steam-arm64 2>/dev/null && grep -qa "interface on the GPU here" /usr/local/lib64/libbottle_kopper.so 2>/dev/null && grep -qa BOTTLE_FAKE_ZINK /usr/local/lib64/libVkLayer_bottle_present.so 2>/dev/null && grep -qa "with shaders and a texture" /usr/local/bin/bottle-gltest 2>/dev/null'; then
@@ -2356,8 +2586,10 @@ cmd_steam_gpu() {
     # ~/.config/steamos-bottle/steam-gpu-fake for steam-arm64. Everything it sees goes to
     # steam-gpu-check.txt there (and into Save Logs).
     # shellcheck disable=SC2016  # runs in the VM
-    vsh_for 300 bash -c '
+    vsh_for "${1:-300}" bash -c '
       export DISPLAY=:1
+      command -v glxinfo >/dev/null || sudo -n dnf install -y -q glx-utils >/dev/null 2>&1
+      command -v xwd >/dev/null || sudo -n dnf install -y -q xwd >/dev/null 2>&1
       command -v glxinfo >/dev/null || { echo "  glxinfo is missing: choose Bottle > Update the Bottle first"; exit 2; }
       C=~/.config/steamos-bottle; mkdir -p "$C"; D="$C/steam-gpu-check.txt"
       echo "== $(date) bottle steam-gpu on: check" > "$D"
@@ -2421,16 +2653,37 @@ cmd_steam_gpu() {
       done
       echo "== none worked" >> "$D"
       exit 1' || rc=$?
-    if (( rc != 0 )); then
-      log_export >/dev/null 2>&1 || true
-      die "OpenGL on the Mac's GPU doesn't work in this VM yet (above); Steam stays as it is. The details are saved with the logs (Bottle > Save Logs)."
+    if (( rc != 0 )); then log_export >/dev/null 2>&1 || true; fi
+    return "$rc"
+}
+
+# Steam's interface draws with OpenGL (Chromium). The VM has OpenGL only in software (llvmpipe,
+# on the VM's processors), which makes Big Picture's animations stutter. Mesa's zink runs OpenGL
+# on Vulkan, which here is Venus on the Mac's GPU (presented by the bottle layer, like games).
+# "on" first checks that zink works in this VM (glxinfo; glxgears shows a window for a few
+# seconds), then starts Steam with it (~/.config/steamos-bottle/steam-gpu; steam-arm64 reads it).
+cmd_steam_gpu() {
+  local want="${1:-}" rc=0 since
+  need_vm
+  [[ "$(vm_status)" == Running ]] || die "The VM isn't running. Use: bottle start"
+  if [[ -z "$want" ]]; then
+    # shellcheck disable=SC2016  # runs in the VM
+    if [[ "$(vsh bash -c 'cat ~/.config/steamos-bottle/steam-gpu 2>/dev/null')" == zink ]]; then
+      info "Steam's interface: on the Mac's GPU (bottle steam-gpu off goes back)."
+    else
+      info "Steam's interface: on the VM's processors (bottle steam-gpu on tries the Mac's GPU)."
     fi
+    return 0
+  fi
+  if [[ "$want" == on ]]; then
+    steam_gpu_check || die "OpenGL on the Mac's GPU doesn't work in this VM yet (above); Steam stays as it is. The details are saved with the logs (Bottle > Save Logs)."
     vsh bash -c 'mkdir -p ~/.config/steamos-bottle && echo zink > ~/.config/steamos-bottle/steam-gpu'
     # from here on Ctrl-C puts it back (Steam isn't left on a mode that wasn't checked)
     trap 'steam_gpu_back "Stopped before the check finished."' INT
     info "Restarting Steam with its interface on the Mac's GPU…"
   elif [[ "$want" == off ]]; then
     vsh bash -c 'rm -f ~/.config/steamos-bottle/steam-gpu'
+    gpu_auto_set off   # chosen by hand: not tried again by itself
     info "Restarting Steam with its interface on the VM's processors…"
   else
     die "usage: bottle steam-gpu [on|off]"
@@ -2442,7 +2695,8 @@ cmd_steam_gpu() {
   [[ "$want" == on ]] || { info "Done."; return 0; }
   # Big Picture must really show: else straight back, keeping the attempt's log.
   info "Checking that Big Picture shows on the Mac's GPU. Leave this running: the screen can stay"
-  info "black for up to a minute, and if it doesn't work Steam goes back as it was by itself."
+  info "black or blinking for up to three minutes (the first tries usually fail), and if it doesn't"
+  info "work Steam goes back as it was by itself."
   rc=0
   steam_screen_shows "$since" || rc=$?
   trap - INT
@@ -2451,6 +2705,7 @@ cmd_steam_gpu() {
     3) steam_gpu_back "Steam's interface couldn't start OpenGL on the Mac's GPU." ;;
     *) steam_gpu_back "Big Picture didn't show on the Mac's GPU." ;;
   esac
+  gpu_auto_set on   # chosen by hand and it works
   local renderer
   renderer="$(steam_ui_renderer "$since")"
   case "$renderer" in
@@ -2482,6 +2737,7 @@ steam_gpu_back() {
   fi
   warn "$1 Going back to the VM's processors…"
   vsh bash -c 'cp ~/.config/steamos-bottle/steam.log ~/.config/steamos-bottle/steam-gpu-failed.log 2>/dev/null; rm -f ~/.config/steamos-bottle/steam-gpu'
+  gpu_auto_set failed
   steam_stop
   steam_start "$debug"
   log_export >/dev/null 2>&1 || true
@@ -2489,17 +2745,19 @@ steam_gpu_back() {
 }
 
 # Steam's Big Picture window is up and not all black (a look at the VM's screen with xwd): waits
-# up to 90 s for the window, then up to 30 s for something on it. Ends early with status 3 when
-# Steam's web helper can't get OpenGL (its log says so twice after $1, Steam's start time; it
-# retries every 10 s, so this takes about 20 s). No xwd: can't tell (yes).
+# up to 150 s for the window, then up to 30 s for something on it. Ends early with status 3 when
+# Steam's web helper can't get OpenGL: its log says so 12 times after $1, Steam's start time. It
+# retries every 10 s and the first tries normally fail: on the M4 Mac's VM it took 2 to 4 failed
+# tries before it worked, once 9, and on Oct 21 a new M1 laptop's check gave up after 2 (about 20 s)
+# and put Steam back on the CPU just before the third try. No xwd: can't tell (yes).
 steam_screen_shows() {
   # shellcheck disable=SC2016  # runs in the VM
-  vsh_for 200 bash -c '
+  vsh_for 260 bash -c '
     export DISPLAY=:1
     since="$1"; W=~/.local/share/Steam/logs/webhelper.txt
     gl_failed() {
       [ -f "$W" ] || return 1
-      [ "$(awk -v s="$since" "substr(\$0, 2, 19) >= s && /failed to initialize GL thread/" "$W" | wc -l)" -ge 2 ]
+      [ "$(awk -v s="$since" "substr(\$0, 2, 19) >= s && /failed to initialize GL thread/" "$W" | wc -l)" -ge 12 ]
     }
     # What Steam and its web helper run with (settings, OpenGL libraries, the shim log), into
     # steam-gpu-diag.txt for Save Logs; the main points here.
@@ -2530,7 +2788,7 @@ steam_screen_shows() {
       echo "  the shim saw Steam start its web helper ${n:-0} times (kopper.log)"
     }
     command -v xwd >/dev/null || exit 0
-    for _ in $(seq 1 90); do
+    for _ in $(seq 1 150); do
       gl_failed && { snapshot "web helper: no OpenGL"; exit 3; }
       wmctrl -l 2>/dev/null | grep -q "Steam Big Picture Mode$" && break
       sleep 1
@@ -2978,9 +3236,11 @@ awake_loop() {
     fi
     # (with a time limit: a VM that doesn't answer mustn't stop the watcher)
     # shellcheck disable=SC2016  # runs in the VM
-    out="$(vsh_for 40 bash -c "$(vm_logs_cap_cmd); $(homegames_cmd)"'; echo "vmfree $(df -Pk / | awk "NR == 2 {print \$4}")"; command -v bottle-busy >/dev/null && bottle-busy || echo idle' 2>/dev/null || true)"
+    out="$(vsh_for 40 bash -c "$(vm_logs_cap_cmd); $(homegames_cmd); $(gpu_auto_cmd); $(playmap_cmd)"'; echo "vmfree $(df -Pk / | awk "NR == 2 {print \$4}")"; command -v bottle-busy >/dev/null && bottle-busy || echo idle' 2>/dev/null || true)"
     state="$(tail -n 1 <<<"$out")"
     homegames_guard "$state" "$out" || true   # a game installing on the VM's own drive (see homegames_guard)
+    gpu_auto_guard "$state" "$out" || true   # Steam's interface on the Mac's GPU: confirm it, or go back (see gpuauto)
+    playmap_guard "$state" "$out" || true   # a game installed while Steam ran, a game's first start (see playmap)
     disk_guard "$state" || true   # the Mac's free space (see disk_guard)
     vm_disk_guard "$state" "$(sed -n 's/^vmfree //p' <<<"$out" | head -n 1)" || true   # the VM's own disk
     # a kit test asked for from outside (logs/.selftest holds its name): not while a game runs,
@@ -3019,7 +3279,11 @@ awake_loop() {
     if [[ "$state" == game ]]; then
       perf_sample
       sleep "${BOTTLE_PERF_EVERY:-30}"
+    elif [[ "$PM_FAST" == 1 ]] && (( PM_FAST_N < 15 )); then
+      PM_FAST_N=$(( PM_FAST_N + 1 ))
+      sleep 8   # a game is waiting for Steam's restart (see playmap)
     else
+      [[ "$PM_FAST" == 1 ]] || PM_FAST_N=0
       sleep "${BOTTLE_AWAKE_EVERY:-60}"
     fi
   done
@@ -3347,6 +3611,9 @@ case "$cmd" in
   uninstall)    cmd_uninstall "$@" ;;
   _vmdisk-guard) need_vm; vm_disk_guard "${1:-idle}" "$(vm_disk_free_kb)" ;;   # one round of the watcher's (tests)
   _homegames-guard) need_vm; homegames_guard "${1:-idle}" "$(vsh_for 40 bash -c "$(homegames_cmd)")" ;;   # one round of the watcher's (tests)
+  _playmap-guard) need_vm; playmap_guard "${1:-idle}" "$(vsh_for 40 bash -c "$(playmap_cmd)")" ;;   # one round of the watcher's (tests)
+  _playmap-lines) need_vm; vsh_for 40 bash -c "$(playmap_cmd)" ;;   # what the VM answers the watcher about it (tests)
+  _steam-gpu-check) need_vm; steam_gpu_check "${1:-300}" ;;   # the VM-side check on its own (tests); 0 when it passes
   kosmickrisp)  exec "$KIT_DIR/host/kosmickrisp.sh" "$@" ;;
   help|-h|--help) sed -n '2,/^# Written/p' "$src" | sed 's/^# \{0,1\}//' ;;
   *) die "unknown command '$cmd' (bottle help)" ;;

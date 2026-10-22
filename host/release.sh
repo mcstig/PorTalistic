@@ -75,7 +75,7 @@ if [[ "$IMG_TAG" == "$TAG" ]]; then
 fi
 
 if ! gh repo view "$REPO" >/dev/null 2>&1; then
-  info "Making the public repository $REPO…"
+  info "Making the public repository ${REPO}…"
   gh repo create "$REPO" --public --description "Steam on Apple Silicon Macs, in a small Linux VM" >/dev/null
 fi
 # The release's tag is made on the repository's default branch: that has to be this version's
@@ -154,7 +154,7 @@ if [[ "$STATE" == none ]]; then
   gh release create "$TAG" --repo "$REPO" --target "$BRANCH" --title "Portalistic $VERSION" \
     --notes-file "$NOTES" --draft >/dev/null
 else
-  info "Carrying on with the draft release $TAG…"
+  info "Carrying on with the draft release ${TAG}…"
   gh release edit "$TAG" --repo "$REPO" --notes-file "$NOTES" >/dev/null
 fi
 # files already up with the same size are kept (an upload that stopped midway is redone)

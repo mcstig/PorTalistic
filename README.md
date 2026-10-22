@@ -147,6 +147,79 @@ installed can't be moved, and nothing could be written).
   the cap with a log held open for appending, and the watcher's exact line run locally),
   `mac-homegames2.sh` (the question through limactl into a real VM, listing only).
 
+**Steam's interface on the Mac's GPU, by itself (Oct 21, in 0.7.0.7)**
+
+Big Picture is a Chromium page drawn with OpenGL. Without `bottle steam-gpu on` that runs on the Linux
+system's processor (llvmpipe): about 185% of a 4-CPU VM while idle on a 2020 M1 MacBook Pro with 8 GB, and
+Big Picture was choppy there. By hand (`steam-gpu` set to zink) it was fine. So every Steam start now
+tries the Mac's GPU first, once per kit version, and goes back by itself if it can't:
+
+- **At a Steam start** (`steam_start` calls `gpu_auto_prepare`): with no earlier choice, the VM-side check
+  (`steam_gpu_check`, 120 s: zink on the Mac GPU, a transparent OpenGL 3.3 core window drawn through GLX and
+  EGL; it installs glx-utils and xwd if they're missing) must pass; then `steam-gpu` is set to zink and the state is
+  `pending`. A failed check is `failed` and not tried again until the kit's version changes.
+- **In the watcher, every round** (`gpu_auto_guard`, with a line from `gpu_auto_cmd`): `pending` becomes `ok` as
+  soon as Steam's web helper reports a zink renderer since Steam's start (`webhelper_gpu.txt`). Its first tries
+  normally fail ("failed to initialize GL thread"; 2 to 4 on the M4 Max, once 9), so it only gives up after 12
+  failed tries or 5 minutes since the web helper first started: the setting is removed, the state is `failed`,
+  logs are saved, Steam restarts on the processor and a banner says so. Nothing happens while a game runs.
+- **Existing installs** where Steam runs on the processor with no choice made: after Steam has been up for 3
+  minutes and nothing is going on, one restart, which makes the same decision. A copy set to zink by hand is
+  remembered as `on`.
+- **State** is one line in the VM, `~/.config/steamos-bottle/steam-gpu-auto`, `STATE VERSION`: `on`/`off` (chosen
+  by hand: `bottle steam-gpu on|off` or Bottle > Steam's Interface: GPU or Processor…; never changed by itself),
+  `pending`, `ok`, `failed`. `BOTTLE_STEAM_GPU_AUTO=0` turns all of it off.
+- **Why the old check failed on the M1 laptop (Oct 21):** `bottle steam-gpu on` gave up after 2 failed web-helper
+  tries (about 20 s) and put Steam back on the processor, just before the third try would have worked. It now
+  waits for 12 and up to 150 s for the window.
+- **Tests (dev only, gitignored):** `host/tests/mac-gpuauto1.sh` (51 checks on Linux, 45 on the Mac's bash 3.2; the
+  decision, the guard and the VM's line, on made-up folders with stand-ins), `mac-gpuauto3.sh` (the check for
+  real on the development Mac's VM: passes in 8 s, settings unchanged), and the watcher on the development Mac
+  took the new code up by itself and wrote `on 0.7.0.6` from a real round.
+- **Not verified yet:** a fresh install end to end (the first start trying the GPU); the fall-back path with a Mac
+  where the web helper really never works; the restart of an existing install; the menu item's look.
+
+**Games installed while Steam runs, and a game's first start (Oct 21, in 0.7.0.7)**
+
+Steam reads which Steam Play tool a game uses only when it starts, and `bottle-steamplay map` (run by
+`steam-arm64` before every start) is what sets each installed game to Proton Experimental. A game installed
+while Steam was already running therefore came as its **Linux version** if it has one (Dead Cells, Rocket
+League...): an x86-64 Linux program in an arm64 VM, so **Play did nothing** (the button flipped to Stop and
+back) until Steam was restarted; then Steam swapped the depots (Dead Cells: about 2 GB again) and it ran.
+Found Oct 21 on a 2020 M1 MacBook Pro and confirmed on the development Mac.
+
+- **`bottle-steamplay pending [--mark]`** (Steam running; prints nothing otherwise): one line `pending TAB appid TAB
+  name` per installed app that is not a tool, has a **Linux version**, is not mapped to Proton in `config.vdf`, is
+  not in `native-apps`, is not one the player set himself in Steam (`steamplay-choices.json`, or a setting that
+  changed since `steamplay-set.json`) and was not listed in the last 30 minutes. The Linux version comes from
+  Steam's own cache, `appcache/appinfo.vdf` (binary VDF, version 41; `common/oslist`: Dead Cells "windows,macos,linux",
+  ASUKA demo "windows"); the app manifests can't say it, they carry no `platform_override_*` on this Steam, for
+  Windows or Linux installs alike. A game for Windows only is left alone (Steam Play is its default); one missing
+  from the cache, or a cache in another version, can't be told and is listed. A manifest is listed from its second
+  sighting, 6 s after the first (`playmap-seen`). `--mark` notes the games as tried (`playmap-tried`). Takes
+  about 50 ms, 2 ms of it reading the cache.
+- **In the watcher, every round** (`playmap_guard`, lines from `playmap_cmd`): with no game running, Steam up for
+  30 s and a `pending` line, the guard asks again in the VM with `--mark` (and only when nothing is running there),
+  then `steam_stop` and `steam_start`; `map` runs in between, so the game comes back as its Windows version, and a
+  banner says why ("Steam restarted for Dead Cells ... It may download the game again."). While a game waits, the
+  watcher looks every 8 s instead of every 60 s (at most 15 rounds in a row). At most three restarts an hour;
+  `BOTTLE_PLAYMAP=0` turns it off. `bottle _playmap-guard [STATE]` runs one round.
+- **First start of a Windows game:** Proton builds the game's Wine prefix (`compatdata/APPID/pfx`) the first time,
+  and shows nothing: about 9 minutes on the M1 laptop, with the game's Play button turning into Stop and the log
+  holding only its header. A launch (`reaper SteamLaunch AppId=N`, seen by the watcher) whose
+  `pfx/creation_sync_guard` is missing after 15 s gets a banner, once per launch: "Setting up <game> for the first
+  time. Windows games need a one-time setup before they open. It can take several minutes, and the game starts by
+  itself when it's done." `BOTTLE_PREFIX_NOTICE=0` turns it off.
+- **Tests (dev only):** `guest/tests/steamplay-pending-selftest.py` (26 checks on a made-up Steam folder, home and
+  appinfo.vdf; runs in the container and in the VM), `host/tests/mac-playmap2.sh` (47 checks on Linux, 37 on the
+  Mac's bash 3.2, which skips the checks that need Linux processes: the guard's decisions with stand-ins, the VM's
+  lines from stand-in processes, the whole round script read by bash, the wiring), `mac-playmap4.sh` (the round
+  through limactl on the dev VM), `mac-playmap5.sh`/`mac-playmap6.sh` (the manifests and the cache as they are
+  there), `mac-playmap7.sh` (the kit's `bottle-steamplay` against the dev VM's real cache: oslist read for four
+  games in 2 ms, nothing pending on a VM whose games are all set). Not verified yet: a real install on a real VM
+  (that `creation_sync_guard` is missing for the whole prefix build, and that Steam has a just-installed game in
+  its cache on disk).
+
 **Making a release** (on the development Mac, which has the kit's setup: Homebrew's lima and
 krunkit, KosmicKrisp, Xcode, a Developer ID certificate):
 
@@ -426,6 +499,8 @@ Game Mode (`bottle mode game`), switches back.
 - **Steam's own Compatibility setting sticks.** `bottle-steamplay map` (before every Steam start)
   sets games to Proton Experimental; a game whose setting was changed in Steam since then keeps
   that change (`~/.config/steamos-bottle/steamplay-choices.json`).
+- **A game installed while Steam runs** is set to Proton by the watcher with one Steam restart
+  (`bottle-steamplay pending`, `playmap_guard`); see "Games installed while Steam runs".
 
 
 ### Why `MESA_KK_DISABLE_WORKAROUNDS=12,13` (10x in D3D11 games)
