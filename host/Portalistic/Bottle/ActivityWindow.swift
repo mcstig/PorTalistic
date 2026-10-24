@@ -156,18 +156,31 @@ final class ActivityWindow: NSWindowController {
         let plain = line.trimmingCharacters(in: .whitespaces)
         if plain.hasPrefix("==> ") {
             current?.finish(ok: true)
-            let row = StepRow(readableLine(plain))
-            steps.addArrangedSubview(row)
-            row.widthAnchor.constraint(equalTo: steps.widthAnchor).isActive = true
-            rows.append(row)
-            current = row
-            steps.layoutSubtreeIfNeeded()
-            if let doc = stepsScroll.documentView { doc.scroll(NSPoint(x: 0, y: max(0, doc.bounds.height - stepsScroll.contentSize.height))) }
+            current = addRow(StepRow(readableLine(plain)))
+        } else if plain.hasPrefix("== ") {
+            // a heading of plain output (bottle library folders, status): a row without a mark
+            current?.finish(ok: true)
+            current = nil
+            addRow(StepRow(String(plain.dropFirst(3)), kind: .heading))
         } else if plain.hasPrefix("warn:") || plain.hasPrefix("error:") {
-            current?.note(readableLine(plain), problem: true)
-        } else if !plain.isEmpty, !plain.hasPrefix("time="), let cur = current {
-            cur.note(readableLine(plain), problem: false)
+            if let cur = current { cur.note(readableLine(plain), problem: true) } else { addRow(StepRow(readableLine(plain), kind: .problem)) }
+        } else if !plain.isEmpty, !plain.hasPrefix("time=") {
+            if let cur = current {
+                cur.note(readableLine(plain), problem: false)
+            } else {
+                addRow(StepRow(line.trimmingCharacters(in: .newlines), kind: .text))   // (plain output, as it is)
+            }
         }
+    }
+
+    @discardableResult
+    private func addRow(_ row: StepRow) -> StepRow {
+        steps.addArrangedSubview(row)
+        row.widthAnchor.constraint(equalTo: steps.widthAnchor).isActive = true
+        rows.append(row)
+        steps.layoutSubtreeIfNeeded()
+        if let doc = stepsScroll.documentView { doc.scroll(NSPoint(x: 0, y: max(0, doc.bounds.height - stepsScroll.contentSize.height))) }
+        return row
     }
 
     private func append(_ line: String) {
@@ -194,16 +207,28 @@ private final class FlippedClipView: NSClipView {
 
 /// One step: a mark (spinner while it runs, a tick or a cross after), its title, and its latest line.
 final class StepRow: NSView {
+    enum Kind { case step, heading, text, problem }
     private let mark = NSImageView()
     private let busy = NSProgressIndicator()
     private let title = NSTextField(wrappingLabelWithString: "")
     private let note = NSTextField(wrappingLabelWithString: "")
 
-    init(_ text: String) {
+    init(_ text: String, kind: Kind = .step) {
         super.init(frame: .zero)
         title.stringValue = text
         title.font = .systemFont(ofSize: 13)
         title.maximumNumberOfLines = 2
+        switch kind {
+        case .step: break
+        case .heading:
+            title.font = .systemFont(ofSize: 13, weight: .semibold)
+        case .text:
+            title.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+            title.maximumNumberOfLines = 4
+            title.textColor = .secondaryLabelColor
+        case .problem:
+            title.textColor = .systemOrange
+        }
         note.font = .systemFont(ofSize: 11)
         note.textColor = .secondaryLabelColor
         note.maximumNumberOfLines = 2
@@ -211,7 +236,7 @@ final class StepRow: NSView {
         busy.style = .spinning
         busy.controlSize = .small
         busy.isDisplayedWhenStopped = false
-        busy.startAnimation(nil)
+        if kind == .step { busy.startAnimation(nil) }
         mark.imageScaling = .scaleProportionallyUpOrDown
         mark.isHidden = true
         let marks = NSView()

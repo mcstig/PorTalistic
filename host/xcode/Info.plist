@@ -34,5 +34,13 @@
 	<true/>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Portalistic looks for file servers on your network, so the Linux desktop can reach them, and the Linux system needs to talk to them.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_smb._tcp</string>
+		<string>_nfs._tcp</string>
+		<string>_sftp-ssh._tcp</string>
+	</array>
 </dict>
 </plist>

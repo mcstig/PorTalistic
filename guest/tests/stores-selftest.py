@@ -780,6 +780,16 @@ def main():
     r2 = run("adopt", check_code=0)
     check("Nothing to adopt" in r2.stdout, "adopt: nothing the second time")
 
+    # prefixes to the drive: a store game's Wine prefix on the VM's disk goes into its game folder (sync, Steam stopped)
+    pfx = steam / "steamapps/compatdata" / str(json.loads(games_file.read_text())["gog"]["1207658930"]["appid"])
+    (pfx / "pfx").mkdir(parents=True, exist_ok=True)
+    (pfx / "pfx/user.reg").write_text("x" * 100)
+    r = run("sync", check_code=0)
+    moved = mounts / "mac/steamapps/compatdata" / pfx.name
+    check(pfx.is_symlink() and (moved / "pfx/user.reg").is_file() and "prefix moved to Mac" in r.stdout, f"prefixes: moved into the game's folder, a link left for Steam ({r.stdout.strip()[-160:]})")
+    r2 = run("sync", check_code=0)
+    check("prefix moved" not in r2.stdout and pfx.is_symlink(), "prefixes: nothing to do the second time")
+
     # logout
     run("gog", "logout", check_code=0)
     check(not (tmp / "state/gog-auth.json").exists(), "logout forgets the sign-in")

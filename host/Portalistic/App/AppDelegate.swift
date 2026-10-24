@@ -128,6 +128,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 self.progressCard.show(text: text, detail: details)
                 return
             }
+            if kind == 3 {   // the VM's disk is almost full: bigger, or games out of it (Oct 23)
+                self.askAboutVMDisk(title: title, detail: details)
+                return
+            }
             self.noticeView.show(problem: kind == 1, title: title, detail: details, seconds: seconds)
             if !NSApp.isActive { NSApp.requestUserAttention(.informationalRequest) }
         }
@@ -225,6 +229,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     var leaving = false
+    var askingAboutDisk = false            // the VM-disk question is on screen (AppDelegate+Menus)
     var installing = false                 // moving to Applications: no quitting when the alert closes (AppDelegate+Quitting)
     let dontAskKey = "QuitWithoutAsking"
 

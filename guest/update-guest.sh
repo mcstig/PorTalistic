@@ -501,6 +501,15 @@ dxvk_async_cache() {
 # it starting, The Witcher 3 crashed on every launch, each time as the Mac side refused a GPU
 # submission (virtio-gpu SUBMIT_3D, response 0x1200), where it had played for minutes before.
 # Until that's understood it stays off, and the reporting order goes back to the default.
+# Apple's M4 shows Linux its matrix extension (SME), and .NET programs then die at random with SIGILL
+# (Oct 23: Ryujinx, a Flatpak, crashed on 1 launch in 3 on the dev Mac; 0 in 10 with SME off). Nothing
+# in the bottle uses SME, so the kernel boots without it: arm64.nosme (takes effect at the next VM start).
+sme_off() {
+  command -v grubby >/dev/null || { echo "  no grubby here"; return 0; }
+  if grubby --info=DEFAULT 2>/dev/null | grep -q "arm64.nosme"; then echo "  already off"; return 0; fi
+  grubby --update-kernel=ALL --args="arm64.nosme" && echo "  SME off from the next VM start"
+}
+
 memtrim_off() {
   if [[ -f /etc/systemd/system/bottle-memtrim.service ]]; then
     systemctl disable --now bottle-memtrim.service >/dev/null 2>&1 || true
@@ -563,6 +572,7 @@ step "vkd3d-proton $VKD3D_VER for DirectX 12 games" vkd3d_cache
 tso_build() { /usr/local/bin/bottle-tso build || warn "  the x86 ordering module couldn't be rebuilt; games keep FEX's own ordering"; return 0; }
 step "x86 memory ordering in hardware (only while bottle tso is on)" tso_build
 step "The file cache trimmer off (it came with crashes)" memtrim_off
+step "Apple's SME off for the Linux kernel (.NET programs crashed with it)" sme_off
 step "Present layer, arm64 build" env BOTTLE_SKIP_TESTS=1 bash "$HERE/present-layer/install.sh"
 if [[ -d "$GUEST_ROOTFS/usr/lib64" ]]; then
   step "Mac-patched Venus driver for the x86 side (64- and 32-bit)" env BOTTLE_SKIP_PROBE=1 bash "$HERE/x86-venus.sh"

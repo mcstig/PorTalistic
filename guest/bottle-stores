@@ -456,9 +456,59 @@ def note_galaxy(games):
                 update_installed("gog", rec["id"], rec)
 
 
+def prefixes_to_drives(games):
+    """A store game's Wine prefix lives in Steam's own compatdata on the VM's disk (Steam puts every
+    non-Steam game's there). Oct 23: it goes into the game's own game folder (its drive) instead, with a
+    link left behind for Steam and Proton: the VM's disk stays small, and the prefix (saves, settings)
+    travels with the game. A game on the VM's disk uses the default game folder. Only with Steam stopped."""
+    # (a folder's place is a mount when its drive or share is there; an empty mount point isn't one)
+    testing = bool(os.environ.get("BOTTLE_LIBRARY_ROOT"))
+    choices = [c for c in folder_choices() if c["name"] != "vm" and (testing or os.path.ismount(c["path"]))]
+    if not choices:
+        return 0
+    default = next((c for c in choices if c["default"]), choices[0])
+    src_root = STEAM / "steamapps/compatdata"
+    n = 0
+    for key, rec in games.items():
+        appid = str(rec.get("appid") or "")
+        if not appid.isdigit():
+            continue
+        src = src_root / appid
+        if src.is_symlink() or not src.is_dir():
+            continue
+        choice = next((c for c in choices if c["name"] == rec.get("folder")), default)
+        dest = Path(choice["path"]) / "steamapps/compatdata" / appid
+        try:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            if dest.exists():
+                say(f"{rec.get('title', key)}: a prefix is already in {choice['label']}; keeping the VM's one")
+                continue
+            rc = 1
+            if shutil.which("rsync"):
+                try:
+                    rc = subprocess.run(["rsync", "-a", "--", str(src) + "/", str(dest) + "/"], capture_output=True, timeout=1800).returncode
+                except (subprocess.TimeoutExpired, OSError):
+                    rc = 1
+            if rc != 0:
+                shutil.rmtree(dest, ignore_errors=True)
+                shutil.copytree(src, dest, symlinks=True)
+            tmp = src.with_name(appid + ".moved")
+            src.rename(tmp)
+            os.symlink(str(dest), str(src))
+            shutil.rmtree(tmp, ignore_errors=True)
+            say(f"{rec.get('title', key)}: its Windows prefix moved to {choice['label']} ({human(dir_size(dest))})")
+            n += 1
+        except OSError as e:
+            say(f"{rec.get('title', key)}: couldn't move its prefix to {choice['label']} ({e}); it stays on the VM's disk")
+    return n
+
+
 def cmd_sync(args):
     adopt_all()          # (games already in a folder that have no record yet: a reinstall)
+    drop_gone()          # (records of games whose folder was deleted)
     games = all_installed()
+    if not steam_running() and os.environ.get("BOTTLE_PREFIXES_TO_DRIVES", "1") != "0":
+        prefixes_to_drives(games)
     note_galaxy(games)
     if steam_running() and not args.force:
         say("Steam is running; it would undo this when it quits. Quit Steam first (bottle steam does it).")
@@ -888,6 +938,26 @@ def adopt_epic(choice, have, quiet):
             have[app] = rec
             say(f"Adopted {title} (Epic) from {choice['label']} / Epic Games / {dest.name}")
             n += 1
+    return n
+
+
+def drop_gone(quiet=True):
+    """Records of games whose folder is gone (deleted by hand, Oct 23) are taken out, so they stop
+    showing as installed and their Steam shortcuts go at the next sync. A folder whose whole mount is
+    missing (a drive not connected) is left alone. -> how many were dropped."""
+    n = 0
+    for store in STORES:
+        for gid, rec in list(installed(store).items()):
+            d = rec.get("dir") if isinstance(rec, dict) else None
+            if not d:
+                continue
+            mount = MOUNT_ROOT / str(rec.get("folder") or "")
+            if rec.get("folder") and rec.get("folder") != "vm" and not mount.is_dir():
+                continue
+            if not Path(d).is_dir():
+                update_installed(store, gid, None)
+                say(f"{rec.get('title', gid)} ({store}): its folder is gone ({d}); no longer listed as installed")
+                n += 1
     return n
 
 

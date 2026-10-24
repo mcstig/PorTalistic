@@ -15,7 +15,7 @@ your Mac, drawing with the Mac's GPU, and Steam plays Windows games through Prot
   itself and asks you to sign in. To remove it all: Portalistic > Uninstall Portalistic.
 - Games go in Games/Portalistic in your home folder. Game Folders > Add a Game Folder adds another
   folder or an external drive (Steam's own Add Drive can't see your Mac's drives; Portalistic
-  offers a drive when you connect it). The Linux system's own drive (Steam's "Internal Drive") is 20 GB:
+  offers a drive when you connect it). The Linux system's own drive (Steam's "Internal Drive") is 25 GB (20 before Oct 23; it offers to grow by 5 GB when low):
   Linux, Steam and Proton, not games.
 - Some games won't run: those whose anti-cheat doesn't accept Proton or a VM, and some whose copy
   protection fails under x86 emulation. Portalistic doesn't work around either.
@@ -60,7 +60,7 @@ download and sets up with one click (`bottle setup`):
 1. It downloads Portalistic's ready-made Linux image (2.3 GB, from the project's GitHub release,
    checked against its SHA-256) into `~/.portalistic/download`.
 2. Lima makes the VM from it in `~/.portalistic/lima`: half the Mac's memory under 24 GB (4-8 GB),
-   a third from 24 GB (8-16 GB), its performance cores, and a 20 GB disk (Linux, Steam and Proton)
+   a third from 24 GB (8-16 GB), its performance cores, and a 25 GB disk (Linux, Steam and Proton)
    that takes Mac space only as it fills. No Mac folders are
    shared except the game folder `~/Games/Portalistic`. The image file is deleted afterwards.
 3. The VM starts, brings itself up to the app's kit for its user (`deck`) in a few seconds, and
@@ -101,6 +101,19 @@ Proton and Steam's runtime (~2-2.5 GB more).
   `mac-installapp8`, and the system log's "applicationShouldTerminate: NSTerminateNow" right after the answer).
   `installing` holds that rule off during the move. Each step is logged to `app-install.log` (the self-test's
   log file when set).
+- **Network shares in Desktop Mode (0.7.0.14, Oct 23).** Dolphin opens smb://, nfs:// and sftp:// (kio-extras'
+  workers were already there; `cifs-utils`, `samba-client`, `nfs-utils`, `kdnssd` and `avahi-tools` join Desktop
+  Mode's packages). The VM sits behind the Mac's NAT (192.168.5.0/24): it reaches every LAN host on TCP (the
+  dev Mac's router and the Mac itself at its LAN address or at Lima's 192.168.5.2), but multicast doesn't
+  cross, so `nas.local` never resolved and `avahi-browse` saw nothing. The Mac does the Bonjour part:
+  `lan_hosts_scan` (host/bottle, "lan" block) runs `dns-sd -B` for `_smb._tcp`, `_nfs._tcp`, `_sftp-ssh._tcp`,
+  `dns-sd -L` for each instance's host name and `dns-sd -G v4` for its address (2 s each; macOS has no
+  `timeout`, so `dns_sd_for` kills it; the Mac's own name resolves to 127.0.0.1 first, then its LAN address),
+  and the watcher sends "IP NAME.local SERVICES" lines every 5 rounds (and `bottle mode desktop` at once) to
+  `bottle-session lan-hosts`, which keeps a block in /etc/hosts and one `~/.local/share/remoteview/
+  portalistic-NAME.desktop` per server (what KDE's "Add Network Folder" writes; Dolphin's Network place shows
+  them). Checked on the dev Mac: the Mac (Remote Login) appeared as McstigM4Max in Network, and
+  `ssh McstigM4Max.local` from the VM connected. BOTTLE_LAN_HOSTS=0 turns the scan off.
 - **Games from before come back (0.7.0.13, Oct 23).** Michael reinstalled on the M1 without deleting the games
   and Steam showed none: Steam's first start (which installs Steam) comes before `bottle-libraries sync` can add
   the folder, and the GOG/Epic records (`stores/games.json`, Legendary's `installed.json`) went with the VM. Now
@@ -663,7 +676,7 @@ and gets it back when files are deleted, since the VM's file system discards fre
 `bottle disk` shows what fills it, what it takes of the Mac now and the Mac's free space;
 `bottle disk grow [GB]` makes it bigger (Lima's `limactl edit --disk`, Lima 1.1+: stops Steam
 and the VM, resizes, starts it, grows the partition and file system if cloud-init didn't,
-starts Steam; refuses sizes the Mac can't hold; default: 10 GB more); `bottle disk clean` clears package caches,
+starts Steam; refuses sizes the Mac can't hold; default: 5 GB more); `bottle disk clean` clears package caches,
 old journal, crash dumps and game logs over 50 MB. The watcher does that by itself when the
 VM's disk has under 3 GB free, then warns in the app; under 1 GB it stops a Steam download. A full disk makes Steam crash and restart,
 and `bottle update` fail. Switching a game from its Linux to its Windows version briefly needs

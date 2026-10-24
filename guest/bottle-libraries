@@ -620,12 +620,12 @@ def mount_disk(name, label, want_free):
             say(f"{label}: couldn't make the file system on its drive; the folder itself is used")
             return False
     rc, _ = sh(["mkdir", "-p", str(mp)], 10, sudo=True)
-    rc, _ = sh(["mount", "-o", "noatime,discard=async", str(dev), str(mp)], 60, sudo=True)
+    rc, _ = sh(["mount", "-o", "noatime", str(dev), str(mp)], 60, sudo=True)
     if rc != 0:
         # the image file's size can differ by a few KB from the size btrfs noted (Lima trims it):
         # btrfs refuses such a device until its size note is fixed
         sh(["btrfs", "rescue", "fix-device-size", str(dev)], 120, sudo=True)
-        rc, _ = sh(["mount", "-o", "noatime,discard=async", str(dev), str(mp)], 60, sudo=True)
+        rc, _ = sh(["mount", "-o", "noatime", str(dev), str(mp)], 60, sudo=True)
     if rc != 0:
         say(f"{label}: couldn't mount its drive; the folder itself is used")
         return False

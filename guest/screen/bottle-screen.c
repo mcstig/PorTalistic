@@ -596,7 +596,7 @@ static void notices_check(int cfd) {
         fclose(f);
         unlink(path);
         if (!len) continue;
-        body[0] = (uint8_t)(kind < 0 ? 0 : kind > 2 ? 1 : kind); body[1] = 0;   /* 0 news, 1 a problem, 2 progress (a card that stays until the next kind-2 notice) */
+        body[0] = (uint8_t)(kind < 0 ? 0 : kind > 3 ? 1 : kind); body[1] = 0;   /* 0 news, 1 a problem, 2 progress (a card that stays until the next kind-2 notice), 3 a question about the VM's disk */
         put16(body + 2, (uint16_t)(secs < 3 ? 3 : secs > 120 ? 120 : secs));
         send_msg(cfd, MSG_NOTICE, body, (uint32_t)(4 + len));
         char title[120];

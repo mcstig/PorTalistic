@@ -36,7 +36,8 @@ mkdir -p "$STATE" "$CACHE"
 
 # What Desktop Mode is made of (Fedora's packages, KDE Plasma 6's X11 session; the dependencies come along).
 PKGS=(plasma-desktop plasma-workspace-x11 kwin-x11 dolphin konsole kate firefox spectacle plasma-systemmonitor
-      plasma-discover plasma-discover-flatpak flatpak)   # (Discover for Flatpak apps only: no PackageKit, which would offer to update the bottle's own Mesa)
+      plasma-discover plasma-discover-flatpak flatpak   # (Discover for Flatpak apps only: no PackageKit, which would offer to update the bottle's own Mesa)
+      cifs-utils samba-client nfs-utils kdnssd avahi-tools)   # network shares in Dolphin (smb://, nfs://; Oct 23, see lan-hosts)
 
 say() { printf '%s\n' "$*"; }
 # The ordinary environment, for what Game Mode needs started. Run from the desktop (its "Return to Game
@@ -150,21 +151,37 @@ except Exception:
     pass
 
 mounts = []
-out = subprocess.run(["findmnt", "-rn", "-t", "virtiofs", "-o", "TARGET,OPTIONS"], capture_output=True, text=True).stdout
+# the Mac's shares (virtiofs) and the game folders' drives (btrfs at /mnt/portalistic/NAME; Oct 23). A
+# folder that has a drive is listed as the drive, where its games are, not as the folder itself
+# (/mnt/portalistic-folders/NAME: the folder's leftovers and the drive's image file).
+out = subprocess.run(["findmnt", "-rn", "-t", "virtiofs,btrfs", "-o", "TARGET,OPTIONS,FSTYPE"], capture_output=True, text=True).stdout
+seen = {}
 for line in sorted(out.splitlines()):
-    target, _, opts = line.partition(" ")
+    target, _, rest = line.partition(" ")
+    opts, _, fstype = rest.partition(" ")
     target = target.replace("\\x20", " ")
     if not target.startswith("/") or target == "/":
         continue
     base = os.path.basename(target.rstrip("/"))
     if target.startswith("/mnt/portalistic/"):
         title = labels.get(base, base)
+    elif target.startswith("/mnt/portalistic-folders/"):
+        if fstype != "virtiofs":
+            continue
+        title = labels.get(base, base)
+        if os.path.ismount(os.path.join("/mnt/portalistic", base)):
+            continue      # (its drive is the place)
     elif target.startswith("/Users/"):
         title = "Mac Home"
+    elif fstype == "btrfs":
+        continue
     else:
         title = base
     if "ro" in opts.split(","):
         title += " (read-only)"
+    if title in seen:
+        continue
+    seen[title] = target
     mounts.append((target, title))
 
 text = open(path, encoding="utf-8").read()
@@ -217,6 +234,39 @@ cmd_configure() {
   kwriteconfig6 --file kscreenlockerrc --group Daemon --key LockOnResume false
   kwriteconfig6 --file ksmserverrc --group General --key loginMode emptySession
   kwriteconfig6 --file baloofilerc --group "Basic Settings" --key Indexing-Enabled false
+  sudo -n systemctl enable --now avahi-daemon >/dev/null 2>&1 || true   # (Bonjour names, when multicast reaches the VM)
+  # Dolphin is the file manager the panel's launcher means (Oct 23: a plasmashell started without the
+  # session's environment resolved "preferred://filemanager" to Kate)
+  xdg-mime default org.kde.dolphin.desktop inode/directory >/dev/null 2>&1 || true
+  kwriteconfig6 --file kdeglobals --group General --key "BrowserApplication" "" >/dev/null 2>&1 || true
+  # KDE's password wallet, where Dolphin keeps a network share's password: one wallet, named as KDE
+  # expects, left open and not asked for again (Oct 23: without this, every share access wanted a new
+  # wallet called "__1_"). A wallet made with an empty password opens without a prompt.
+  kwriteconfig6 --file kwalletrc --group Wallet --key "Default Wallet" kdewallet
+  kwriteconfig6 --file kwalletrc --group Wallet --key "Local Wallet" kdewallet
+  kwriteconfig6 --file kwalletrc --group Wallet --key "Prompt on Open" false
+  kwriteconfig6 --file kwalletrc --group Wallet --key "Leave Open" true
+  kwriteconfig6 --file kwalletrc --group Wallet --key "Close When Idle" false
+  kwriteconfig6 --file kwalletrc --group Wallet --key "Use One Wallet" true
+  kwriteconfig6 --file kwalletrc --group "Auto Allow" --key kdewallet "kioworker,kded6,KDE Wallet Manager,Dolphin,dolphin"
+  # Discover's Flatpak part looks at the system-wide installation too, and asks root's password through
+  # polkit to create its repository if it isn't there (Oct 23: "Authentication is required to modify a
+  # system repository"; this user has no password, only sudo). So: the system repository made once, and a
+  # polkit rule letting this user do Flatpak's system actions without a password (it has root anyway).
+  # Discover's firmware part (fwupd) asked the same way to refresh its remote (firmware updates mean nothing
+  # in a VM; a masked fwupd made Discover show "unit is masked" instead), so Discover runs with its Flatpak
+  # backend only: this user's copy of its launcher says so (what the menu and the panel start).
+  sudo -n flatpak --system remote-list >/dev/null 2>&1 || true
+  if ! sudo -n grep -q "\"$USER\".*fwupd\|fwupd.*\"$USER\"" /etc/polkit-1/rules.d/50-portalistic.rules 2>/dev/null; then
+    printf '// Portalistic: the bottle'"'"'s user (who has sudo without a password) may manage Flatpak system-wide,\n// and fwupd (off in the VM) never asks.\npolkit.addRule(function(action, subject) {\n  if ((action.id.indexOf("org.freedesktop.Flatpak.") == 0 || action.id.indexOf("org.freedesktop.fwupd.") == 0) && subject.user == "%s") { return polkit.Result.YES; }\n});\n' "$USER" \
+      | sudo -n tee /etc/polkit-1/rules.d/50-portalistic.rules >/dev/null 2>&1 || true
+  fi
+  sudo -n systemctl unmask fwupd.service fwupd-refresh.timer fwupd-refresh.service >/dev/null 2>&1 || true
+  mkdir -p "$apps"
+  if [[ -f /usr/share/applications/org.kde.discover.desktop ]]; then
+    sed 's|^Exec=plasma-discover\(.*\)$|Exec=plasma-discover --backends flatpak-backend\1|' /usr/share/applications/org.kde.discover.desktop > "$apps/org.kde.discover.desktop.tmp" \
+      && mv -f "$apps/org.kde.discover.desktop.tmp" "$apps/org.kde.discover.desktop"
+  fi
   for prof in AC Battery LowBattery; do
     kwriteconfig6 --file powerdevilrc --group "$prof" --group Display --key TurnOffDisplayWhenIdle false
     kwriteconfig6 --file powerdevilrc --group "$prof" --group Display --key DimDisplayWhenIdle false
@@ -426,7 +476,10 @@ cmd_on() {
   # the Game Mode window manager makes way for KWin
   for wm in openbox xfwm4; do for i in $(on_display "$wm"); do kill "$i" 2>/dev/null; done; done
   sleep 0.5
-  spawn dbus-run-session -- sh -c 'echo "$DBUS_SESSION_BUS_ADDRESS" > "$1"; exec startplasma-x11' _ "$BUS_FILE"
+  # Qt Quick's animations are paced by the screen's refresh rate; the VM's screen (Xvnc) reports none, so
+  # with the default render loop the panel's spinners and fades ran several times too fast (Oct 23). The
+  # "basic" loop paces them by the clock instead.
+  spawn env QSG_RENDER_LOOP=basic dbus-run-session -- sh -c 'echo "$DBUS_SESSION_BUS_ADDRESS" > "$1"; exec startplasma-x11' _ "$BUS_FILE"
   for i in $(seq 1 120); do plasma_running && break; sleep 0.5; done
   if ! plasma_running; then
     say "Plasma didn't start (see $LOG); back to Game Mode." >&2
@@ -479,6 +532,50 @@ cmd_steam() {
   fi
 }
 
+# Network shares (Oct 23). Dolphin opens smb://SERVER/share and nfs://SERVER/path (kio-extras, with
+# samba-client-libs); a mount for programs is `sudo mount -t cifs` (cifs-utils). Bonjour names (nas.local)
+# don't resolve here: the VM is behind the Mac's NAT, and multicast doesn't cross it. So the Mac looks the
+# servers up (dns-sd, in the watcher every few minutes) and sends "IP NAME.local SERVICES" lines here:
+# they go into /etc/hosts (between our markers), and each server gets an entry in Dolphin's Network
+# place (~/.local/share/remoteview/NAME.desktop, what KDE's "Add Network Folder" makes), as
+# smb://NAME.local/ (or nfs://, afp:// has no KIO worker). Stdin: the lines; none = take them all out.
+cmd_lan_hosts() {
+  local lines ip name services tmp rv="$HOME/.local/share/remoteview" f kept=""
+  lines="$(cat)"
+  tmp="$(mktemp)"
+  { sed '/^# portalistic-lan start$/,/^# portalistic-lan end$/d' /etc/hosts
+    if [[ -n "$lines" ]]; then
+      echo "# portalistic-lan start"
+      while read -r ip name services; do
+        [[ "$ip" =~ ^[0-9.]+$ && "$name" =~ ^[A-Za-z0-9._-]+$ ]] || continue
+        if [[ "$name" == *.local ]]; then printf '%s %s %s\n' "$ip" "$name" "${name%.local}"; else printf '%s %s\n' "$ip" "$name"; fi
+      done <<<"$lines"
+      echo "# portalistic-lan end"
+    fi
+  } > "$tmp" 2>/dev/null
+  if ! cmp -s "$tmp" /etc/hosts; then sudo -n cp "$tmp" /etc/hosts 2>/dev/null || true; fi
+  rm -f "$tmp"
+  mkdir -p "$rv"
+  while read -r ip name services; do
+    [[ "$ip" =~ ^[0-9.]+$ && "$name" =~ ^[A-Za-z0-9._-]+$ ]] || continue
+    local url="" label="${name%.local}"
+    case ",$services," in
+      *,smb,*) url="smb://$name/" ;;
+      *,nfs,*) url="nfs://$name/" ;;
+      *,sftp,*) url="sftp://$name/" ;;
+      *) continue ;;
+    esac
+    f="$rv/portalistic-$label.desktop"
+    kept="$kept $f"
+    printf '[Desktop Entry]\nIcon=folder-remote\nName=%s\nType=Link\nURL=%s\nX-Portalistic=lan\n' "$label" "$url" > "$f.tmp" && mv -f "$f.tmp" "$f"
+  done <<<"$lines"
+  for f in "$rv"/portalistic-*.desktop; do   # servers that went
+    [[ -f "$f" ]] || continue
+    case " $kept " in *" $f "*) ;; *) rm -f "$f" ;; esac
+  done
+  return 0
+}
+
 case "${1:-}" in
   status)    cmd_status ;;
   install)   cmd_install ;;
@@ -487,6 +584,7 @@ case "${1:-}" in
   configure) cmd_configure ;;
   look)      cmd_look ;;
   places)    sync_places ;;
+  lan-hosts) cmd_lan_hosts ;;
   steam)     cmd_steam ;;
-  *) echo "usage: bottle-session status | install | on | off | configure | steam" >&2; exit 2 ;;
+  *) echo "usage: bottle-session status | install | on | off | configure | lan-hosts | steam" >&2; exit 2 ;;
 esac

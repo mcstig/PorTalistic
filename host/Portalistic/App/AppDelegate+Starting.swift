@@ -29,6 +29,8 @@ extension AppDelegate {
             if conn.serverVersion >= 2 { hostStats.start() }
             if !rebuilding { setStartScreen(false) }
             window.makeFirstResponder(view)
+            showFirstStartTipsIfNew()            // (once per Mac: what to expect from games)
+            LocalNetworkAccess.shared.ask()      // (macOS's local-network permission, for the LAN's file servers)
         } else if !rebuilding {
             hostStats.stop()
             // A restart of the VM's screen server (an update) comes back within seconds.

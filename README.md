@@ -43,7 +43,8 @@ Proton like the rest.
 - When a game captures the mouse, ⌘Esc frees it; a click captures it again.
 - Game controllers connected to the Mac (Bluetooth or USB) work in games as Xbox controllers.
 - **Steam > Switch to Desktop Mode…** gives you a Linux desktop, like the Steam Deck's;
-  **Switch to Game Mode** goes back.
+  **Switch to Game Mode** goes back. Its file manager reaches the file servers on your network
+  (Network, in its sidebar).
 - **Steam > Restart Steam**, **Update the VM** and **Shut Down the VM** do what they say;
   **Save Logs** writes a file to send with a bug report.
 

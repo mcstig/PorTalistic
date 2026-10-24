@@ -92,7 +92,7 @@
 #                             runs, the watcher warns in the app when the Mac has under 10 GB
 #                             free (BOTTLE_DISK_LOW_GB), and under 3 GB (BOTTLE_DISK_STOP_GB) stops
 #                             a Steam download that's filling the VM's disk
-#   bottle disk grow [GB]     make the VM's disk bigger (default: 10 GB more; stops and restarts the VM)
+#   bottle disk grow [GB]     make the VM's disk bigger (default: 5 GB more; stops and restarts the VM)
 #   bottle disk clean         clear package caches, old system logs, crash dumps, huge game logs
 #   bottle memory [GB]        the VM's memory (restarts the VM); no argument: how much it has, and
 #                             what's suggested (half the Mac's under 24 GB, 4-8 GB; a third from
@@ -296,7 +296,12 @@ krunkit_has_kk() {
 }
 
 vm_start() {
-  local icd=""
+  local icd="" grow
+  # a grow the watcher noted (vm_disk_grow_wanted): before the VM starts
+  if [[ "$(vm_status)" != Running && -s "$STATE_DIR/disk-grow-wanted" ]]; then
+    grow="$(cat "$STATE_DIR/disk-grow-wanted")"; rm -f "$STATE_DIR/disk-grow-wanted"
+    [[ "$grow" =~ ^[0-9]+$ ]] && (( grow > $(vm_disk_gb) )) && { info "The VM's disk was almost full: growing it to ${grow} GB first."; disk_grow "$grow" || true; }
+  fi
   icd="$(kk_icd || true)"
   if [[ "$(vm_status)" == Running ]]; then
     if [[ -n "$icd" ]] && ! krunkit_has_kk; then
@@ -419,12 +424,32 @@ steam_start() {  # $1 = 1 for --debug
     info "Debug mode: game log in ~/steam-<appid>.log (bottle log), FPS counter in games."
   fi
   info "Starting Steam…"
-  # Detached from this shell: Steam keeps running after the command returns.
+  # Detached from this shell: Steam keeps running after the command returns. Then a check that a Steam
+  # is really up: a start that met the remains of the previous Steam exits in 0 s ("another instance"),
+  # and is done again once those are gone (Oct 23).
   vsh env ${envs[@]+"${envs[@]}"} bash -c '
-    L=~/.config/steamos-bottle/steam.log
+    L=~/.config/steamos-bottle/steam.log; T=~/.config/steamos-bottle/steam-timing.log
     mkdir -p ~/.config/steamos-bottle
-    [ -f "$L" ] && mv -f "$L" "$L.1"
-    setsid -f steam-arm64 </dev/null >"$L" 2>&1'
+    start() { [ -f "$L" ] && mv -f "$L" "$L.1"; setsid -f steam-arm64 </dev/null >"$L" 2>&1; }
+    before="$(wc -l < "$T" 2>/dev/null || echo 0)"
+    start
+    for try in 1 2; do
+      for _ in $(seq 1 30); do
+        sleep 1
+        new="$(tail -n +"$(( before + 1 ))" "$T" 2>/dev/null | grep -c "session: [0-9]s exit=0" || true)"
+        if [ "${new:-0}" -gt 0 ]; then break; fi            # (it quit at once: another instance was there)
+        pgrep -f "[s]teamrtarm64/steam" >/dev/null && exit 0  # up
+      done
+      [ "$try" = 2 ] && break
+      echo "$(date -Is) a Steam quit at once (another instance still closing): waiting, then starting again" >> "$T"
+      for _ in $(seq 1 40); do
+        pgrep -x steamwebhelper >/dev/null 2>&1 || pgrep -f "[s]teamrtarm64/" >/dev/null 2>&1 || break
+        sleep 1
+      done
+      before="$(wc -l < "$T" 2>/dev/null || echo 0)"
+      start
+    done
+    true'
 }
 
 steam_stop() {
@@ -434,8 +459,15 @@ steam_stop() {
     mkdir -p ~/.cache/steamos-bottle && touch ~/.cache/steamos-bottle/steam-stopped
     pkill -9 -f "[w]ineserver|[w]ine64|[w]ine-preloader|[.]exe" 2>/dev/null
     pkill -TERM -f "[s]teamrtarm64/steam" 2>/dev/null || exit 0
-    for _ in $(seq 1 20); do pgrep -f "[s]teamrtarm64/steam" >/dev/null || exit 0; sleep 1; done
-    pkill -KILL -f "[s]teamrtarm64/steam" 2>/dev/null; true'
+    for _ in $(seq 1 20); do pgrep -f "[s]teamrtarm64/steam" >/dev/null || break; sleep 1; done
+    pgrep -f "[s]teamrtarm64/steam" >/dev/null && pkill -KILL -f "[s]teamrtarm64/steam" 2>/dev/null
+    # the rest of Steam (its web helpers, the process its pid file names): a new Steam started before
+    # they are gone sees "another instance" and quits at once (Oct 23, Desktop Mode: Restart Steam
+    # left no Steam). Up to 30 s more; then they are ended.
+    gone() { ! pgrep -x steamwebhelper >/dev/null 2>&1 && ! pgrep -f "[s]teamrtarm64/" >/dev/null 2>&1 \
+             && { p="$(cat ~/.steam/steam.pid 2>/dev/null)"; [ -z "$p" ] || ! kill -0 "$p" 2>/dev/null; }; }
+    for _ in $(seq 1 30); do gone && exit 0; sleep 1; done
+    pkill -KILL -x steamwebhelper 2>/dev/null; pkill -KILL -f "[s]teamrtarm64/" 2>/dev/null; true'
 }
 
 port_listening() { lsof -nP -iTCP:"$VNC_PORT" -sTCP:LISTEN >/dev/null 2>&1; }
@@ -1338,13 +1370,13 @@ disk_clean() {
   echo "In the VM now: $(( $(vm_disk_free_kb) / 1048576 )) GB free"
 }
 
-disk_grow() {  # $1 = new size in GB (default: 10 GB more). Safe to run again: it finishes a grow
+disk_grow() {  # $1 = new size in GB (default: 5 GB more). Safe to run again: it finishes a grow
   local want="${1:-}" cur free started=1 restart=0 startlog="$STATE_DIR/vm-start.log"
   need_vm
-  [[ -z "$want" || "$want" =~ ^[0-9]+$ ]] || die "usage: bottle disk grow [GB]   (default: 10 GB more)"
+  [[ -z "$want" || "$want" =~ ^[0-9]+$ ]] || die "usage: bottle disk grow [GB]   (default: 5 GB more)"
   mkdir -p "$STATE_DIR"
   cur="$(vm_disk_gb)"
-  [[ -n "$want" ]] || want=$(( cur + 10 ))
+  [[ -n "$want" ]] || want=$(( cur + 5 ))
   audio_stop
   awake_stop
   if (( want > cur )); then
@@ -1568,6 +1600,13 @@ lib_moved_cleanup() {  # the folders' copies of games the VM moved into their dr
       rm -f "$list"
     fi
     (( n > 0 )) && echo "$(date '+%F %T') $label: deleted the folder's copies of $n game(s) moved into its drive"
+    # the folder's leftover structure from before its drive (empty game dirs, Steam's old marker), once
+    # nothing is left to move: only empty directories go (rmdir), the drive's image and the marker stay
+    if [[ -f "$path/$LIB_IMAGE" && ! -s "$path/steamapps/.moved-into-drive" && ! -s "$path/.moved-into-drive" ]]; then
+      for dir in common compatdata downloading shadercache temp workshop; do rmdir "$path/steamapps/$dir" 2>/dev/null || true; done
+      for dir in "steamapps" "GOG Games" "Epic Games"; do rmdir "$path/$dir" 2>/dev/null || true; done
+      [[ ! -d "$path/steamapps" && -f "$path/libraryfolder.vdf" ]] && rm -f "$path/libraryfolder.vdf"
+    fi
   done < <(lib_rows)
   return 0
 }
@@ -1862,7 +1901,7 @@ disk_guard() {  # $1 = what Steam does: game, download, idle
 }
 
 # ---- the VM's own disk (the watcher, every round) ----
-# Since 0.7.0.1 a new VM's disk is 20 GB (VM_DISK_GB): Linux, Steam, Proton and its runtimes,
+# Since 0.7.0.1 a new VM's disk is 20 GB, 25 from Oct 23 (VM_DISK_GB; it grows when low, see vm_disk_grow_wanted): Linux, Steam, Proton and its runtimes,
 # which need a case-sensitive disk; games go in game folders. Steam checks a game's size before
 # installing it there, but caches, logs, crash dumps and shader caches grow by themselves, and a
 # full disk stops Steam and the desktop. Under BOTTLE_VMDISK_LOW_GB (3) free, the watcher clears
@@ -1891,7 +1930,49 @@ vm_disk_guard() {  # $1 = what Steam does: game, download, idle; $2 = the VM dis
   [[ "$free_kb" =~ ^[0-9]+$ ]] || return 0
   echo "$(date '+%F %T') the VM's disk now has $(( free_kb / 1024 )) MB free"
   (( free_kb < low )) || return 0
+  # Oct 23: the disk grows by itself (5 GB more, taking Mac space only as it fills) when the Mac has
+  # the room: at once when nothing runs (the VM restarts: a minute), else at the VM's next start.
+  if vm_disk_grow_wanted "$1"; then return 0; fi
   vm_notice 1 30 "The VM's disk is almost full ($(( free_kb / 1048576 )) GB left)" "It holds Linux, Steam and Proton; games go in a game folder (Game Folders > Show Game Folders): set Install to a game folder when you install one. Or make the disk bigger: bottle disk grow."
+}
+# -> 0 when a grow was done or noted for the next start
+VG_GROWN=0
+vm_disk_grow_wanted() {  # $1 = what Steam does
+  local cur want free now
+  [[ "${BOTTLE_VMDISK_AUTOGROW:-1}" != 0 ]] || return 1
+  now="$(date +%s)"
+  (( now - VG_GROWN >= 86400 )) || return 1
+  cur="$(vm_disk_gb)"; [[ "$cur" =~ ^[0-9]+$ ]] || return 1
+  (( cur < 100 )) || return 1
+  want=$(( cur + 5 ))
+  free="$(mac_free_gb)"; [[ "$free" =~ ^[0-9]+$ ]] && (( free >= 30 )) || return 1
+  VG_GROWN="$now"
+  # the user decides (a kind-3 notice: the app asks; Make the Disk Bigger runs `bottle disk grow`):
+  # BOTTLE_VMDISK_AUTOGROW=auto grows without asking, at once when nothing runs, else at the next start
+  if [[ "${BOTTLE_VMDISK_AUTOGROW:-1}" == auto ]]; then
+    if [[ "$1" == idle ]]; then
+      echo "$(date '+%F %T') the VM's disk is almost full: growing it from ${cur} to ${want} GB now (nothing runs)"
+      vm_notice 0 60 "Making the VM's disk bigger (${cur} → ${want} GB)" "It was almost full. Steam restarts in about a minute; it takes Mac space only as it fills."
+      ( disk_grow "$want" >>"$STATE_DIR/disk-grow.log" 2>&1; cmd_up >>"$STATE_DIR/disk-grow.log" 2>&1 ) &
+      return 0
+    fi
+    echo "$want" > "$STATE_DIR/disk-grow-wanted"
+    echo "$(date '+%F %T') the VM's disk is almost full: it grows to ${want} GB at the VM's next start"
+    vm_notice 1 45 "The VM's disk is almost full" "It grows by 5 GB the next time the VM starts (Steam > Shut Down the VM, then Start the VM). Games go in a game folder, not here."
+    return 0
+  fi
+  echo "$(date '+%F %T') the VM's disk is almost full (${cur} GB, $(( $(vm_disk_free_kb) / 1024 )) MB free): asking what to do"
+  vm_notice 3 0 "The VM's disk is almost full" "It is ${cur} GB and holds Linux, Steam and Proton$( vm_homegames_names )."
+  return 0
+}
+# the games on the VM's own disk, for the question above: ", and these games: A, B" or nothing
+vm_homegames_names() {
+  local names
+  # shellcheck disable=SC2016  # runs in the VM
+  names="$(vsh_for 20 bash -c 'for m in ~/.local/share/Steam/steamapps/appmanifest_*.acf; do [ -f "$m" ] || continue; n="$(awk -F\" "\$2 == \"name\" {print \$4; exit}" "$m")"; case "$n" in Proton*|"Steam Linux Runtime"*|SteamLinuxRuntime*|"Steamworks Common"*|FEX*|"") ;; *) printf "%s, " "$n" ;; esac; done' 2>/dev/null || true)"
+  names="${names%, }"
+  [[ -n "$names" ]] && printf ', and these games: %s' "$names"
+  return 0
 }
 
 # ---- Steam's two runaway logs (the watcher, every round, and bottle disk clean) ----
@@ -2001,7 +2082,8 @@ homegames_guard() {  # $1 = what Steam does (game, download, idle), $2 = the VM'
   else
     title="$n games can't be installed on the Linux system's drive"
   fi
-  text="That drive (20 GB) holds Linux, Steam and Proton, so Portalistic cancelled the install and deleted what was downloaded. Install it again in Steam and set Install to a game folder (Mac)."
+  local deflabel; deflabel="$(lib_find "$(lib_key default)" | cut -f2)"
+  text="Installing games there isn't a good idea: that drive ($(vm_disk_gb) GB) holds Linux, Steam and Proton, fills up fast and slows everything down. Portalistic cancelled the install and deleted what was downloaded. Install it again and, in Steam's install dialog, set Install to a game folder (${deflabel:-Mac})."
   vm_notice 1 90 "$title" "$text"
 }
 # <<< homegames
@@ -2182,6 +2264,16 @@ if [ -n "$pmp" ]; then
     done
   elif ! pgrep -f "[w]ineserver" >/dev/null 2>&1; then
     command -v bottle-steamplay >/dev/null 2>&1 && bottle-steamplay pending 2>/dev/null
+    # Steam signed out by Valve because the account signed in elsewhere ("Session Replaced": it doesn't
+    # sign in again by itself, and installs then say "no internet connection"): "steamoff TAB HH:MM"
+    pmcl="$HOME/.local/share/Steam/logs/connection_log.txt"
+    if [ -f "$pmcl" ]; then
+      # (the last sign-in or "Session Replaced", whichever came later)
+      pmst="$(grep -E "RecvMsgClientLogOnResponse\(\) : processing complete|not auto reconnecting due to Session Replaced" "$pmcl" 2>/dev/null | tail -n 1)"
+      case "$pmst" in
+        *"Session Replaced"*) printf 'steamoff\t%s\n' "$(printf '%s' "$pmst" | sed -n 's/^\[[0-9-]* \([0-9:]*\)\].*/\1/p' | cut -c1-5)" ;;
+      esac
+    fi
     # a connected game folder that Steam's library list doesn't have (Steam's first start after an
     # install came before the folder could be added; Settings > Storage dropped it): "libmissing TAB name"
     if [ -f "$HOME/.config/steamos-bottle/libraries.json" ] && [ -f "$HOME/.local/share/Steam/steamapps/libraryfolders.vdf" ]; then
@@ -2222,6 +2314,7 @@ playmap_guard() {  # $1 = what Steam does (game, download, idle), $2 = the VM's 
       if (( ${#PM_NOTICED} > 400 )); then PM_NOTICED="${PM_NOTICED: -200}"; fi
     done <<<"$lines"
   fi
+  steamoff_guard "$lines" || true   # Steam signed out because the account signed in elsewhere: say so
   libs_guard "$state" "$lines" && return 0   # (Steam just restarted for a game folder: this round is done)
   [[ "${BOTTLE_PLAYMAP:-1}" != 0 ]] || return 0
   grep -q '^pending' <<<"$lines" || return 0
@@ -2270,6 +2363,18 @@ playmap_guard() {  # $1 = what Steam does (game, download, idle), $2 = the VM's 
   text="It had installed the Linux version, which can't run on this Mac. Steam now uses the Windows version, so Play works. It may download the game again."
   vm_notice 0 75 "$title" "$text"
 }
+# Steam signed out by Valve ("Session Replaced": the account signed in on another computer; Steam doesn't
+# sign in again by itself, the store still shows, and an install says "no internet connection"; Oct 23,
+# 01:08 on the dev Mac after the M1 signed in). A banner, once per such log-off.
+SO_TOLD=""
+steamoff_guard() {  # $1 = the VM's lines (see playmap_cmd)
+  local at
+  at="$(grep '^steamoff' <<<"$1" | head -n 1 | cut -f2 || true)"
+  [[ -n "$at" && "$SO_TOLD" != "$at" ]] || return 0
+  SO_TOLD="$at"
+  echo "$(date '+%F %T') Steam was signed out at $at (the account signed in elsewhere): telling the player"
+  vm_notice 1 90 "Steam is signed out here" "Your account signed in on another computer at $at, so Steam here lost its session: installs say there's no internet. Steam > Restart Steam signs in again (the other computer is signed out then)."
+}
 # A game folder Steam doesn't list although it's connected (Oct 23: Michael reinstalled Portalistic on the
 # M1 without deleting the games; Steam's first start, which installs Steam, comes before bottle-libraries
 # can add the folder, so the games weren't there). With Steam up a minute and no game running: Steam
@@ -2309,6 +2414,82 @@ libs_guard() {  # $1 = what Steam does, $2 = the VM's lines (see playmap_cmd)
 }
 # <<< playmap
 
+# ---- the LAN's file servers, for the Linux desktop (Oct 23) ----
+# The VM is behind the Mac's NAT, so Bonjour (multicast) never reaches it and nas.local doesn't resolve
+# there. The Mac asks Bonjour itself (dns-sd: SMB, NFS and SFTP servers), resolves each to an address,
+# and the watcher sends the list to the VM every 5 minutes (bottle-session lan-hosts: /etc/hosts and
+# Dolphin's Network place). BOTTLE_LAN_HOSTS=0 turns it off.
+LAN_ROUND=0
+LAN_SENT=""
+lan_hosts_scan() {  # "IP NAME.local SERVICES" per server, SERVICES like smb,nfs
+  local type svc t inst host ip line out="" seen=""
+  command -v dns-sd >/dev/null || return 0
+  for type in _smb._tcp:smb _nfs._tcp:nfs _sftp-ssh._tcp:sftp; do
+    svc="${type#*:}"; t="${type%:*}"
+    t="$(dns_sd_for 2 -B "$t" local. | awk '/ Add / {n = index($0, $7); print substr($0, n)}' | sort -u)"
+    while IFS= read -r inst; do
+      [[ -n "$inst" ]] || continue
+      host="$(dns_sd_for 2 -L "$inst" "${type%:*}" local. | sed -n 's/.*can be reached at \([^ :]*\.local\)\.:[0-9]*.*/\1/p' | head -n 1)"
+      [[ -n "$host" ]] || continue
+      case " $seen " in *" $host "*)
+        out="$(sed "s/^\([0-9.]*\) $host \(.*\)\$/\1 $host \2,$svc/" <<<"$out")"; continue ;;
+      esac
+      ip="$(dns_sd_for 2 -G v4 "$host." | awk -v h="$host." '$0 ~ " Add " && $0 ~ h && $6 !~ /^127\./ {print $6; exit}')"
+      # this Mac itself (Remote Login, File Sharing): the VM reaches it at Lima's host address
+      [[ -z "$ip" || "$ip" == 127.* ]] && { dns_sd_for 2 -G v4 "$host." | grep -q " Add .* $host\. *127\." && ip=192.168.5.2; }
+      [[ "$ip" =~ ^[0-9.]+$ ]] || continue
+      seen="$seen $host"
+      out="$out${out:+$'\n'}$ip $host $svc"
+    done <<<"$t"
+  done
+  # Windows PCs, routers and NAS without Bonjour (Finder finds them by Windows' own broadcasts, which
+  # don't cross into the VM either): every address of the Mac's network asked for SMB (port 445, 1 s,
+  # 60 at a time: a /24 takes about 5 s), then the server's own name (smbutil status). Networks bigger
+  # than /22 aren't swept.
+  local ifc mask base i t d name
+  ifc="$(route -n get default 2>/dev/null | awk '/interface:/ {print $2}')"
+  mask="$(ipconfig getoption "$ifc" subnet_mask 2>/dev/null)"
+  base="$(ipconfig getifaddr "$ifc" 2>/dev/null)"
+  if [[ "$mask" == 255.255.255.0 && "$base" =~ ^[0-9.]+\.[0-9]+$ ]] && command -v nc >/dev/null && command -v smbutil >/dev/null; then
+    d="$(mktemp -d "${TMPDIR:-/tmp}/lanscan.XXXXXX")"
+    base="${base%.*}"
+    for i in $(seq 1 254); do
+      ( nc -z -G 1 "$base.$i" 445 2>/dev/null && : > "$d/$i" ) </dev/null >/dev/null 2>&1 &
+      (( i % 60 == 0 )) && wait
+    done
+    wait
+    for t in "$d"/*; do
+      [[ -f "$t" ]] || continue
+      ip="$base.${t##*/}"
+      grep -q "^$ip " <<<"$out" && continue   # (Bonjour had it, with a better name)
+      name="$(smbutil status "$ip" 2>/dev/null | sed -n 's/^Server: //p' | head -n 1 | tr 'A-Z' 'a-z' | tr -cd 'a-z0-9._-')"
+      [[ -n "$name" ]] || name="smb-${ip##*.}"
+      out="$out${out:+$'\n'}$ip $name smb"
+    done
+    rm -rf "$d"
+  fi
+  printf '%s' "$out"
+}
+dns_sd_for() {  # $1 = seconds; the rest: dns-sd's arguments (it never ends by itself)
+  local secs="$1" p; shift
+  dns-sd "$@" 2>/dev/null </dev/null &
+  p=$!
+  ( sleep "$secs"; kill "$p" 2>/dev/null ) </dev/null >/dev/null 2>&1 &
+  wait "$p" 2>/dev/null || true
+}
+lan_hosts_push() {  # the servers to the VM (when the list changed, or $1 = force)
+  local list
+  [[ "${BOTTLE_LAN_HOSTS:-1}" != 0 ]] || return 0
+  list="$(lan_hosts_scan)"
+  [[ "$list" != "$LAN_SENT" || "${1:-}" == force ]] || return 0
+  # shellcheck disable=SC2016  # runs in the VM
+  vsh_for 30 bash -c 'command -v bottle-session >/dev/null || exit 0; printf %s "$1" | base64 -d | bottle-session lan-hosts' _ "$(printf '%s' "$list" | base64)" >/dev/null 2>&1 || return 0
+  LAN_SENT="$list"
+  [[ -n "$list" ]] && echo "$(date '+%F %T') file servers on the LAN sent to the VM: $(awk '{printf "%s%s", (NR > 1 ? ", " : ""), $2}' <<<"$list")"
+  return 0
+}
+# <<< lan
+
 # ---- the first launch on a Mac: Portalistic's Linux system (bottle setup) ----
 # A Mac without the VM gets Portalistic's ready-made Linux image (host/build-image.sh made it;
 # host/image.env says where it is, how big, and its checksum). Lima makes the VM from it; then the
@@ -2319,7 +2500,7 @@ libs_guard() {  # $1 = what Steam does, $2 = the VM's lines (see playmap_cmd)
 # ~/Games/Portalistic (bottle library). Downloads resume where they stopped.
 #   bottle setup [IMAGE]   IMAGE: a local image file instead of the download (development)
 IMAGE_ENV="$KIT_DIR/host/image.env"
-VM_DISK_GB="${BOTTLE_VM_DISK_GB:-20}"   # Linux, Steam, Proton (games go in game folders; see vm_disk_guard)
+VM_DISK_GB="${BOTTLE_VM_DISK_GB:-25}"   # Linux, Steam, Proton and its runtimes (games go in game folders; see vm_disk_guard); 20 until Oct 23; it grows when low
 mac_perf_cores() {
   local n all
   n="$(sysctl -n hw.perflevel0.physicalcpu 2>/dev/null || sysctl -n hw.physicalcpu 2>/dev/null || echo 4)"
@@ -2867,11 +3048,13 @@ cmd_steam_gpu() {
   local want="${1:-}" rc=0 since
   need_vm
   [[ "$(vm_status)" == Running ]] || die "The VM isn't running. Use: bottle start"
-  if [[ -z "$want" ]]; then
+  if [[ -z "$want" || "$want" == status ]]; then
     # shellcheck disable=SC2016  # runs in the VM
     if [[ "$(vsh bash -c 'cat ~/.config/steamos-bottle/steam-gpu 2>/dev/null')" == zink ]]; then
+      [[ "$want" == status ]] && { echo gpu; return 0; }   # (the app: which choice to grey out)
       info "Steam's interface: on the Mac's GPU (bottle steam-gpu off goes back)."
     else
+      [[ "$want" == status ]] && { echo cpu; return 0; }
       info "Steam's interface: on the VM's processors (bottle steam-gpu on tries the Mac's GPU)."
     fi
     return 0
@@ -2887,7 +3070,7 @@ cmd_steam_gpu() {
     gpu_auto_set off   # chosen by hand: not tried again by itself
     info "Restarting Steam with its interface on the VM's processors…"
   else
-    die "usage: bottle steam-gpu [on|off]"
+    die "usage: bottle steam-gpu [on|off|status]"
   fi
   desktop_start >/dev/null
   steam_stop
@@ -2896,7 +3079,7 @@ cmd_steam_gpu() {
   [[ "$want" == on ]] || { info "Done."; return 0; }
   # Big Picture must really show: else straight back, keeping the attempt's log.
   info "Checking that Big Picture shows on the Mac's GPU. Leave this running: the screen can stay"
-  info "black or blinking for up to three minutes (the first tries usually fail), and if it doesn't"
+  info "black or blinking for up to five minutes (the first tries usually fail), and if it doesn't"
   info "work Steam goes back as it was by itself."
   rc=0
   steam_screen_shows "$since" || rc=$?
@@ -2953,7 +3136,7 @@ steam_gpu_back() {
 # and put Steam back on the CPU just before the third try. No xwd: can't tell (yes).
 steam_screen_shows() {
   # shellcheck disable=SC2016  # runs in the VM
-  vsh_for 260 bash -c '
+  vsh_for 340 bash -c '
     export DISPLAY=:1
     since="$1"; W=~/.local/share/Steam/logs/webhelper.txt
     gl_failed() {
@@ -2989,7 +3172,7 @@ steam_screen_shows() {
       echo "  the shim saw Steam start its web helper ${n:-0} times (kopper.log)"
     }
     command -v xwd >/dev/null || exit 0
-    for _ in $(seq 1 150); do
+    for _ in $(seq 1 300); do   # (up to five minutes for Big Picture'"'"'s window; Oct 23, was 150 s)
       gl_failed && { snapshot "web helper: no OpenGL"; exit 3; }
       wmctrl -l 2>/dev/null | grep -q "Steam Big Picture Mode$" && break
       sleep 1
@@ -3185,6 +3368,8 @@ cmd_mode() {
       || die "The VM doesn't have Desktop Mode's tools yet. Run: bottle update"
   fi
   vsh bottle-session "$want"
+  [[ "$want" == on ]] && { lan_hosts_push force >/dev/null 2>&1 || true; }   # the LAN's file servers in Dolphin's Network place
+  return 0
 }
 
 cmd_wm() {
@@ -3445,6 +3630,9 @@ awake_loop() {
     lib_disks_tidy "$state" || true   # the game folders' drives: space back to the Mac, size to its free space
     disk_guard "$state" || true   # the Mac's free space (see disk_guard)
     vm_disk_guard "$state" "$(sed -n 's/^vmfree //p' <<<"$out" | head -n 1)" || true   # the VM's own disk
+    # the LAN's file servers for the Linux desktop, every 5 rounds (see lan_hosts_scan)
+    if (( LAN_ROUND % 5 == 0 )) && [[ "$state" != game ]]; then lan_hosts_push || true; fi
+    LAN_ROUND=$(( LAN_ROUND + 1 ))
     # a kit test asked for from outside (logs/.selftest holds its name): not while a game runs,
     # unless the test says it may ("# (selftest: may run during a game)", e.g. a screenshot)
     # (|| true: this script stops on any failing command, and no file is the usual case; the

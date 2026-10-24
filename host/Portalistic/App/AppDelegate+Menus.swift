@@ -13,20 +13,67 @@ extension AppDelegate {
     /// Steam's own interface (Big Picture) is drawn either on the Mac's GPU or on the Linux system's
     /// processor. Portalistic tries the GPU by itself and goes back if it can't; this lets people pick
     /// by hand, or try again after it went back.
+    /// Asks where Steam's interface should draw; the choice in use is shown greyed out (Oct 23:
+    /// choosing it again used to restart Steam for nothing). `bottle steam-gpu status` says which.
     @objc func chooseSteamInterface(_ sender: Any?) {
+        guard starter == nil, !activity.busy else { showActivity(nil); return }
+        let status = BottleCommand(["steam-gpu", "status"], log: "steam-gpu-status")
+        status.onExit = { [weak self] _ in
+            let now = status.lines.last(where: { $0 == "gpu" || $0 == "cpu" }) ?? ""
+            self?.askSteamInterface(current: now)
+        }
+        if !status.start() { askSteamInterface(current: "") }
+    }
+
+    private func askSteamInterface(current: String) {
         let alert = NSAlert()
         alert.messageText = "Where should Steam's interface be drawn?"
-        alert.informativeText = "On the Mac's GPU it is smoother and leaves the processor free. Portalistic tries that by itself "
-            + "and goes back to the processor if it doesn't work. Either way Steam restarts (about a minute, up to three "
+        var text = "On the Mac's GPU it is smoother and leaves the processor free. Portalistic tries that by itself "
+            + "and goes back to the processor if it doesn't work. Either way Steam restarts (about a minute, up to five "
             + "when it tries the GPU); a game that's running closes."
-        alert.addButton(withTitle: "Use the Mac's GPU")
-        alert.addButton(withTitle: "Use the Processor")
+        switch current {
+        case "gpu": text += "\n\nRight now it draws on the Mac's GPU."
+        case "cpu": text += "\n\nRight now it draws on the processor."
+        default: break
+        }
+        alert.informativeText = text
+        let gpu = alert.addButton(withTitle: current == "gpu" ? "Using the Mac's GPU" : "Use the Mac's GPU")
+        let cpu = alert.addButton(withTitle: current == "cpu" ? "Using the Processor" : "Use the Processor")
         alert.addButton(withTitle: "Cancel")
+        gpu.isEnabled = current != "gpu"
+        cpu.isEnabled = current != "cpu"
+        if current == "gpu" { cpu.keyEquivalent = "\r"; gpu.keyEquivalent = "" }
+        switch alert.runModal() {
+        case .alertFirstButtonReturn where current != "gpu":
+            activity.run("Steam's interface on the Mac's GPU", ["steam-gpu", "on"], log: "steam-gpu")
+        case .alertSecondButtonReturn where current != "cpu":
+            activity.run("Steam's interface on the processor", ["steam-gpu", "off"], log: "steam-gpu")
+        default:
+            break
+        }
+    }
+
+    /// The watcher found the VM's disk almost full (a kind-3 notice): the user chooses between a bigger
+    /// disk (5 GB more, the VM restarts) and moving games out of it in Steam's storage settings.
+    func askAboutVMDisk(title: String, detail: String) {
+        guard !askingAboutDisk else { return }
+        askingAboutDisk = true
+        defer { askingAboutDisk = false }
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = detail + "\n\nMake the disk 5 GB bigger (it takes Mac space only as it fills; Steam restarts, about a minute), "
+            + "or move the games that are on it to a game folder in Steam's storage settings (games only: Proton, the Steam Linux Runtimes and Steamworks belong on this disk)."
+        alert.addButton(withTitle: "Make the Disk Bigger")
+        alert.addButton(withTitle: "Move Games Out of It…")
+        alert.addButton(withTitle: "Not Now")
+        if #available(macOS 14.0, *) { NSApp.activate() } else { NSApp.activate(ignoringOtherApps: true) }
         switch alert.runModal() {
         case .alertFirstButtonReturn:
-            activity.run("Steam's interface on the Mac's GPU", ["steam-gpu", "on"], log: "steam-gpu")
+            activity.run("Making the VM's disk bigger", ["disk", "grow"], log: "disk-grow") { [weak self] code, _ in
+                if code == 0 { self?.activity.window?.orderOut(nil) }
+            }
         case .alertSecondButtonReturn:
-            activity.run("Steam's interface on the processor", ["steam-gpu", "off"], log: "steam-gpu")
+            runQuietly(["steam-url", "steam://settings/storage"], log: "settings", failure: "Steam's storage settings didn't open.")
         default:
             break
         }
@@ -95,6 +142,9 @@ extension AppDelegate {
         move.target = self
         move.isHidden = !Installation.canOfferMove          // (only a copy outside Applications offers it)
         appMenu.addItem(move)
+        let tips = NSMenuItem(title: "Good to Know…", action: #selector(showTipsMenu(_:)), keyEquivalent: "")
+        tips.target = self
+        appMenu.addItem(tips)
         let patreon = NSMenuItem(title: "Support Portalistic on Patreon", action: #selector(openPatreon(_:)), keyEquivalent: "")
         patreon.target = self
         appMenu.addItem(patreon)
