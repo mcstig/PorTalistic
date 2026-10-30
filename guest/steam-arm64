@@ -107,6 +107,15 @@ if [[ -z "${FEX_TSOENABLED:-}" ]] && command -v bottle-tso >/dev/null && timeout
   auto_vars+=(FEX_TSOENABLED)
   echo "x86 memory ordering: in hardware (Apple TSO; FEX_TSOENABLED=0)"
 fi
+# Wine's crash handler off (Oct 26): a Windows game that crashes starts winedbg, which under the
+# x86 translator sat for 6-7 minutes on a black screen (GWENT's Steam build, dying in galaxy64.dll),
+# with Shift+Tab and Esc dead meanwhile. Without it the crash ends at once and Portalistic says
+# why (bottle-whyquit). Proton merges this with its own overrides. WINEDLLOVERRIDES in steam.env
+# (or a game's launch options) replaces it.
+if [[ -z "${WINEDLLOVERRIDES:-}" ]]; then
+  export WINEDLLOVERRIDES="winedbg.exe=d"
+  auto_vars+=(WINEDLLOVERRIDES)
+fi
 # Steam's in-game overlay, while it's being brought up in the bottle (Oct 10): with
 # STEAM_OVERLAY_LOGGING=1 its game side writes what it does to /tmp/gameoverlayrenderer.<pid>.log
 # (the log export collects them). Set STEAM_OVERLAY_LOGGING in steam.env to change it.
@@ -318,7 +327,8 @@ if os.environ.get("ENABLE_VK_LAYER_VALVE_steam_overlay_1") == "1" and os.environ
         if os.environ.get("BOTTLE_OVERLAY_GL_TRACE") == "1" and os.path.exists(_t):
             _pre.append(_t)
         user_settings["LD_PRELOAD"] = ":".join(p for p in _pre + [_r] if p)
-# Per-game settings: KEY=VALUE lines in ~/.config/steamos-bottle/games/<appid>.env (yours) and
+# Per-game settings: KEY=VALUE lines in ~/.config/steamos-bottle/games/<appid>.env (yours), in the
+# fixes list'"'"'s output (~/.cache/steamos-bottle/fixes/games, bottle-fixes apply; Oct 26) and
 # in the kit (guest/games/<appid>.env, for games the bottle knows need something); yours win, and
 # a setting in the launch options or steam.env wins over both (this launcher'"'"'s own defaults
 # don'"'"'t). What was applied is noted in ~/.cache/steamos-bottle/game-logs/settings-<appid>.txt.
@@ -330,7 +340,7 @@ def _bottle_game_env():
     env = __main__.g_session.env
     home = os.environ["HOME"]
     vals = {}
-    for d in (os.path.join(home, ".cache/steamos-bottle/kit/guest/games"), os.path.join(home, ".config/steamos-bottle/games")):
+    for d in (os.path.join(home, ".cache/steamos-bottle/kit/guest/games"), os.path.join(home, ".cache/steamos-bottle/fixes/games"), os.path.join(home, ".config/steamos-bottle/games")):
         try:
             with open(os.path.join(d, app + ".env")) as fh:
                 for line in fh:
@@ -364,6 +374,46 @@ def _bottle_game_env():
         pass
 try:
     _bottle_game_env()
+except Exception:
+    pass
+# A game the fixes list says won'"'"'t run (or needs something first): say so as it starts, not only
+# after it quits (Oct 26: nobody should download 100 GB to learn that Forza can'"'"'t pass its copy
+# protection here). The game still gets to try, in case the list is out of date.
+def _bottle_launch_note():
+    import glob, re, time
+    app = os.environ.get("SteamGameId", "")
+    if not app.isdigit():
+        return
+    home = os.environ["HOME"]
+    try:
+        with open(os.path.join(home, ".cache/steamos-bottle/fixes/notes", app + ".txt")) as fh:
+            status, _, note = fh.read().strip().partition("\n")
+    except OSError:
+        return
+    if status not in ("wont-run", "unlikely", "needs-login", "crashes"):
+        return
+    name = "This game"
+    for m in glob.glob(os.path.join(home, ".local/share/Steam/steamapps/appmanifest_%s.acf" % app)) + glob.glob("/mnt/portalistic/*/steamapps/appmanifest_%s.acf" % app):
+        try:
+            with open(m, errors="replace") as fh:
+                found = re.search(r"\"name\"\s+\"([^\"]+)\"", fh.read())
+            if found:
+                name = found.group(1)
+                break
+        except OSError:
+            pass
+    kind, secs, title = {"wont-run": (1, 60, name + " won'"'"'t run here, as far as Portalistic knows"),
+                         "unlikely": (1, 60, name + " probably won'"'"'t run here"),
+                         "needs-login": (0, 30, name + ": a sign-in is needed"),
+                         "crashes": (0, 30, name + " is known to crash here")}[status]
+    d = os.path.join(home, ".cache/steamos-bottle/notices")
+    os.makedirs(d, exist_ok=True)
+    tmp = os.path.join(d, ".launch-" + app)
+    with open(tmp, "w") as fh:
+        fh.write("%d %d\n%s\n%s\n" % (kind, secs, title, note.strip() + ("\n\nIt starts anyway, in case the list is out of date." if status in ("wont-run", "unlikely") else "")))
+    os.rename(tmp, os.path.join(d, "launch-" + app + ".txt"))
+try:
+    _bottle_launch_note()
 except Exception:
     pass
 # A detailed log for a game that quit by itself within a minute last time
@@ -519,6 +569,8 @@ steamplay_setup() {
 stores_setup() {
   command -v bottle-stores >/dev/null || return 0
   bottle-stores sync || true
+  # the fixes list, applied after the shortcuts exist (a store game's entry needs its shortcut id)
+  command -v bottle-fixes >/dev/null && { bottle-fixes apply || true; }
 }
 # Portalistic's game folders (folders on the Mac or a drive, which the Mac shares with the VM at
 # /mnt/portalistic/NAME) as Steam libraries, Steam's tools moved off them, and the default

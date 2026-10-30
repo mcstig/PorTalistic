@@ -40,7 +40,7 @@ Proton like the rest.
 ## The window
 
 - Steam fills the window (Big Picture). ⌃⌘F is full screen.
-- When a game captures the mouse, ⌘Esc frees it; a click captures it again.
+- When a game captures the mouse, Control and Option pressed together (⌃⌥) free it; a click captures it again.
 - Game controllers connected to the Mac (Bluetooth or USB) work in games as Xbox controllers.
 - **Steam > Switch to Desktop Mode…** gives you a Linux desktop, like the Steam Deck's;
   **Switch to Game Mode** goes back. Its file manager reaches the file servers on your network

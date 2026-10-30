@@ -4,13 +4,28 @@
 
 import AppKit
 
+/// The notice's detail text: a click on it counts as a click on the banner (it's not selectable).
+final class NoticeText: NSTextView {
+    override func mouseDown(with event: NSEvent) {
+        if let banner = enclosingScrollView?.superview?.superview?.superview as? NoticeView { banner.mouseDown(with: event) }
+    }
+}
+
 final class NoticeView: NSView {
     private let title = NSTextField(wrappingLabelWithString: "")
-    private let detail = NSTextField(wrappingLabelWithString: "")
+    // (Oct 26) the detail scrolls when it's long: a fixes-list note under the diagnosis ran under the buttons
+    private let detail = NoticeText()
+    private let detailScroll = NSScrollView()
+    private var detailHeight: NSLayoutConstraint!
+    private var detailScrollWidth: NSLayoutConstraint!
+    private static let detailWidth: CGFloat = 560
+    private static let detailMaxHeight: CGFloat = 132   // about 8 lines
     private let icon = NSImageView()
     private var hideAt: Date = .distantPast
     private var hideTimer: Timer?
     private var onClick: (() -> Void)?
+    private let buttons = NSStackView()           // (Oct 26) buttons under the text: "Install it and try again", "Report this…"
+    private var actions: [() -> Void] = []
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -25,14 +40,36 @@ final class NoticeView: NSView {
         title.maximumNumberOfLines = 2
         detail.font = .systemFont(ofSize: 12)
         detail.textColor = NSColor(white: 0.82, alpha: 1)
-        detail.maximumNumberOfLines = 6
-        title.preferredMaxLayoutWidth = 560
-        detail.preferredMaxLayoutWidth = 560
+        detail.isEditable = false
+        detail.isSelectable = false
+        detail.drawsBackground = false
+        detail.textContainerInset = .zero
+        detail.textContainer?.lineFragmentPadding = 0
+        detail.textContainer?.widthTracksTextView = false
+        detail.textContainer?.containerSize = NSSize(width: NoticeView.detailWidth - 16, height: .greatestFiniteMagnitude)   // (room for the scroller)
+        detail.isVerticallyResizable = false
+        detail.isHorizontallyResizable = false
+        detail.frame = NSRect(x: 0, y: 0, width: NoticeView.detailWidth, height: 20)
+        detailScroll.documentView = detail
+        detailScroll.drawsBackground = false
+        detailScroll.hasVerticalScroller = true
+        detailScroll.autohidesScrollers = true
+        detailScroll.scrollerStyle = .overlay
+        detailScroll.verticalScrollElasticity = .none
+        detailHeight = detailScroll.heightAnchor.constraint(equalToConstant: 20)
+        // (wants 560; gives way in a narrow window instead of breaking the layout: Oct 27 log)
+        detailScrollWidth = detailScroll.widthAnchor.constraint(equalToConstant: NoticeView.detailWidth)
+        detailScrollWidth.priority = .defaultHigh
+        title.preferredMaxLayoutWidth = NoticeView.detailWidth
         icon.imageScaling = .scaleProportionallyUpOrDown
-        let text = NSStackView(views: [title, detail])
+        buttons.orientation = .horizontal
+        buttons.spacing = 8
+        buttons.isHidden = true
+        let text = NSStackView(views: [title, detailScroll, buttons])
         text.orientation = .vertical
         text.alignment = .leading
         text.spacing = 4
+        text.setCustomSpacing(10, after: detailScroll)
         let row = NSStackView(views: [icon, text])
         row.orientation = .horizontal
         row.alignment = .top
@@ -47,8 +84,9 @@ final class NoticeView: NSView {
             row.bottomAnchor.constraint(equalTo: bottomAnchor),
             icon.widthAnchor.constraint(equalToConstant: 22),
             icon.heightAnchor.constraint(equalToConstant: 22),
-            title.widthAnchor.constraint(lessThanOrEqualToConstant: 560),
-            detail.widthAnchor.constraint(lessThanOrEqualToConstant: 560),
+            title.widthAnchor.constraint(lessThanOrEqualToConstant: NoticeView.detailWidth),
+            detailScrollWidth,
+            detailHeight,
         ])
         isHidden = true
     }
@@ -63,11 +101,25 @@ final class NoticeView: NSView {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     /// Shows the notice for `seconds` (a newer one replaces it); onClick runs if it's clicked.
-    func show(problem: Bool, title t: String, detail d: String, seconds: Double, onClick: (() -> Void)? = nil) {
+    /// `choices`: (label, action) pairs shown as buttons; a notice with buttons stays until one is
+    /// pressed or the banner is clicked away (its timer is at least 2 minutes).
+    func show(problem: Bool, title t: String, detail d: String, seconds: Double, onClick: (() -> Void)? = nil,
+              choices: [(String, () -> Void)] = []) {
         self.onClick = onClick
         title.stringValue = t
-        detail.stringValue = d
-        detail.isHidden = d.isEmpty
+        setDetail(d)
+        buttons.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        actions = choices.map { $0.1 }
+        for (i, c) in choices.enumerated() {
+            let b = NSButton(title: c.0, target: self, action: #selector(choicePressed(_:)))
+            b.bezelStyle = .rounded
+            b.controlSize = .small
+            b.tag = i
+            if i == 0 { b.keyEquivalent = "\r" }
+            buttons.addArrangedSubview(b)
+        }
+        buttons.isHidden = choices.isEmpty
+        let seconds = choices.isEmpty ? seconds : max(seconds, 120)
         icon.image = NSImage(systemSymbolName: problem ? "exclamationmark.triangle.fill" : "info.circle.fill",
                              accessibilityDescription: nil)
         icon.contentTintColor = problem ? .systemYellow : .systemBlue
@@ -83,10 +135,34 @@ final class NoticeView: NSView {
                                          userInfo: nil, repeats: false)
     }
 
+    /// The detail text, its box as tall as the text up to about 8 lines (then it scrolls).
+    private func setDetail(_ d: String) {
+        detail.string = d
+        detail.textColor = NSColor(white: 0.82, alpha: 1)
+        detail.font = .systemFont(ofSize: 12)
+        detailScroll.isHidden = d.isEmpty
+        guard !d.isEmpty else { detailHeight.constant = 0; return }
+        let bounds = (d as NSString).boundingRect(with: NSSize(width: NoticeView.detailWidth - 16, height: 10000),
+                                                  options: [.usesLineFragmentOrigin, .usesFontLeading],
+                                                  attributes: [.font: NSFont.systemFont(ofSize: 12)])
+        let h = ceil(bounds.height) + 2
+        detail.frame = NSRect(x: 0, y: 0, width: NoticeView.detailWidth, height: h)
+        detailHeight.constant = min(h, NoticeView.detailMaxHeight)
+        detail.scroll(.zero)
+    }
+
     @objc private func timerFired() { dismiss() }
+
+    @objc private func choicePressed(_ sender: NSButton) {
+        // (take the action before dismiss() clears the list: Oct 26, the Report button did nothing)
+        let action = sender.tag < actions.count ? actions[sender.tag] : nil
+        dismiss()
+        action?()
+    }
 
     func dismiss() {
         onClick = nil
+        actions = []
         hideTimer?.invalidate()
         hideTimer = nil
         guard !isHidden else { return }

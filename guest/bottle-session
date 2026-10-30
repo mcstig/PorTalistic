@@ -108,7 +108,7 @@ cmd_install() {
   if [[ -z "$need" ]]; then say "Desktop Mode is installed."; cmd_configure; return 0; fi
   free="$(df -Pk / | awk 'NR == 2 {print int($4 / 1048576)}')"
   if (( free < 2 )); then
-    echo "error: Only $free GB are free in the VM's disk; Desktop Mode needs about 2. See: bottle disk" >&2
+    echo "error: Only $free GB are free in the VM's disk; Desktop Mode needs about 2. Make room in Steam's Settings > Storage (move or remove a game), then try again." >&2
     return 1
   fi
   if installed; then say "Downloading Desktop Mode's apps…"; else say "Downloading Desktop Mode (KDE Plasma and a few apps; about 550 MB)…"; fi

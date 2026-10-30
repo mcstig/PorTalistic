@@ -29,7 +29,7 @@ extension AppDelegate {
         startView.show("Welcome to Portalistic",
                        detail: "Steam runs in a small Linux system on this Mac. Setting it up downloads \(setupDownloadSize), "
                            + "then Steam installs itself and asks you to sign in. Games go in the Games folder in your home folder; "
-                           + "Game Folders > Add a Game Folder adds another folder or a drive.",
+                           + "Game Folders > Add a Game Folder… adds another folder or a drive.",
                        busy: false, button: "Set Up")
     }
 
@@ -51,7 +51,7 @@ extension AppDelegate {
         startView.show("Setting up Portalistic…", busy: true)
         if !c.start() {
             starter = nil
-            startView.show("Couldn't run the bottle command.", detail: BottleCommand.script ?? "", busy: false,
+            startView.show("Couldn't run Portalistic's helper script.", detail: BottleCommand.script ?? "", busy: false,
                            button: "Try Again")
         }
     }

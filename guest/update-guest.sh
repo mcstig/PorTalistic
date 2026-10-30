@@ -88,7 +88,7 @@ step() {  # step "description" command... : run, record failure, keep going (eac
 # --- Desktop packages --------------------------------------------------------
 desktop_packages() {
   local p missing=0
-  for p in tigervnc-server-minimal xkbcomp setxkbmap xkeyboard-config xprop xmodmap xset wmctrl xfwm4 python3; do
+  for p in tigervnc-server-minimal xkbcomp setxkbmap xkeyboard-config xprop xmodmap xset wmctrl xfwm4 python3 cabextract; do
     rpm -q "$p" >/dev/null 2>&1 && continue
     dnf install -y -q "$p" >/dev/null 2>&1 || { warn "  couldn't install $p"; missing=1; }
   done
@@ -294,6 +294,8 @@ tools() {
   install -m 0755 "$HERE/bottle-libraries" /usr/local/bin/bottle-libraries || return 1
   install -m 0755 "$HERE/bottle-splash"    /usr/local/bin/bottle-splash    || return 1
   install -m 0755 "$HERE/bottle-stores"    /usr/local/bin/bottle-stores    || return 1
+  install -m 0755 "$HERE/bottle-fixes"     /usr/local/bin/bottle-fixes     || return 1
+  install -m 0755 "$HERE/winetricks"       /usr/local/bin/winetricks       || return 1   # (Oct 26: runtimes a game asks for)
   install -m 0755 "$HERE/tso/bottle-tso"   /usr/local/bin/bottle-tso       || return 1
   install -d -m 0755 /usr/local/share/steamos-bottle/tso || return 1
   install -m 0644 "$HERE/tso/bottle_tso.c" /usr/local/share/steamos-bottle/tso/ || return 1
@@ -428,6 +430,33 @@ desktop_mode_settings() {
 # (x86 programs run outside Steam: the bottle's GPU checks. Steam's FEX brings its own settings
 # and runs games on /usr/share/guestos/fex-mesa.) The x86 system it runs on: the package's
 # compressed copy if there is one, else the unpacked one (Portalistic's image keeps only that).
+# FEX's x86 root file system mounted once, by the kernel (erofs, read-only), instead of by erofsfuse for
+# every x86 process (Oct 26): FEX printed "erofsfuse 1.9.4" on the stdout of every Wine/Proton process
+# (which broke Winetricks' parsing and could trip anything that reads a program's output), and FUSE is
+# slower than the kernel's page cache for the libraries games load. The mount is in fstab (nofail) and
+# the user's FEX config points at the directory.
+fex_rootfs_mount() {
+  local erofs dir
+  command -v FEXInterpreter >/dev/null 2>&1 || return 0
+  erofs="$(rpm -ql fex-emu-rootfs-fedora 2>/dev/null | grep -m1 '\.erofs$' || true)"
+  [[ -n "$erofs" && -f "$erofs" ]] || { echo "  no erofs root file system for FEX"; return 0; }
+  dir="${erofs%.erofs}"
+  mkdir -p "$dir"
+  if ! grep -q "^$erofs " /etc/fstab 2>/dev/null; then
+    echo "$erofs $dir erofs loop,ro,nofail,x-systemd.automount 0 0" >> /etc/fstab
+    systemctl daemon-reload 2>/dev/null || true
+  fi
+  if ! mountpoint -q "$dir"; then
+    mount -t erofs -o loop,ro "$erofs" "$dir" 2>/dev/null || { echo "  couldn't mount $erofs with the kernel; FEX keeps erofsfuse"; return 0; }
+  fi
+  echo "  $dir (kernel erofs)"
+  # the user's FEX config: the directory
+  local cfg="$TARGET_HOME/.fex-emu/Config.json"
+  if [[ -f "$cfg" ]] && grep -q "\"RootFS\": \"$erofs\"" "$cfg"; then
+    sed -i "s|\"RootFS\": \"$erofs\"|\"RootFS\": \"$dir\"|" "$cfg" && echo "  FEX's config now names the directory"
+  fi
+}
+
 fex_config() {
   local d="$TARGET_HOME/.fex-emu" rootfs
   command -v FEXInterpreter >/dev/null 2>&1 || return 0
@@ -435,6 +464,7 @@ fex_config() {
   rootfs="$(rpm -ql fex-emu-rootfs-fedora 2>/dev/null | grep -m1 '\.erofs$' || true)"
   [[ -n "$rootfs" && -f "$rootfs" ]] || rootfs="$GUEST_ROOTFS"
   [[ -e "$rootfs" ]] || { echo "  no x86 system for FEX"; return 0; }
+  [[ "$rootfs" == *.erofs && -d "${rootfs%.erofs}" ]] && mountpoint -q "${rootfs%.erofs}" && rootfs="${rootfs%.erofs}"   # (the kernel mount, see fex_rootfs_mount)
   install -d -o "$TARGET_USER" -g "$TARGET_USER" "$d" || return 1
   cat > "$d/Config.json" <<EOF
 {
@@ -510,6 +540,17 @@ sme_off() {
   grubby --update-kernel=ALL --args="arm64.nosme" && echo "  SME off from the next VM start"
 }
 
+# The journal kept small (Oct 26: 274 MB on the dev VM, unbounded): 64 MB, 14 days.
+journal_cap() {
+  mkdir -p /etc/systemd/journald.conf.d
+  if [[ ! -f /etc/systemd/journald.conf.d/portalistic.conf ]]; then
+    printf '[Journal]\nSystemMaxUse=64M\nMaxRetentionSec=14day\n' > /etc/systemd/journald.conf.d/portalistic.conf
+    systemctl restart systemd-journald 2>/dev/null || true
+  fi
+  journalctl --vacuum-size=64M >/dev/null 2>&1 || true
+  echo "  journal: $(journalctl --disk-usage 2>/dev/null | grep -o '[0-9.]*[MG]' | head -1 || echo '?') (64 MB at most)"
+}
+
 memtrim_off() {
   if [[ -f /etc/systemd/system/bottle-memtrim.service ]]; then
     systemctl disable --now bottle-memtrim.service >/dev/null 2>&1 || true
@@ -558,6 +599,7 @@ step "GOG downloader (gogdl) for bottle-stores" gogdl_install
 step "Epic downloader (Legendary) for bottle-stores" legendary_install
 step "Comet, the Galaxy sign-in for GOG games" comet_install
 step "Desktop Mode settings (only if it is installed)" desktop_mode_settings
+step "FEX's x86 root file system mounted by the kernel" fex_rootfs_mount
 step "FEX's settings" fex_config
 step "Sound server (silent output for games)" sound
 step "Game controllers from the Mac" controllers
@@ -572,6 +614,7 @@ step "vkd3d-proton $VKD3D_VER for DirectX 12 games" vkd3d_cache
 tso_build() { /usr/local/bin/bottle-tso build || warn "  the x86 ordering module couldn't be rebuilt; games keep FEX's own ordering"; return 0; }
 step "x86 memory ordering in hardware (only while bottle tso is on)" tso_build
 step "The file cache trimmer off (it came with crashes)" memtrim_off
+step "The journal kept small" journal_cap
 step "Apple's SME off for the Linux kernel (.NET programs crashed with it)" sme_off
 step "Present layer, arm64 build" env BOTTLE_SKIP_TESTS=1 bash "$HERE/present-layer/install.sh"
 if [[ -d "$GUEST_ROOTFS/usr/lib64" ]]; then

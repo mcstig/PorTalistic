@@ -956,6 +956,11 @@ def drop_gone(quiet=True):
                 continue
             if not Path(d).is_dir():
                 update_installed(store, gid, None)
+                if store == "gog":
+                    for m in (GOGDL_CONFIG / "heroic_gogdl/manifests").glob(str(gid) + "*"):
+                        m.unlink(missing_ok=True)
+                elif store == "epic":
+                    epic_forget_stale(str(gid))
                 say(f"{rec.get('title', gid)} ({store}): its folder is gone ({d}); no longer listed as installed")
                 n += 1
     return n
@@ -1183,11 +1188,37 @@ def copy_art(grid, games):
                 pass
 
 
-def run_download(cmd, env, progress):
+def download_pidfile(store, gid):
+    return STATE / f"dl-{store}-{gid}.pid"
+
+
+def was_stopped(store, gid):
+    """Whether `stop` ended the download that just returned (and forgets that)."""
+    m = download_pidfile(store, gid).with_suffix(".stopped")
+    if m.is_file():
+        m.unlink(missing_ok=True)
+        return True
+    return False
+
+
+def run_download(cmd, env, progress, name=None, where=None):
     """A downloader's run (gogdl, Legendary), its progress as @@ lines; progress is the regular expression
-    for its progress line (percent, parts done, parts, time left). -> (exit code, the last lines it said)."""
+    for its progress line (percent, parts done, parts, time left). -> (exit code, the last lines it said).
+    name ("gog-ID"): the download can be stopped from another process (stop_download): the downloader runs in
+    its own process group, written with `where` (the folder it fills) to STATE/dl-NAME.pid while it runs."""
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env,
-                            stdin=subprocess.DEVNULL, bufsize=0)
+                            stdin=subprocess.DEVNULL, bufsize=0, start_new_session=True)
+    pidfile = STATE / f"dl-{name}.pid" if name else None
+    if pidfile:
+        pidfile.write_text(f"{proc.pid}\n{where or ''}\n{int(time.time())}\n")
+    try:
+        return _read_download(proc, progress)
+    finally:
+        if pidfile:
+            pidfile.unlink(missing_ok=True)
+
+
+def _read_download(proc, progress):
     tail, buf, last_pct = [], b"", -1.0
     while True:
         chunk = proc.stdout.read1(4096) if hasattr(proc.stdout, "read1") else proc.stdout.read(4096)
@@ -1246,9 +1277,13 @@ def gog_install(args):
             "Free some space or pick another game folder.")
     say(f"Downloading {title}{f' ({human(need)})' if need else ''} to {choice['label']} / GOG Games / {info['folder_name']}")
     with locked("gog-" + gid):
+        gog_forget_manifest(gid, dest)
         code, tail = run_download(gogdl_cmd() + ["--auth-config-path", str(AUTH), "download", gid, "--path", str(base),
-                                                 "--platform", "windows", "--lang", lang], gogdl_env(), PROGRESS)
+                                                 "--platform", "windows", "--lang", lang], gogdl_env(), PROGRESS,
+                                  name="gog-" + gid, where=str(dest))
         if code != 0:
+            if was_stopped("gog", gid):
+                die("the download was stopped. Starting it again picks up what's done.")
             die(f"the download stopped ({tail[-1] if tail else 'exit ' + str(code)}). Starting it again picks up what's done.")
         task = play_task(dest)
         if task is None:
@@ -1270,6 +1305,87 @@ def gog_install(args):
     say(f"@@done {gid}")
     say(f"Installed {title}. It shows in Steam (collection “{GOG_TAG}”) after Steam restarts.")
     return 0
+
+
+def stop_download(store, gid, discard):
+    """Stop the running download of a game (the Pause and Stop buttons of the store windows). The
+    install command then ends with "the download stopped"; what's downloaded stays and a new install
+    picks it up, unless `discard`: then the half-downloaded folder goes too (an installed game's
+    folder is never touched)."""
+    pf = download_pidfile(store, gid)
+    if not pf.is_file():
+        say("Nothing is downloading for it.")
+        return 0
+    pf.with_suffix(".stopped").touch()   # the install command says it was stopped, not that it failed
+    lines = pf.read_text().splitlines() + ["", "", ""]
+    pid, where, since = int(lines[0] or 0), lines[1], int(lines[2] or 0)
+    if pid > 0:
+        try:
+            os.killpg(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        for _ in range(100):
+            try:
+                os.killpg(pid, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.1)
+        else:
+            try:
+                os.killpg(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            time.sleep(0.5)
+    say("Stopped the download." if not discard else "Stopped the download; deleting what came down…")
+    if discard and where:
+        known = {r.get("dir") for r in installed(store).values() if isinstance(r, dict)}
+        w = Path(where)
+        if store == "gog":
+            # gogdl fills the game's own folder (known up front) and keeps a record of it
+            if w.is_dir() and str(w) not in known and w.parent.name == "GOG Games":
+                shutil.rmtree(w, ignore_errors=True)
+            for m in (GOGDL_CONFIG / "heroic_gogdl/manifests").glob(str(gid) + "*"):
+                m.unlink(missing_ok=True)
+        else:
+            # Legendary names the folder itself, after the game's FolderName (its title failing that);
+            # also the dirs under "Epic Games" made since the start that no installed game owns
+            if w.is_dir() and w.name == "Epic Games":
+                meta = read_json(LGD_CONFIG / "metadata" / f"{gid}.json")
+                m = meta.get("metadata") if isinstance(meta.get("metadata"), dict) else {}
+                name = str(((m.get("customAttributes") or {}).get("FolderName") or {}).get("value") or "")
+                for d in w.iterdir():
+                    if d.is_dir() and str(d) not in known and (d.name == name or d.stat().st_ctime >= since - 5):
+                        shutil.rmtree(d, ignore_errors=True)
+            (LGD_CONFIG / f"{gid}.resume").unlink(missing_ok=True)
+    return 0
+
+
+def gog_stop(args):
+    return stop_download("gog", str(args.id), args.discard)
+
+
+def epic_stop(args):
+    return stop_download("epic", str(args.id), args.discard)
+
+
+def epic_forget_stale(app):
+    """Legendary's record of an earlier install whose folder is gone (deleted by hand, a drive wiped:
+    Oct 26, BioShock's reinstall failed with "No write access to /mnt/portalistic/ssd/Epic Games"
+    because Legendary still had it on the SSD): dropped, so the install starts afresh."""
+    rec = read_json(LGD_CONFIG / "installed.json").get(app)
+    if isinstance(rec, dict) and rec.get("install_path") and not Path(rec["install_path"]).is_dir():
+        legendary_run(["-y", "uninstall", "--keep-files", app], timeout=120)
+
+
+def gog_forget_manifest(gid, dest):
+    """gogdl keeps a record of what it installed (heroic_gogdl/manifests/ID) and installs only what
+    changed since. When the game's folder isn't there any more (deleted by hand, a drive wiped, an
+    install into another folder: Oct 26, GWENT and Blades of Time "downloaded" nothing and the
+    install failed with "no goggame-*.info"), that record is stale: drop it so everything comes down."""
+    if dest.is_dir() and any(dest.glob("goggame-*.info")):
+        return
+    for m in (GOGDL_CONFIG / "heroic_gogdl/manifests").glob(gid + "*"):
+        m.unlink(missing_ok=True)
 
 
 def gog_remove(args):
@@ -1644,11 +1760,14 @@ def epic_install(args):
     say(f"Downloading {title} to {choice['label']} / Epic Games")
     # (one at a time: Legendary keeps a single lock on its list of installed games)
     with locked("epic"):
+        epic_forget_stale(app)
         code, tail = run_download(
             legendary_cmd() + ["-y", "install", app, "--base-path", str(base), "--platform", "Windows",
                                "--skip-dlcs", "--skip-sdl", "--max-shared-memory", "512"],
-            legendary_env(), EPIC_PROGRESS)
+            legendary_env(), EPIC_PROGRESS, name="epic-" + app, where=str(base))
         if code != 0:
+            if was_stopped("epic", app):
+                die("the download was stopped. Starting it again picks up what's done.")
             die(f"the download stopped ({lgd_why(chr(10).join(tail))}). Starting it again picks up what's done.")
         igame = read_json(LGD_CONFIG / "installed.json").get(app)
         if not isinstance(igame, dict) or not igame.get("install_path"):
@@ -1879,6 +1998,7 @@ def main():
     p = g.add_parser("folders"); p.add_argument("--json", action="store_true"); p.set_defaults(fn=gog_folders)
     p = g.add_parser("install"); p.add_argument("id"); p.add_argument("--folder"); p.add_argument("--lang"); p.set_defaults(fn=gog_install)
     p = g.add_parser("remove"); p.add_argument("id"); p.add_argument("--purge", action="store_true"); p.set_defaults(fn=gog_remove)
+    p = g.add_parser("stop"); p.add_argument("id"); p.add_argument("--discard", action="store_true"); p.set_defaults(fn=gog_stop)
     e = sub.add_parser("epic").add_subparsers(dest="ecmd", required=True)
     p = e.add_parser("status"); p.add_argument("--json", action="store_true"); p.set_defaults(fn=epic_status)
     p = e.add_parser("login-url"); p.set_defaults(fn=lambda a: say(EPIC_LOGIN_URL) or 0)
@@ -1888,6 +2008,7 @@ def main():
     p = e.add_parser("folders"); p.add_argument("--json", action="store_true"); p.set_defaults(fn=gog_folders)
     p = e.add_parser("install"); p.add_argument("id"); p.add_argument("--folder"); p.set_defaults(fn=epic_install)
     p = e.add_parser("remove"); p.add_argument("id"); p.add_argument("--purge", action="store_true"); p.set_defaults(fn=epic_remove)
+    p = e.add_parser("stop"); p.add_argument("id"); p.add_argument("--discard", action="store_true"); p.set_defaults(fn=epic_stop)
     p = sub.add_parser("sync"); p.add_argument("--force", action="store_true"); p.set_defaults(fn=cmd_sync)
     p = sub.add_parser("adopt", help="records for GOG/Epic games already in the game folders (after a reinstall)"); p.set_defaults(fn=cmd_adopt)
     p = sub.add_parser("run", help="run a game with Comet (GOG) or Epic's sign-in beside it")

@@ -70,6 +70,9 @@
 #   bottle gog remove ID [--purge]
 #                             delete the game and its Steam entry (--purge: also its Wine prefix,
 #                             which holds its saves and settings); restarts Steam
+#   bottle gog stop ID [--discard]
+#                             stop a running download (it picks up where it left off at the next
+#                             install; --discard: delete what came down)
 #   bottle epic login-url     the address to sign in to Epic Games at (open it in a browser)
 #   bottle epic login TEXT    finish signing in: TEXT is what Epic's page shows after signing in
 #                             (it contains "authorizationCode"), or just that code
@@ -86,6 +89,8 @@
 #   bottle epic remove ID [--purge]
 #                             delete the game and its Steam entry (--purge: also its Wine prefix);
 #                             restarts Steam
+#   bottle epic stop ID [--discard]
+#                             stop a running download (--discard: delete what came down)
 #   bottle anticheat          install Valve's Proton EasyAntiCheat Runtime, which games with Easy
 #                             Anti-Cheat that allow Proton (Rocket League...) need; restarts Steam
 #   bottle disk               what fills the VM's disk, and the Mac's free space. While the VM
@@ -170,6 +175,20 @@
 # Written for macOS's bash 3.2.
 set -euo pipefail
 
+# Xcode's debugging settings, inherited when the app runs from Xcode: Metal's debug layer and GPU
+# capture interposer (MTL_DEBUG_LAYER=1, METAL_LOAD_INTERPOSER=1, MTLCAPTURE_*) reached krunkit
+# through limactl, so every Vulkan call of a game went through Metal's validation (Oct 27: CS2
+# froze for seconds on a map join, the Metal compiler busy throughout). Nothing a game needs.
+# (MTL_HUD_*, Metal's own frame counter, is left alone.)
+for _v in $(compgen -e); do
+  case "$_v" in
+    MTL_HUD_*) ;;
+    MTL_*|MTLCAPTURE_*|MTLREPLAYER_*|METAL_*|DYLD_*|__XPC_DYLD_*|__XPC_LLVM_*|MallocNanoZone|SQLITE_ENABLE_THREAD_ASSERTIONS|OS_ACTIVITY_*|CA_ASSERT_*|CA_DEBUG_*|IDE_DISABLED_OS_ACTIVITY_DT_MODE|NSZombieEnabled)
+      unset "$_v" ;;
+  esac
+done
+unset _v
+
 VM_NAME="${VM_NAME:-steamos-bottle}"
 VNC_PORT="${VNC_PORT:-5901}"
 STATE_DIR="${BOTTLE_STATE_DIR:-$HOME/.config/steamos-bottle}"   # (BOTTLE_STATE_DIR: a test VM's own)
@@ -214,10 +233,32 @@ else
   fi
 fi
 
-info() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
-warn() { printf '\033[1;33mwarn:\033[0m %s\n' "$*" >&2; }
-die()  { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
-err()  { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; }   # (and carry on)
+# Messages name Terminal commands ("Run: bottle update"); run by the app (BOTTLE_FROM_APP=1, which has
+# no bottle command for its users) they name the app's menu items instead (Oct 27: Michael got
+# "Run: bottle update" on the app's start, after the menu became Steam > Update the VM).
+app_words() {
+  if [[ "${BOTTLE_FROM_APP:-}" != 1 || "$*" != *bottle\ * ]]; then printf '%s' "$*"; return 0; fi
+  printf '%s' "$*" | sed -E \
+    -e 's/ \(or: bottle update\)//g' \
+    -e 's/ \(bottle audio off to stop\)//g' \
+    -e 's/, or: bottle update --now/, then choose Steam > Update the VM again/g' \
+    -e 's/Make room first: bottle disk grow +\(or see: bottle disk\)/Make room first: move or remove a game in Steam'"'"'s Settings > Storage/g' \
+    -e 's/A size that fits: bottle disk grow [0-9]+/Free up space on this Mac first./g' \
+    -e 's/(Run|Use): bottle (update|start)/Choose bottle \2/g' \
+    -e 's/(then|with): bottle /\1 bottle /g' \
+    -e 's/bottle update( --now)?/Steam > Update the VM/g' \
+    -e 's/bottle start/Steam > Start the VM/g' \
+    -e 's/bottle restart( \(add --debug for logs\))?/Steam > Shut Down the VM…, then Steam > Start the VM/g' \
+    -e 's/bottle stop/Steam > Shut Down the VM…/g' \
+    -e 's/bottle library add ("[^"]*"|[^ ),]+)( --default)?/Game Folders > Add a Game Folder…/g' \
+    -e 's/bottle library remove [^ ),]+/Game Folders > Remove a Game Folder…/g' \
+    -e 's/bottle library folders( lists them)?/Game Folders > Show Game Folders/g' \
+    -e 's/bottle steam-gpu (on|off)( tries the Mac'"'"'s GPU| goes back)?/Steam > Steam'"'"'s Interface: GPU or Processor…/g'
+}
+info() { printf '\033[1;34m==>\033[0m %s\n' "$(app_words "$*")"; }
+warn() { printf '\033[1;33mwarn:\033[0m %s\n' "$(app_words "$*")" >&2; }
+die()  { printf '\033[1;31merror:\033[0m %s\n' "$(app_words "$*")" >&2; exit 1; }
+err()  { printf '\033[1;31merror:\033[0m %s\n' "$(app_words "$*")" >&2; }   # (and carry on)
 
 # limactl shell enters the same folder inside the VM; home is always shared.
 cd "$HOME"
@@ -230,7 +271,15 @@ vm_status() { limactl list --format '{{.Status}}' "$VM_NAME" 2>/dev/null || true
 # VM saves everything to its disk first. Takes limactl stop's options (--force).
 vm_stop() {
   vsh_for 30 sync >/dev/null 2>&1 || true
-  limactl stop "$@" "$VM_NAME"
+  [[ " $* " == *" --force "* ]] && { limactl stop "$@" "$VM_NAME"; return; }
+  # an orderly shutdown, for 45 s at most: a VM with something stuck in it (a frozen game, Oct 28)
+  # can take minutes to shut down, and Quit has to quit
+  limactl stop "$@" "$VM_NAME" &
+  local p=$! i
+  for i in $(seq 1 45); do kill -0 "$p" 2>/dev/null || { wait "$p"; return; }; sleep 1; done
+  warn "The VM didn't shut down within 45 s; stopping it at once."
+  kill "$p" 2>/dev/null || true
+  limactl stop --force "$VM_NAME"
 }
 
 # The kit's programs in the VM that are empty or all zeros: lost by a stop before the fix above.
@@ -289,10 +338,31 @@ kk_icd() {  # the KosmicKrisp driver file, when enabled and still installed (the
   echo "$icd"
 }
 
+# The Metal library cache for krunkit (see vm_start): the app's copy, or the kit's, built once
+# with the Mac's compiler when its source is newer. Nothing when it can't be had.
+mtl_libcache_path() {
+  local d="$KIT_DIR/host/mtl-libcache" lib
+  if [[ -n "$APP_BUNDLE" && -f "$APP_BUNDLE/Contents/Helpers/lib/libportalistic_mtlcache.dylib" ]]; then
+    echo "$APP_BUNDLE/Contents/Helpers/lib/libportalistic_mtlcache.dylib"; return 0
+  fi
+  lib="$d/libportalistic_mtlcache.dylib"
+  if [[ -f "$d/mtl_libcache.m" && ( ! -f "$lib" || "$d/mtl_libcache.m" -nt "$lib" ) ]] && command -v clang >/dev/null 2>&1; then
+    bash "$d/build.sh" >/dev/null 2>&1 || rm -f "$lib"
+  fi
+  [[ -f "$lib" ]] && echo "$lib"
+  return 0
+}
+
 krunkit_has_kk() {
   local pid
   pid="$(pgrep -n krunkit || true)"
   [[ -n "$pid" ]] && ps -Eww -o command= -p "$pid" 2>/dev/null | tr ' ' '\n' | grep -q '^VK_DRIVER_FILES='
+}
+
+# limactl start with KEY=VALUE settings for krunkit. Not through /usr/bin/env: macOS drops DYLD_*
+# variables on the way into its own programs, and krunkit needs DYLD_INSERT_LIBRARIES (vm_start).
+lima_start_env() {
+  ( local e; for e in "$@"; do export "$e"; done; limactl start "$VM_NAME" )
 }
 
 vm_start() {
@@ -329,6 +399,16 @@ vm_start() {
   if [[ -n "$icd" ]] && ! grep -q '^MESA_KK_DISABLE_WORKAROUNDS=' "$HOST_ENV" 2>/dev/null; then
     envs+=("MESA_KK_DISABLE_WORKAROUNDS=6,12,13,14,17")
   fi
+  # KosmicKrisp compiles each pipeline's shaders again even when the Metal source is the same as
+  # before: in CS2 (Oct 27) 3950 compiles of 87 distinct shaders, ~0.2 s each with the game
+  # waiting (the 30-second frames in its Advanced Video menu, the hang when it quits). A small
+  # library of ours in krunkit hands out the first compile's result again (host/mtl-libcache).
+  # Off with: bottle env --mac PORTALISTIC_MTL_LIBCACHE=0
+  local mlc
+  mlc="$(mtl_libcache_path)"
+  if [[ -n "$icd" && -n "$mlc" ]] && ! grep -q '^PORTALISTIC_MTL_LIBCACHE=0' "$HOST_ENV" 2>/dev/null; then
+    envs+=("DYLD_INSERT_LIBRARIES=$mlc")
+  fi
   local extra="" why k0 d0
   VM_START_WHY=""
   why="$(hv_problem)"
@@ -345,7 +425,13 @@ vm_start() {
   lib_moved_cleanup >/dev/null 2>&1 || true   # the folders' copies of games moved into their drives
   info "Starting the VM${icd:+ with KosmicKrisp}${extra}…"
   local t0=$SECONDS
-  if env ${envs[@]+"${envs[@]}"} limactl start "$VM_NAME"; then
+  # krunkit's log (Lima appends to it at every start) grew to 2.4 GB with KosmicKrisp's shader dumps
+  # on (Oct 27): kept under 100 MB, the newest part
+  local kl="$VM_DIR/krunkit.log"
+  if [[ -f "$kl" ]] && (( $(stat -f %z "$kl" 2>/dev/null || echo 0) > 104857600 )); then
+    tail -c 20971520 "$kl" > "$kl.new" 2>/dev/null && mv -f "$kl.new" "$kl" || rm -f "$kl.new"
+  fi
+  if lima_start_env ${envs[@]+"${envs[@]}"}; then
     lib_push_conf
     return 0
   fi
@@ -355,7 +441,7 @@ vm_start() {
   if (( SECONDS - t0 < 120 )) && [[ -f "$LIB_APPLIED" && "$(cat "$LIB_APPLIED")" != "$LIB_HOME_ONLY" ]]; then
     warn "The VM didn't start with the game folders shared; starting it without them…"
     limactl stop --force "$VM_NAME" >/dev/null 2>&1 || true
-    if lib_mounts_apply none && env ${envs[@]+"${envs[@]}"} limactl start "$VM_NAME"; then
+    if lib_mounts_apply none && lima_start_env ${envs[@]+"${envs[@]}"}; then
       warn "The VM runs without its game folders. If macOS asked whether it may use a folder or a drive, allow it, then: bottle restart"
       lib_push_conf
       return 0
@@ -455,9 +541,15 @@ steam_start() {  # $1 = 1 for --debug
 steam_stop() {
   info "Quitting Steam and any running game…"
   # steam-stopped: the bottle stopped it (the VM's keeper restarts a Steam that quit otherwise)
-  vsh bash -c '
+  # At most 2 minutes (it takes under one): a VM with a frozen game in it can leave this hanging,
+  # and a stop has to get to the VM (Oct 30).
+  vsh_for 120 bash -c '
     mkdir -p ~/.cache/steamos-bottle && touch ~/.cache/steamos-bottle/steam-stopped
     pkill -9 -f "[w]ineserver|[w]ine64|[w]ine-preloader|[.]exe" 2>/dev/null
+    # a native game (CS2 under the x86 translator, Oct 28) is no ".exe": everything Steam started a
+    # game with (under its reaper) goes too; a game frozen on a hung child never quits by itself
+    kids() { local c; for c in $(pgrep -P "$1"); do echo "$c"; kids "$c"; done; }
+    for r in $(pgrep -f "[r]eaper SteamLaunch"); do kill -KILL $(kids "$r") 2>/dev/null; done
     pkill -TERM -f "[s]teamrtarm64/steam" 2>/dev/null || exit 0
     for _ in $(seq 1 20); do pgrep -f "[s]teamrtarm64/steam" >/dev/null || break; sleep 1; done
     pgrep -f "[s]teamrtarm64/steam" >/dev/null && pkill -KILL -f "[s]teamrtarm64/steam" 2>/dev/null
@@ -467,7 +559,8 @@ steam_stop() {
     gone() { ! pgrep -x steamwebhelper >/dev/null 2>&1 && ! pgrep -f "[s]teamrtarm64/" >/dev/null 2>&1 \
              && { p="$(cat ~/.steam/steam.pid 2>/dev/null)"; [ -z "$p" ] || ! kill -0 "$p" 2>/dev/null; }; }
     for _ in $(seq 1 30); do gone && exit 0; sleep 1; done
-    pkill -KILL -x steamwebhelper 2>/dev/null; pkill -KILL -f "[s]teamrtarm64/" 2>/dev/null; true'
+    pkill -KILL -x steamwebhelper 2>/dev/null; pkill -KILL -f "[s]teamrtarm64/" 2>/dev/null; true' \
+    || warn "Steam didn't answer within 2 minutes; going on without it."
 }
 
 port_listening() { lsof -nP -iTCP:"$VNC_PORT" -sTCP:LISTEN >/dev/null 2>&1; }
@@ -1193,6 +1286,14 @@ vm_splash() {
 # the bottle isn't there; its "==>" lines are the app's progress messages.
 cmd_up() {
   need_vm
+  # a stop still under way (Quit, then the app opened again at once): let it finish first
+  local sp i
+  sp="$(cat "$STATE_DIR/stopping.pid" 2>/dev/null || true)"
+  if [[ -n "$sp" ]] && kill -0 "$sp" 2>/dev/null; then
+    info "Waiting for the VM to finish shutting down…"
+    for i in $(seq 1 180); do kill -0 "$sp" 2>/dev/null || break; sleep 1; done
+  fi
+  lib_adopt_drives
   # the game folders' drives (or shares) Lima should give the VM changed (an update made the folders
   # drives, a folder was added by hand): Lima takes that only at a start, so the VM restarts once
   if [[ "$(vm_status)" == Running && -f "$LIB_APPLIED" ]] && [[ "$(cat "$LIB_APPLIED")" != "$(lib_mounts_expr 2>/dev/null)" ]]; then
@@ -1204,8 +1305,17 @@ cmd_up() {
   [[ "$(vm_status)" == Running ]] || vm_start
   # The VM side (built by bottle update): bottle-desktop starts the screen server and
   # maximizes Steam's window (safe to run again).
-  vsh bash -c 'command -v bottle-screen >/dev/null' \
-    || die "The VM doesn't have the screen server yet. Run: bottle update"
+  # (its ssh may not answer for a few seconds after a start: Oct 27 "kex_exchange_identification:
+  # Connection reset by peer" was reported as a missing screen server; 3 = really missing)
+  local ss_rc=0 ss_try=0
+  while :; do
+    ss_rc=0; vsh bash -c 'command -v bottle-screen >/dev/null || exit 3' 2>/dev/null || ss_rc=$?
+    (( ss_rc == 0 || ss_rc == 3 )) && break
+    ss_try=$(( ss_try + 1 )); (( ss_try < 20 )) || break
+    sleep 3
+  done
+  (( ss_rc != 3 )) || die "The VM doesn't have the screen server yet. Run: bottle update"
+  (( ss_rc == 0 )) || die "The VM started but doesn't answer. Run: bottle restart"
   # the desktop first: the "please wait" window (bottle-splash) can only show on it, and an update
   # of the Linux system or the move of games into a drive may take minutes (Oct 22: a black window)
   if vsh bash -c 'command -v bottle-desktop >/dev/null'; then
@@ -1215,7 +1325,7 @@ cmd_up() {
   local broken
   broken="$(vm_tools_damaged)"
   if [[ -n "$broken" ]]; then
-    info "Some of the bottle's programs in the VM were lost when it was last stopped; reinstalling them (a minute or two)…"
+    info "Some of Portalistic's programs in the VM were lost when it was last stopped; reinstalling them (a minute or two)…"
     printf '%s\n' "$broken" | sed 's/^/  lost: /'
     vm_splash show "Reinstalling parts of Portalistic's Linux system…" || true
     cmd_update --now
@@ -1223,6 +1333,7 @@ cmd_up() {
     update_if_behind "then Steam" || true
   fi
   desktop_start >/dev/null   # (again: an update restarts the screen server)
+  fixes_push                 # (the fixes list the Mac has, before Steam reads the per-game settings)
   if steam_running; then info "Steam is running."; else steam_start "$debug"; fi
   audio_start
   awake_start
@@ -1266,7 +1377,7 @@ screen_check() {
   if ! vsh bash -c "ss -ltn 2>/dev/null | grep -q ':$SCREEN_PORT '"; then
     die "The VM's screen server runs but doesn't open port $SCREEN_PORT. Steam > Save Logs has its log."
   fi
-  die "The VM's screen server runs, but Lima doesn't bring its port to this Mac. Steam > Shut Down the VM, then start it again."
+  die "The VM's screen server runs, but Lima doesn't bring its port to this Mac. Steam > Shut Down the VM…, then Steam > Start the VM."
 }
 
 cmd_window() {
@@ -1319,7 +1430,7 @@ audio_start() {  # never fails the calling command
   fi
   nohup "$AUDIO_BIN" >"$STATE_DIR/audio.log" 2>&1 </dev/null &
   disown 2>/dev/null || true
-  info "Sound: the bottle's audio plays on this Mac (bottle audio off to stop)."
+  info "Sound: the VM's sound plays on this Mac (bottle audio off to stop)."
 }
 audio_stop() {
   local pid
@@ -1467,6 +1578,7 @@ disk_grow() {  # $1 = new size in GB (default: 5 GB more). Safe to run again: it
 # drive must be connected when the VM starts (one that isn't is left out until the next start).
 LIB_CONF="$STATE_DIR/libraries"
 LIB_APPLIED="$STATE_DIR/libraries-mounted"   # the mounts last given to Lima
+LIB_REMOVED="$STATE_DIR/libraries-removed"   # game folders the player took out (Game Folders): not added back by themselves
 LIB_MOUNT_ROOT=/mnt/portalistic
 LIB_MAC_DIR="$HOME/Games/Portalistic"
 LIB_DRIVE_DIR="Portalistic Library"
@@ -1698,6 +1810,42 @@ lib_slug() {  # a short name for the list and the VM's mount: lower case, letter
   echo "$s"
 }
 
+# The name a game folder's drive image was formatted with (the VM labels it portalistic-NAME): read
+# from the btrfs superblock (magic at 64 KiB + 0x40, label at + 0x12b), so the drive keeps its name
+# on another Mac; the VM finds a formatted drive only by that label (bottle-libraries disk_for).
+lib_image_name() {  # $1 = the image; prints NAME or nothing
+  local img="$1" magic label
+  [[ -f "$img" ]] || return 0
+  magic="$(dd if="$img" bs=1 skip=$((0x10040)) count=8 2>/dev/null | LC_ALL=C tr -d '\0')"
+  [[ "$magic" == "_BHRfS_M" ]] || return 0
+  label="$(dd if="$img" bs=1 skip=$((0x1012b)) count=128 2>/dev/null | LC_ALL=C tr -d '\0')"
+  [[ "$label" =~ ^portalistic-([a-z0-9][a-z0-9-]*)$ ]] && echo "${BASH_REMATCH[1]}"
+  return 0
+}
+
+# Drives with a "Portalistic Library" this Mac doesn't use yet: one moved from another Mac, or one
+# that was unplugged when Portalistic was set up again (Oct 27: Michael asked whether a restart with
+# the SSD plugged in picks it up; only the first setup did). Not the ones the player took out.
+lib_new_drives() {
+  local pl
+  for pl in /Volumes/*/"$LIB_DRIVE_DIR"; do
+    [[ -f "$pl/.portalistic-library" && -z "$(lib_find "$pl")" ]] || continue
+    [[ -f "$LIB_REMOVED" ]] && grep -qxF -- "$pl" "$LIB_REMOVED" && continue
+    printf '%s\n' "$pl"
+  done
+  return 0
+}
+lib_adopt_drives() {  # at each start (cmd_up): those drives become game folders, games included
+  local pl
+  [[ -f "$LIB_CONF" ]] || return 0
+  while IFS= read -r pl; do
+    [[ -n "$pl" ]] || continue
+    info "A drive with Portalistic games that this Mac doesn't use yet: ${pl%/"$LIB_DRIVE_DIR"} (adding it)"
+    ( lib_add "${pl%/"$LIB_DRIVE_DIR"}" ) || warn "Couldn't add $pl (Game Folders > Add a Game Folder… does it)."
+  done < <(lib_new_drives)
+  return 0
+}
+
 lib_add() {
   local arg="" make_default=0 a dir label vol vroot=/ name base n fs row def
   for a in "$@"; do
@@ -1781,10 +1929,19 @@ lib_add() {
   fi
   mkdir -p "$dir/steamapps" || die "Couldn't make $dir."
   [[ -w "$dir" ]] || die "$dir isn't writable."
+  if [[ -f "$LIB_REMOVED" ]]; then   # added again by hand: it may come back by itself from now on
+    { grep -vxF -- "$dir" "$LIB_REMOVED" || true; } > "$LIB_REMOVED.tmp" 2>/dev/null; mv -f "$LIB_REMOVED.tmp" "$LIB_REMOVED"
+  fi
   printf 'Portalistic game folder (bottle library add). The VM shares it with Steam; its games are\nnormal files here. bottle library remove forgets it (the games stay).\n' > "$dir/.portalistic-library" 2>/dev/null || true
   # games come back from Steam: not worth the Time Machine space
   tmutil addexclusion "$dir" >/dev/null 2>&1 || true
   base="$(lib_slug "$( [[ -z "$vol" && "$label" == Mac ]] && echo mac || echo "$label")")"
+  # a drive formatted on another Mac (or before a reinstall) keeps the name it was formatted with
+  local was; was="$(lib_image_name "$dir/$LIB_IMAGE")"
+  if [[ -n "$was" ]]; then
+    [[ -z "$(lib_find "$was")" ]] || die "$dir's drive is called \"$was\", and a game folder here already has that name. Remove that one first (Game Folders), then add this one."
+    base="$was"
+  fi
   name="$base" n=2
   while [[ -n "$(lib_find "$name")" ]]; do name="$base-$n"; n=$(( n + 1 )); done
   if (( make_default )) || [[ -z "$def" ]]; then def="$name"; fi
@@ -1795,7 +1952,7 @@ lib_add() {
     "$HOME/Documents/"*|"$HOME/Desktop/"*|"$HOME/Downloads/"*)
       info "macOS may ask whether the VM may use that folder: allow it." ;;
   esac
-  [[ -n "$vol" ]] && info "Keep $vol connected while the bottle runs, and eject it only after: bottle stop."
+  [[ -n "$vol" ]] && info "Keep $vol connected while the VM runs (eject it only after: bottle stop)."
   lib_restart_vm
 }
 
@@ -1811,9 +1968,11 @@ lib_remove() {
     [[ "$name" != mac && -n "$(lib_find mac)" ]] && def=mac
   fi
   lib_rows | awk -F'\t' -v n="$name" '$1 != n' | lib_save "$def" "$(date +%s)"
+  { if [[ -f "$LIB_REMOVED" ]]; then grep -vxF -- "$dir" "$LIB_REMOVED" || true; fi; printf '%s\n' "$dir"; } > "$LIB_REMOVED.tmp" 2>/dev/null \
+    && mv -f "$LIB_REMOVED.tmp" "$LIB_REMOVED"   # (not added back by itself at the next start)
   lib_restart_vm
   lib_disk_forget "$name"   # (after the VM let go of it)
-  info "Steam stops using \"$label\". Its games stay in $dir (bottle library add $dir brings them back)."
+  info "Steam stops using \"$label\". Its games stay in $dir (bottle library add \"$dir\" brings them back)."
 }
 
 lib_default_set() {  # $1 = NAME or vm
@@ -1839,7 +1998,7 @@ lib_default_set() {  # $1 = NAME or vm
   else
     vsh_for 60 bash -c 'command -v bottle-libraries >/dev/null && bottle-libraries sync' || true
   fi
-  info "New games install to $( [[ "$want" == vm ]] && echo "the VM's disk" || lib_find "$want" | cut -f2) by default (Steam > Settings > Storage changes it too)."
+  info "New games install to $( [[ "$want" == vm ]] && echo "the VM's disk" || lib_find "$want" | cut -f2) by default (Steam's Settings > Storage changes it too)."
   lib_status_vm 60
 }
 
@@ -1958,7 +2117,7 @@ vm_disk_grow_wanted() {  # $1 = what Steam does
     fi
     echo "$want" > "$STATE_DIR/disk-grow-wanted"
     echo "$(date '+%F %T') the VM's disk is almost full: it grows to ${want} GB at the VM's next start"
-    vm_notice 1 45 "The VM's disk is almost full" "It grows by 5 GB the next time the VM starts (Steam > Shut Down the VM, then Start the VM). Games go in a game folder, not here."
+    vm_notice 1 45 "The VM's disk is almost full" "It grows by 5 GB the next time the VM starts (Steam > Shut Down the VM…, then Steam > Start the VM). Games go in a game folder, not here."
     return 0
   fi
   echo "$(date '+%F %T') the VM's disk is almost full (${cur} GB, $(( $(vm_disk_free_kb) / 1024 )) MB free): asking what to do"
@@ -2205,7 +2364,7 @@ gpu_auto_guard() {  # $1 = what Steam does (game, download, idle), $2 = the VM's
       steam_start >/dev/null 2>&1 || true
       word="$(vsh_for 20 bash -c 'head -n 1 ~/.config/steamos-bottle/steam-gpu-auto 2>/dev/null' 2>/dev/null | awk '{print $1}' || true)"
       if [[ "$word" == pending ]]; then
-        vm_notice 0 45 "Steam restarted to draw on the Mac's GPU" "Its interface is smoother there. If it can't, Portalistic goes back to the processor by itself. Steam > Steam's Interface… lets you choose."
+        vm_notice 0 45 "Steam restarted to draw on the Mac's GPU" "Its interface is smoother there. If it can't, Portalistic goes back to the processor by itself. Steam > Steam's Interface: GPU or Processor… lets you choose."
       fi
       return 0 ;;
   esac
@@ -2785,6 +2944,138 @@ cmd_uninstall() {
   info "Portalistic's Linux system and its data are deleted."
 }
 
+# ---- the Mac's logs kept small (Oct 26; the watcher, once a day) ----
+# Save Logs and bottle-whyquit's "saved for a closer look" each leave a vm-logs-<time>.tgz +
+# mac-logs-<time>.txt pair (about 2 MB) in LOGS_DIR, which nothing removed: the newest 10 stay (and
+# no more than 100 MB of them); the watcher's awake.log rolls at 1 MB; in the kit, test leftovers
+# (hosttest-*, selftest-*, swift-check-*) go after 7 days. Uninstall deletes the folder as a whole.
+LOGS_TIDY_LAST=0
+logs_tidy() {
+  local now n total f
+  now="$(date +%s)"
+  (( now - LOGS_TIDY_LAST >= 86400 )) || return 0
+  LOGS_TIDY_LAST="$now"
+  [[ -d "$LOGS_DIR" ]] || return 0
+  n=0; total=0
+  # (newest first; a pair shares its time stamp)
+  while IFS= read -r f; do
+    [[ -n "$f" ]] || continue
+    n=$(( n + 1 ))
+    total=$(( total + $(stat -f %z "$f" 2>/dev/null || echo 0) ))
+    if (( n > 10 || total > 104857600 )); then
+      t="${f/vm-logs/mac-logs}"; rm -f "$f" "${t%.tgz}.txt" 2>/dev/null
+    fi
+  done < <(ls -t "$LOGS_DIR"/vm-logs-*.tgz 2>/dev/null)
+  find "$LOGS_DIR" -maxdepth 1 -name 'mac-logs-*.txt' -mtime +30 -delete 2>/dev/null || true
+  if [[ -z "$APP_BUNDLE" ]]; then   # the kit: its test output
+    find "$LOGS_DIR" -maxdepth 1 \( -name 'hosttest-*' -o -name 'selftest-*' -o -name 'swift-check-*' \) -mtime +7 -delete 2>/dev/null || true
+  fi
+  f="$STATE_DIR/awake.log"
+  if [[ -f "$f" ]] && (( $(stat -f %z "$f" 2>/dev/null || echo 0) > 1048576 )); then mv -f "$f" "$f.1"; fi
+  return 0
+}
+
+# ---- fixes for games: the list, a runtime into a prefix, a report (Oct 26) ----
+# fixes/fixes.json in the kit says what the bottle applies per game and what to tell the player; a
+# newer copy is fetched from the project's GitHub page once a day (FIXES_URL) and sent to the VM
+# (~/.config/steamos-bottle/fixes.json; bottle-fixes apply turns it into per-game settings, notes for
+# the banners, and Winetricks verbs). BOTTLE_FIXES_FETCH=0 keeps to the kit's copy.
+FIXES_URL="${BOTTLE_FIXES_URL:-https://raw.githubusercontent.com/mcstig/PorTalistic/main/fixes/fixes.json}"
+fixes_refresh() {  # $1 = force: fetch now; else once a day. -> 0 when the VM got a list (new or not)
+  local f="$STATE_DIR/fixes.json" tmp
+  [[ "${BOTTLE_FIXES_FETCH:-1}" != 0 ]] || return 0
+  mkdir -p "$STATE_DIR"
+  if [[ "${1:-}" != force && -f "$f" && -n "$(find "$f" -mmin -1440 2>/dev/null)" ]]; then return 0; fi
+  tmp="$(mktemp "${TMPDIR:-/tmp}/fixes.XXXXXX")"
+  if curl -fsSL --max-time 30 -o "$tmp" "$FIXES_URL" 2>/dev/null && python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert isinstance(d.get("games"), dict)' "$tmp" 2>/dev/null; then
+    if ! cmp -s "$tmp" "$f"; then mv -f "$tmp" "$f"; echo "$(date '+%F %T') fixes list fetched ($(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("updated",""))' "$f" 2>/dev/null))"; else touch "$f"; rm -f "$tmp"; fi
+  else
+    rm -f "$tmp"
+    [[ -f "$f" ]] && touch "$f"   # (no network: try again tomorrow)
+    return 0
+  fi
+  fixes_push
+}
+fixes_push() {  # the Mac's copy into the VM, applied there
+  local f="$STATE_DIR/fixes.json"
+  [[ -f "$f" && "$(vm_status)" == Running ]] || return 0
+  # shellcheck disable=SC2016  # runs in the VM
+  vsh_for 60 bash -c 'mkdir -p ~/.config/steamos-bottle && printf %s "$1" | base64 -d > ~/.config/steamos-bottle/fixes.json.tmp && mv -f ~/.config/steamos-bottle/fixes.json.tmp ~/.config/steamos-bottle/fixes.json; command -v bottle-fixes >/dev/null && bottle-fixes apply' _ "$(base64 < "$f")" >/dev/null 2>&1 || true
+}
+cmd_fixes() {
+  case "${1:-}" in
+    fetch) fixes_refresh force; info "The fixes list: $STATE_DIR/fixes.json" ;;
+    ""|list) need_vm; [[ "$(vm_status)" == Running ]] || die "The VM isn't running."; vsh bottle-fixes list ;;
+    *) die "usage: bottle fixes [list | fetch]" ;;
+  esac
+}
+# A missing Windows runtime (the banner's "Install X and try again"): Winetricks in the game's prefix,
+# with its Proton, then the game started again.
+cmd_fix() {
+  local appid="${1:-}" verbs
+  shift || true
+  [[ "$appid" =~ ^[0-9]+$ && $# -ge 1 ]] || die "usage: bottle fix APPID VERB...   (e.g. bottle fix 1284410 vcrun2022)"
+  for verbs in "$@"; do [[ "$verbs" =~ ^[a-z0-9_]+$ ]] || die "Not a Winetricks verb: $verbs"; done
+  need_vm
+  [[ "$(vm_status)" == Running ]] || die "The VM isn't running. Use: bottle start"
+  info "Installing $* into the game's Windows folder (a minute or two)…"
+  vsh bottle-fixes winetricks "$appid" "$@" || die "Winetricks couldn't install $*. Its log is in the VM: ~/.cache/steamos-bottle/game-logs/winetricks-$appid.log (Steam > Save Logs has it)."
+  info "Starting the game again…"
+  if (( appid >= 2147483648 )); then
+    cmd_steam_url "steam://rungameid/$(( (appid << 32) | 0x02000000 ))"
+  else
+    cmd_steam_url "steam://rungameid/$appid"
+  fi
+}
+# A report about a game that didn't run: the diagnosis, the game's settings and the relevant part of its
+# Proton log, with the user's name and home folder taken out, to a file on the Desktop; then a GitHub
+# issue page with the title and a short body (the file is attached by hand: GitHub needs a sign-in).
+cmd_report() {
+  local appid="${1:-}" name out title body url rep open_page="${BOTTLE_REPORT_OPEN:-1}"
+  [[ "${2:-}" == --no-open ]] && open_page=0   # the app opens the page itself, after explaining
+  [[ "$appid" =~ ^[0-9]+$ ]] || die "usage: bottle report APPID [--no-open]"
+  need_vm
+  [[ "$(vm_status)" == Running ]] || die "The VM isn't running. Use: bottle start"
+  # shellcheck disable=SC2016  # runs in the VM
+  rep="$(vsh_for 120 bash -c '
+    a="$1"; L=~/steam-"$a".log
+    name="$(for m in ~/.local/share/Steam/steamapps/appmanifest_"$a".acf /mnt/portalistic/*/steamapps/appmanifest_"$a".acf; do [ -f "$m" ] && awk -F\" "\$2 == \"name\" {print \$4; exit}" "$m" && break; done)"
+    [ -n "$name" ] || name="$(python3 -c "
+import json,sys
+for s,g in json.load(open("$HOME/.config/steamos-bottle/stores/games.json")).items():
+    for k,r in g.items():
+        if str(r.get("appid"))==sys.argv[1]: print(r.get("title","")); raise SystemExit
+" "$a" 2>/dev/null)"
+    echo "NAME: ${name:-app $a}"
+    echo "== Portalistic'"'"'s diagnosis (bottle-whyquit)"; bottle-whyquit "$L" 2>/dev/null
+    echo "== the fixes list"; bottle-fixes note "$a" 2>/dev/null
+    echo "== settings applied (game-logs/settings-$a.txt)"; cat ~/.cache/steamos-bottle/game-logs/settings-"$a".txt 2>/dev/null
+    echo "== Linux system"; uname -r; grep -m1 "PRETTY_NAME" /etc/os-release; cat ~/.cache/steamos-bottle/kit-stamp 2>/dev/null
+    echo "== Proton log: errors and the last 150 lines ($L)"
+    if [ -f "$L" ]; then grep -n "err:\|Unhandled\|page fault\|not found\|fatal\|FEX\|dxvk\|vkd3d\|virtual_unwind backtrace\|^Backtrace\|^=>[0-9]\|^  [0-9]* 0x" "$L" | head -120; echo "-- tail"; tail -n 150 "$L"; else echo "(no log: the game did not write one; Save Logs has the rest)"; fi
+    ' _ "$appid" 2>/dev/null)" || true
+  name="$(sed -n 's/^NAME: //p' <<<"$rep" | head -n 1)"
+  [[ -n "$name" ]] || name="app $appid"
+  out="$HOME/Desktop/Portalistic report - $(tr -cd 'A-Za-z0-9 ._-' <<<"$name" | cut -c1-60).txt"
+  {
+    echo "Portalistic report: $name (app $appid), $(date '+%F %T')"
+    echo "Portalistic $(kit_version 2>/dev/null || cat "$KIT_DIR/VERSION" 2>/dev/null), macOS $(sw_vers -productVersion 2>/dev/null), $(sysctl -n hw.model 2>/dev/null), $(( $(sysctl -n hw.memsize 2>/dev/null || echo 0) / 1073741824 )) GB"
+    echo
+    sed -e "s#$HOME#~#g" -e "s#/home/[^/ ]*#/home/user#g" -e "s#$(id -un)#user#g" <<<"$rep"
+  } > "$out"
+  info "Saved the report to $out"
+  title="$(sed -n '/^== Portalistic/{n;p;}' <<<"$rep" | head -n 1 | cut -c1-120)"
+  [[ "$title" == "$name"* ]] || title="$name: $title"
+  body="Portalistic $(kit_version 2>/dev/null), macOS $(sw_vers -productVersion 2>/dev/null), $(sysctl -n hw.model 2>/dev/null). Please attach the file "$(basename "$out")" from your Desktop (drag it into this box)."
+  url="https://github.com/mcstig/PorTalistic/issues/new?title=$(python3 -c 'import sys,urllib.parse; print(urllib.parse.quote(sys.argv[1]))' "$title")&body=$(python3 -c 'import sys,urllib.parse; print(urllib.parse.quote(sys.argv[1]))' "$body")"
+  if [[ "$open_page" != 0 ]]; then
+    info "Opening a GitHub issue page: attach the report file there."
+    open "$url" 2>/dev/null || true
+  else
+    echo "ISSUE-PAGE: $url"
+  fi
+}
+
 # ---- Steam links and the window manager ----
 # Open a steam:// link in the running Steam: the Steam program hands it to the instance that
 # runs (as desktop shortcuts do). Gets to places without Steam's menus, e.g. its settings.
@@ -3263,8 +3554,8 @@ cmd_gog() {
   [[ $# -gt 0 ]] && shift
   case "$sub" in
     login-url) echo "$GOG_LOGIN_URL"; return 0 ;;
-    status|list|folders|login|logout|install|remove) ;;
-    *) die "usage: bottle gog login-url | login ADDRESS | logout | status | list | folders | install ID | remove ID" ;;
+    status|list|folders|login|logout|install|remove|stop) ;;
+    *) die "usage: bottle gog login-url | login ADDRESS | logout | status | list | folders | install ID | remove ID | stop ID [--discard]" ;;
   esac
   need_vm
   [[ "$(vm_status)" == Running ]] || die "The VM isn't running. Use: bottle start"
@@ -3283,8 +3574,8 @@ cmd_epic() {   # the same as cmd_gog, for Epic Games (guest/bottle-stores epic .
   [[ $# -gt 0 ]] && shift
   case "$sub" in
     login-url) echo "$EPIC_LOGIN_URL"; return 0 ;;
-    status|list|folders|login|logout|install|remove) ;;
-    *) die "usage: bottle epic login-url | login TEXT | logout | status | list | folders | install ID | remove ID" ;;
+    status|list|folders|login|logout|install|remove|stop) ;;
+    *) die "usage: bottle epic login-url | login TEXT | logout | status | list | folders | install ID | remove ID | stop ID [--discard]" ;;
   esac
   need_vm
   [[ "$(vm_status)" == Running ]] || die "The VM isn't running. Use: bottle start"
@@ -3630,6 +3921,9 @@ awake_loop() {
     lib_disks_tidy "$state" || true   # the game folders' drives: space back to the Mac, size to its free space
     disk_guard "$state" || true   # the Mac's free space (see disk_guard)
     vm_disk_guard "$state" "$(sed -n 's/^vmfree //p' <<<"$out" | head -n 1)" || true   # the VM's own disk
+    logs_tidy || true   # the Mac's logs kept small, once a day
+    # the fixes list, once a day (see fixes_refresh)
+    if (( LAN_ROUND % 10 == 0 )) && [[ "$state" != game ]]; then fixes_refresh || true; fi
     # the LAN's file servers for the Linux desktop, every 5 rounds (see lan_hosts_scan)
     if (( LAN_ROUND % 5 == 0 )) && [[ "$state" != game ]]; then lan_hosts_push || true; fi
     LAN_ROUND=$(( LAN_ROUND + 1 ))
@@ -3869,7 +4163,7 @@ cmd_update() {
   fi
   info "Copying the kit into the VM…"
   # COPYFILE_DISABLE: no macOS ._ metadata files in the archive.
-  COPYFILE_DISABLE=1 tar -C "$KIT_DIR" --exclude __pycache__ --exclude .DS_Store -czf - guest \
+  COPYFILE_DISABLE=1 tar -C "$KIT_DIR" --exclude __pycache__ --exclude .DS_Store -czf - guest fixes \
     | vsh bash -c 'K=~/.cache/steamos-bottle/kit; rm -rf "$K"; mkdir -p "$K"; tar --warning=no-unknown-keyword -xzf - -C "$K"'
   info "Updating the VM (asks nothing; takes a minute or two)…"
   vsh bash -c 'sudo bash ~/.cache/steamos-bottle/kit/guest/update-guest.sh'
@@ -3938,12 +4232,35 @@ for a in "$@"; do [[ "$a" == --debug ]] && debug=1; done
 case "$cmd" in
   start)        cmd_window ;;
   stop)
+    # From the app: in a session of its own, so it carries on after the app has quit (Oct 30: Quit
+    # left the VM running; the stop ended with the app, right after its first line). The parent
+    # waits, so the app still sees when it's done.
+    if [[ "${BOTTLE_FROM_APP:-}" == 1 && -z "${BOTTLE_DETACHED:-}" && -x /usr/bin/perl ]]; then
+      BOTTLE_DETACHED=1 exec /usr/bin/perl -MPOSIX -e '
+        my $p = fork(); exit 1 unless defined $p;
+        if ($p) { $SIG{TERM} = sub { exit 143 }; waitpid($p, 0); exit($? >> 8) }
+        POSIX::setsid(); exec @ARGV or exit 127' /bin/bash "$src" stop "$@"
+    fi
     need_vm
+    mkdir -p "$STATE_DIR"; echo $$ > "$STATE_DIR/stopping.pid"
+    trap 'rm -f "$STATE_DIR/stopping.pid"' EXIT
     audio_stop
     awake_stop
-    if [[ "$(vm_status)" == Running ]]; then steam_stop; info "Stopping the VM…"; vm_stop; fi
+    if [[ "$(vm_status)" == Running ]]; then
+      if [[ " $* " == *" --now "* ]]; then
+        # Quit in the app (Oct 30: Michael wants the VM gone the moment he quits): no waiting for
+        # Steam or games; only what the VM still holds in memory goes to its disk first (10 s at
+        # most), so files written just before aren't lost (see vm_stop)
+        info "Shutting the VM down now…"
+        vsh_for 10 sync >/dev/null 2>&1 || true
+        limactl stop --force "$VM_NAME" || true
+      else
+        steam_stop; info "Stopping the VM…"; vm_stop
+      fi
+    fi
     info "Stopped."
     ;;
+  _awake-start) awake_start ;;   # the app, once it's connected to a VM it didn't start itself
   restart)
     need_vm
     if [[ "$(vm_status)" == Running ]]; then steam_stop; vm_stop; fi
@@ -3986,6 +4303,9 @@ case "$cmd" in
   _awake)       awake_loop ;;   # the background keep-awake loop (awake_start)
   status)       cmd_status ;;
   log)          cmd_log "$@" ;;
+  fix)          cmd_fix "$@" ;;        # a game's missing Windows runtime into its prefix, then the game again (the banner's button)
+  report)       cmd_report "$@" ;;     # a cleaned-up report about a game that didn't run, and a GitHub issue to paste it into
+  fixes)        cmd_fixes "$@" ;;      # the fixes list: fetch it now, or show it
   perf)         cmd_perf ;;
   tso)          cmd_tso "$@" ;;
   fps)          cmd_fps "$@" ;;

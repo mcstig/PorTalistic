@@ -101,7 +101,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window.makeFirstResponder(view)
 
         view.onCaptureChange = { [weak self] on in
-            self?.window.title = on ? "Portalistic — mouse captured (⌘⎋ releases it)" : "Portalistic"
+            self?.window.title = on ? "Portalistic — mouse captured (⌃⌥ releases it)" : "Portalistic"
         }
         pads = Pads(conn: conn)
         pads.onChange = { [weak self] in self?.updateSubtitle() }
@@ -132,6 +132,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 self.askAboutVMDisk(title: title, detail: details)
                 return
             }
+            if kind == 4 {   // a problem with things to do about it: "@@Label|bottle args" lines become buttons (Oct 26)
+                var text: [String] = [], choices: [(String, () -> Void)] = []
+                for line in details.components(separatedBy: "\n") {
+                    if line.hasPrefix("@@"), let bar = line.firstIndex(of: "|") {
+                        let label = String(line[line.index(line.startIndex, offsetBy: 2)..<bar])
+                        let args = line[line.index(after: bar)...].split(separator: " ").map(String.init)
+                        guard !args.isEmpty, args.allSatisfy({ $0.range(of: "^[A-Za-z0-9_.:/=+-]+$", options: .regularExpression) != nil }) else { continue }
+                        choices.append((label, { [weak self] in self?.runChoice(label, args) }))
+                    } else {
+                        text.append(line)
+                    }
+                }
+                self.noticeView.show(problem: true, title: title, detail: text.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines),
+                                     seconds: seconds, choices: choices)
+                if !NSApp.isActive { NSApp.requestUserAttention(.informationalRequest) }
+                return
+            }
             self.noticeView.show(problem: kind == 1, title: title, detail: details, seconds: seconds)
             if !NSApp.isActive { NSApp.requestUserAttention(.informationalRequest) }
         }
@@ -147,7 +164,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if appIsOutdated() {
             rebuildApp()
         } else {
-            startView.show("Connecting to the bottle…", busy: true)
+            startView.show("Connecting to the VM…", busy: true)
             // Already running (opened by `bottle window`, or reopened): the screen answers within
             // a second. Otherwise start what's missing.
             perform(#selector(autoStart), with: nil, afterDelay: 2)
@@ -167,7 +184,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             guard code != 0 else { return }
             self?.tell(failure, c.problem)
         }
-        if !c.start() { tell("Couldn't run the bottle command.", BottleCommand.script ?? ""); return }
+        if !c.start() { tell("Couldn't run Portalistic's helper script.", BottleCommand.script ?? ""); return }
         quietCommands.removeAll { !$0.running }
         quietCommands.append(c)
     }
@@ -199,6 +216,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     var quietCommands: [BottleCommand] = []           // kept until they finish
 
+    /// A banner's button: the bottle command it names, in the Activity window (fix, report).
+    func runChoice(_ label: String, _ args: [String]) {
+        guard starter == nil, !activity.busy else { showActivity(nil); return }
+        var args = args
+        if args.first == "report" { args.append("--no-open") }   // the page opens after the explanation below
+        activity.run(label, args, log: args.first ?? "choice") { [weak self] code, c in
+            guard code == 0, args.first == "report" else { return }
+            // the command prints "==> Saved the report to PATH" and "ISSUE-PAGE: URL"
+            var path: String?
+            if let line = c.lines.last(where: { $0.contains("Saved the report to /") }), let r = line.range(of: "/") {
+                path = String(line[r.lowerBound...]).trimmingCharacters(in: .whitespaces)
+            }
+            let page = c.lines.last(where: { $0.hasPrefix("ISSUE-PAGE: ") }).map { String($0.dropFirst(12)) }
+            self?.activity.window?.orderOut(nil)
+            self?.explainReport(file: path, page: page)
+        }
+    }
+
+    /// The report is on the Desktop: what to do with it, in steps (Oct 26: Michael pointed out
+    /// that "a report file and a GitHub page" is not enough guidance for most people).
+    func explainReport(file: String?, page: String?) {
+        let name = file.map { ($0 as NSString).lastPathComponent } ?? "Portalistic report"
+        let alert = NSAlert()
+        alert.messageText = "The report is ready"
+        alert.informativeText = """
+            It's on your Desktop as “\(name)”. It holds Portalistic's diagnosis and the game's log, with your name and folders taken out; you can open it and read it first.
+
+            To send it:
+            1. Click Open GitHub. A page for a new report opens in your browser (GitHub asks you to sign in; a free account is enough).
+            2. Drag the file from your Desktop into the big text box on that page. Wait until it shows a link to it.
+            3. Click the green Create button.
+            """
+        alert.addButton(withTitle: "Open GitHub")
+        alert.addButton(withTitle: "Show the File")
+        alert.addButton(withTitle: "Not Now")
+        let r = alert.runModal()
+        if let f = file, r != .alertThirdButtonReturn {
+            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: f)])
+        }
+        if r == .alertFirstButtonReturn, let p = page, let u = URL(string: p) {
+            NSWorkspace.shared.open(u)
+        }
+    }
+
     func tell(_ message: String, _ info: String) {
         let alert = NSAlert()
         alert.messageText = message
@@ -229,6 +290,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     var leaving = false
+    var shuttingDown = false               // Quit: the VM is shutting down, then the app quits (AppDelegate+Quitting)
     var askingAboutDisk = false            // the VM-disk question is on screen (AppDelegate+Menus)
     var installing = false                 // moving to Applications: no quitting when the alert closes (AppDelegate+Quitting)
     let dontAskKey = "QuitWithoutAsking"

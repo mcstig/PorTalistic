@@ -114,6 +114,45 @@ Proton and Steam's runtime (~2-2.5 GB more).
   portalistic-NAME.desktop` per server (what KDE's "Add Network Folder" writes; Dolphin's Network place shows
   them). Checked on the dev Mac: the Mac (Remote Login) appeared as McstigM4Max in Network, and
   `ssh McstigM4Max.local` from the VM connected. BOTTLE_LAN_HOSTS=0 turns the scan off.
+- **Metal library cache (0.7.0.15, Oct 27).** `host/mtl-libcache/mtl_libcache.m`, a dylib krunkit loads
+  (`DYLD_INSERT_LIBRARIES`, set by vm_start; `mtl_libcache_path` builds it in the kit with the Mac's clang, the
+  app carries it in Contents/Helpers/lib, signed by the same team, krunkit/limactl/the driver entitled for DYLD
+  variables). KosmicKrisp compiles every pipeline's MSL synchronously on the Venus ring thread, and the same
+  source again for every pipeline variant: CS2's Advanced Video made 3950 compiles of 87 sources (`MESA_KK_DEBUG=msl`
+  dumps + `sample krunkit`), ~0.2 s each, the game waiting. The hooks (`newLibraryWithSource:options:error:` on
+  the device classes, `newLibraryWithDescriptor:error:` on the MTL4 compiler classes, found when the first device
+  is made; a per-thread level walks super calls and wrapper devices) keep each library per device+source+options
+  and give failures back at once. They also mend KosmicKrisp's vertex shaders that take `[[thread_index_in_simdgroup]]`
+  as an input (Metal refuses it in vertex functions): the value becomes `simd_prefix_exclusive_sum(1u)`.
+  `PORTALISTIC_MTL_LIBCACHE=0` / `PORTALISTIC_MTL_MEND=0` (bottle env --mac) turn them off. Also: Xcode's Metal
+  debug variables (MTL_DEBUG_LAYER, METAL_LOAD_INTERPOSER…) are stripped from bottle's environment, krunkit.log
+  is kept under 100 MB, and limactl starts through a subshell export (macOS drops DYLD_ variables through
+  /usr/bin/env).
+- **CS2 (open, Oct 28).** It crashes on map load (team selection, first spawn): its console (`-condebug`) shows
+  thousands of "null descriptor set layout"; fossilize_replay of Steam's cache for 730 says 64 descriptor set
+  layouts are "not supported" by Venus/KosmicKrisp (vkGetDescriptorSetLayoutSupport). The crash handler's fork
+  then hangs under FEX (the child stuck in a futex, the thread waiting in wait4), so the crash shows as a freeze;
+  `-nobreakpad` makes it close instead. TSO and `-threads 1` ruled out; guest/tests/foz-dsl.py decodes the layouts.
+- **Game fixes, for users (Oct 26).** Three pieces. (1) `fixes/fixes.json` in the repo: per game (`steam:<appid>`,
+  `gog:<id>`, `epic:<name>`) a status, a note, env, args, dlloverrides, winetricks verbs. The kit ships it (the
+  kit tar now carries `fixes/`), the watcher fetches a newer one from GitHub raw once a day (`fixes_refresh`,
+  `FIXES_URL`, `BOTTLE_FIXES_FETCH=0` off) and pushes it to the VM; `bottle-fixes apply` (run by steam-arm64's
+  stores step and after a push) writes `~/.cache/steamos-bottle/fixes/games/<appid>.env` (read by
+  `_bottle_game_env` between the kit's games/ and the user's), `notes/<appid>.txt` and `verbs/<appid>`, and installs
+  pending verbs into prefixes that exist while Steam is down; store games map through games.json's shortcut
+  appids. `bottle fixes [list|fetch]`. (2) Missing-DLL auto-fix: `bottle-fixes dll NAME` maps common DLLs to
+  Winetricks verbs (`DLL_VERBS`); `bottle-whyquit`'s banner becomes a kind-4 notice with buttons ("@@Label|bottle
+  args" lines): "Install X and try again" → `bottle fix APPID VERB` (`bottle-fixes winetricks`: Winetricks shipped
+  in `guest/winetricks` (LGPL), run with the game's Proton Wine under FEX, `cabextract` from Fedora, marker
+  `<compatdata>/.portalistic-winetricks`), then `steam://rungameid/…`. Found on the way: FEX printed "erofsfuse
+  1.9.4" on every x86 process's stdout (per-process FUSE mount of the rootfs) — it broke Winetricks' parsing; now
+  `fex_rootfs_mount` mounts the erofs once with the kernel (fstab, nofail, automount) and FEX's config names the
+  directory: clean stdout, no FUSE. (3) "Report this problem…" → `bottle report APPID`: diagnosis, fixes note,
+  settings, system, the Proton log's errors + last 150 lines, user name and home folder replaced, to
+  `~/Desktop/Portalistic report - NAME.txt`, then a prefilled GitHub new-issue page (`BOTTLE_REPORT_OPEN=0` for
+  tests); the app shows the file in Finder. The app: `NoticeView.show(choices:)` buttons (a banner with buttons
+  stays ≥ 2 min), kind 4 routed in AppDelegate, `runChoice` runs the bottle command in the Activity window;
+  bottle-screen passes kinds up to 4.
 - **Games from before come back (0.7.0.13, Oct 23).** Michael reinstalled on the M1 without deleting the games
   and Steam showed none: Steam's first start (which installs Steam) comes before `bottle-libraries sync` can add
   the folder, and the GOG/Epic records (`stores/games.json`, Legendary's `installed.json`) went with the VM. Now

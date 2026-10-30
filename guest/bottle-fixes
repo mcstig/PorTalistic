@@ -1,0 +1,278 @@
+#!/usr/bin/env python3
+"""bottle-fixes: Portalistic's game fixes list (fixes/fixes.json in the kit; a newer one fetched by the Mac
+app from the project's GitHub page once a day), applied to the games here.
+
+  bottle-fixes apply          the list -> per-game settings the launcher reads, notes for bottle-whyquit,
+                              and the Winetricks verbs a game's prefix still needs (installed when the
+                              prefix exists and Steam isn't running)
+  bottle-fixes list           what the list says about the games installed here
+  bottle-fixes note APPID     the entry's status and note for a Steam app id (or a store game's
+                              shortcut id), for the banner when the game quits; nothing if none
+  bottle-fixes winetricks APPID VERB...   install Winetricks verbs into that game's Wine prefix (Proton's
+                              Wine, under the x86 translator), e.g. vcrun2022 d3dcompiler_47
+  bottle-fixes dll DLLNAME    which verb brings a missing DLL (vcruntime140.dll -> vcrun2022), or nothing
+
+Files: ~/.config/steamos-bottle/fixes.json (the Mac's copy of the list, when it fetched one),
+~/.cache/steamos-bottle/kit/fixes/fixes.json (the kit's), ~/.cache/steamos-bottle/fixes/games/<appid>.env
+(what steam-arm64 applies, between the kit's guest/games and the user's ~/.config/steamos-bottle/games),
+~/.cache/steamos-bottle/fixes/notes/<appid>.txt (STATUS, then the note). A prefix that got its verbs
+has <pfx>/.portalistic-winetricks listing them.
+"""
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+HOME = Path(os.environ.get("HOME", "~")).expanduser()
+CONF = HOME / ".config/steamos-bottle"
+CACHE = HOME / ".cache/steamos-bottle"
+STEAM = Path(os.environ.get("BOTTLE_STEAM_DIR") or HOME / ".local/share/Steam")
+LISTS = [CONF / "fixes.json", CACHE / "kit/fixes/fixes.json"]
+OUT = CACHE / "fixes"
+STORES_GAMES = Path(os.environ.get("BOTTLE_STORES_DIR") or CONF / "stores") / "games.json"
+
+# a missing DLL -> the Winetricks verb that brings it (the common ones; anything else is unknown)
+DLL_VERBS = {
+    "vcruntime140.dll": "vcrun2022", "vcruntime140_1.dll": "vcrun2022", "msvcp140.dll": "vcrun2022",
+    "msvcp140_1.dll": "vcrun2022", "msvcp140_2.dll": "vcrun2022", "concrt140.dll": "vcrun2022",
+    "vcomp140.dll": "vcrun2022", "msvcr120.dll": "vcrun2013", "msvcp120.dll": "vcrun2013",
+    "msvcr110.dll": "vcrun2012", "msvcp110.dll": "vcrun2012", "msvcr100.dll": "vcrun2010",
+    "msvcp100.dll": "vcrun2010", "msvcr90.dll": "vcrun2008", "msvcp90.dll": "vcrun2008",
+    "msvcr80.dll": "vcrun2005", "msvcr71.dll": "vcrun2003",
+    "d3dcompiler_47.dll": "d3dcompiler_47", "d3dcompiler_43.dll": "d3dcompiler_43",
+    "d3dx9_43.dll": "d3dx9_43", "d3dx9_42.dll": "d3dx9_42", "d3dx9_41.dll": "d3dx9_41",
+    "d3dx9_40.dll": "d3dx9_40", "d3dx9_39.dll": "d3dx9_39", "d3dx9_36.dll": "d3dx9_36",
+    "d3dx9_35.dll": "d3dx9_35", "d3dx9_34.dll": "d3dx9_34", "d3dx9_33.dll": "d3dx9_33",
+    "d3dx9_31.dll": "d3dx9_31", "d3dx9_30.dll": "d3dx9_30", "d3dx9_26.dll": "d3dx9_26",
+    "d3dx9_24.dll": "d3dx9_24", "d3dx10_43.dll": "d3dx10_43", "d3dx11_43.dll": "d3dx11_43",
+    "xinput1_3.dll": "xinput", "xinput1_4.dll": "xinput", "xinput9_1_0.dll": "xinput",
+    "x3daudio1_7.dll": "xact", "xaudio2_7.dll": "xact", "xactengine3_7.dll": "xact",
+    "xapofx1_5.dll": "xact", "dinput8.dll": "dinput8", "physxloader.dll": "physx",
+    "mfplat.dll": "mf", "mfreadwrite.dll": "mf", "mf.dll": "mf",
+    "binkw32.dll": "", "steam_api64.dll": "", "steam_api.dll": "",    # (come with the game: nothing to install)
+}
+
+
+def say(*a):
+    print(*a, flush=True)
+
+
+def read_json(p):
+    try:
+        return json.loads(Path(p).read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def the_list():
+    """The newest readable list: the Mac's fetched copy if it is at least as new as the kit's, else the kit's."""
+    best, best_date = {}, ""
+    for p in LISTS:
+        d = read_json(p)
+        if isinstance(d.get("games"), dict):
+            when = str(d.get("updated", ""))
+            if not best or when > best_date:
+                best, best_date = d, when
+    return best
+
+
+def shortcut_ids():
+    """Store games installed here: {"gog:ID": shortcut appid, "epic:NAME": appid}."""
+    out = {}
+    g = read_json(STORES_GAMES)
+    for store, games in (g.items() if isinstance(g, dict) else []):
+        if isinstance(games, dict):
+            for gid, rec in games.items():
+                if isinstance(rec, dict) and str(rec.get("appid", "")).isdigit():
+                    out[f"{store}:{gid}"] = str(rec["appid"])
+    return out
+
+
+def env_lines(entry):
+    lines = []
+    for k, v in (entry.get("env") or {}).items():
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", str(k)) and "\n" not in str(v):
+            lines.append(f"{k}={v}")
+    if entry.get("args"):
+        lines.append(f"BOTTLE_GAME_ARGS={entry['args']}")
+    if entry.get("dlloverrides"):
+        lines.append(f"WINEDLLOVERRIDES={entry['dlloverrides']};winedbg.exe=d")
+    return lines
+
+
+def cmd_apply(args):
+    d = the_list()
+    games = d.get("games") or {}
+    ids = shortcut_ids()
+    (OUT / "games").mkdir(parents=True, exist_ok=True)
+    (OUT / "notes").mkdir(parents=True, exist_ok=True)
+    (OUT / "verbs").mkdir(parents=True, exist_ok=True)
+    for f in list((OUT / "games").glob("*.env")) + list((OUT / "notes").glob("*.txt")) + list((OUT / "verbs").glob("*")):
+        f.unlink(missing_ok=True)
+    n = 0
+    for key, entry in games.items():
+        if not isinstance(entry, dict):
+            continue
+        appid = key.split(":", 1)[1] if key.startswith("steam:") else ids.get(key)
+        if not appid or not str(appid).isdigit():
+            continue
+        lines = env_lines(entry)
+        if lines:
+            (OUT / "games" / f"{appid}.env").write_text(f"# {entry.get('name', key)} (fixes list, {d.get('updated', '')})\n" + "\n".join(lines) + "\n")
+        if entry.get("note") or entry.get("status"):
+            (OUT / "notes" / f"{appid}.txt").write_text(f"{entry.get('status', '')}\n{entry.get('note', '')}\n")
+        verbs = [v for v in (entry.get("winetricks") or []) if re.fullmatch(r"[a-z0-9_]+", str(v))]
+        if verbs:
+            (OUT / "verbs" / appid).write_text(" ".join(verbs) + "\n")
+        n += 1
+    say(f"fixes: {n} entr{'y' if n == 1 else 'ies'} apply here (list of {d.get('updated', '?')})")
+    # verbs a prefix still needs, while Steam isn't running
+    if not steam_running():
+        for f in (OUT / "verbs").glob("*"):
+            appid = f.name
+            verbs = f.read_text().split()
+            pfx = prefix_of(appid)
+            if pfx is None:
+                continue
+            done = set((pfx / ".portalistic-winetricks").read_text().split()) if (pfx / ".portalistic-winetricks").is_file() else set()
+            todo = [v for v in verbs if v not in done]
+            if todo:
+                run_winetricks(appid, todo)
+    return 0
+
+
+def steam_running():
+    return subprocess.run(["pgrep", "-f", "[s]teamrtarm64/steam"], capture_output=True).returncode == 0
+
+
+def libraries():
+    """Every steamapps folder Steam knows."""
+    out = [STEAM / "steamapps"]
+    t = ""
+    try:
+        t = (STEAM / "steamapps/libraryfolders.vdf").read_text(errors="replace")
+    except OSError:
+        pass
+    for p in re.findall(r'"path"\s*"([^"]+)"', t):
+        out.append(Path(p.replace("\\\\", "\\")) / "steamapps")
+    return out
+
+
+def prefix_of(appid):
+    """The game's Wine prefix root (compatdata/<appid>), or None when it doesn't exist yet."""
+    for apps in libraries():
+        p = apps / "compatdata" / str(appid)
+        if (p / "pfx").is_dir():
+            return p
+    return None
+
+
+def proton_dir(appid):
+    """The Proton the game uses (from its prefix's version note, else the newest Proton installed)."""
+    pfx = prefix_of(appid)
+    want = ""
+    if pfx and (pfx / "version").is_file():
+        want = (pfx / "version").read_text().strip()          # e.g. "11.0-100 ..." (Proton Experimental)
+    cands = []
+    for apps in libraries():
+        for p in (apps / "common").glob("Proton*"):
+            if (p / "files/bin/wine").is_file() or (p / "dist/bin/wine").is_file():
+                cands.append(p)
+    for p in cands:
+        try:
+            if want and (p / "version").read_text().split()[0] == want.split()[0]:
+                return p
+        except (OSError, IndexError):
+            pass
+    cands.sort(key=lambda p: ("Experimental" not in p.name, p.name))
+    return cands[0] if cands else None
+
+
+def run_winetricks(appid, verbs):
+    """Winetricks verbs into the game's prefix with its Proton's Wine (x86-64, run through the translator the
+    way Proton's games are). -> True when every verb installed."""
+    pfx = prefix_of(appid)
+    proton = proton_dir(appid)
+    tricks = shutil.which("winetricks") or str(CACHE / "kit/guest/winetricks")
+    if pfx is None or proton is None or not Path(tricks).is_file():
+        say(f"winetricks: {'no prefix yet' if pfx is None else 'no Proton found' if proton is None else 'winetricks is not in the kit'} for {appid}")
+        return False
+    files = proton / ("files" if (proton / "files").is_dir() else "dist")
+    env = dict(os.environ)
+    env.update({
+        "WINEPREFIX": str(pfx / "pfx"), "WINE": str(files / "bin/wine"), "WINE64": str(files / "bin/wine64") if (files / "bin/wine64").is_file() else str(files / "bin/wine"),
+        "WINESERVER": str(files / "bin/wineserver"), "WINEDLLPATH": str(files / "lib64/wine") + ":" + str(files / "lib/wine"),
+        "PATH": str(files / "bin") + ":" + env.get("PATH", ""), "LD_LIBRARY_PATH": str(files / "lib64") + ":" + str(files / "lib") + (":" + env["LD_LIBRARY_PATH"] if env.get("LD_LIBRARY_PATH") else ""),
+        "WINEDEBUG": "-all", "WINETRICKS_LATEST_VERSION_CHECK": "disabled", "WINETRICKS_GUI": "none",
+    })
+    log = CACHE / "game-logs" / f"winetricks-{appid}.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    say(f"Installing into the game's prefix: {' '.join(verbs)} (a minute or two)…")
+    with open(log, "a") as fh:
+        fh.write(f"== {' '.join(verbs)} with {proton.name}\n")
+        fh.flush()
+        try:
+            r = subprocess.run(["bash", tricks, "-q", "--force"] + verbs, env=env, stdout=fh, stderr=subprocess.STDOUT, timeout=1800)
+            rc = r.returncode
+        except subprocess.TimeoutExpired:
+            rc = 124
+    if rc == 0:
+        done = set((pfx / ".portalistic-winetricks").read_text().split()) if (pfx / ".portalistic-winetricks").is_file() else set()
+        (pfx / ".portalistic-winetricks").write_text(" ".join(sorted(done | set(verbs))) + "\n")
+        say(f"Installed {' '.join(verbs)} for {appid}.")
+        return True
+    say(f"Winetricks didn't finish ({rc}); its log: {log}")
+    return False
+
+
+def cmd_note(args):
+    f = OUT / "notes" / f"{args[0]}.txt"
+    if f.is_file():
+        sys.stdout.write(f.read_text())
+    return 0
+
+
+def cmd_dll(args):
+    v = DLL_VERBS.get(args[0].lower(), None)
+    if v:
+        say(v)
+    return 0
+
+
+def cmd_list(args):
+    d = the_list()
+    ids = shortcut_ids()
+    say(f"Portalistic's fixes list ({d.get('updated', '?')}):")
+    for key, e in sorted((d.get("games") or {}).items()):
+        here = key.startswith("steam:") and prefix_of(key[6:]) is not None or key in ids
+        say(f"  {e.get('status', ''):<11} {e.get('name', key)} [{key}]{'  (installed here)' if here else ''}")
+        if e.get("note"):
+            say(f"              {e['note']}")
+    return 0
+
+
+def main():
+    a = sys.argv[1:]
+    if not a or a[0] in ("-h", "--help"):
+        print(__doc__)
+        return 0
+    cmd, rest = a[0], a[1:]
+    if cmd == "apply":
+        return cmd_apply(rest)
+    if cmd == "list":
+        return cmd_list(rest)
+    if cmd == "note" and rest:
+        return cmd_note(rest)
+    if cmd == "dll" and rest:
+        return cmd_dll(rest)
+    if cmd == "winetricks" and len(rest) >= 2 and rest[0].isdigit():
+        return 0 if run_winetricks(rest[0], rest[1:]) else 1
+    print(__doc__)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

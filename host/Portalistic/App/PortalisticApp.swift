@@ -7,7 +7,7 @@
 // detail) follows. The picture is shown with Metal: MetalFX enlarges it to the window's pixel
 // size, in step with the display, at up to 120 fps on ProMotion screens (View menu). When a
 // game hides its pointer (mouse-look), the app captures the Mac's mouse and sends raw relative
-// motion, which VNC can't do. Command-Escape releases the mouse; a click in the window lets it
+// motion, which VNC can't do. Control-Option (⌃⌥) releases the mouse; a click in the window lets it
 // capture again. Command shortcuts stay with the Mac. Game controllers (Xbox, PlayStation
 // DualSense/DualShock, other MFi pads) become virtual Xbox 360 pads in the VM, and the game's
 // rumble comes back to them.

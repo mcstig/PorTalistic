@@ -5,6 +5,8 @@
 #   Contents/MacOS/Portalistic        the app
 #   Contents/Resources/kit/           the bottle command and the VM's side (host/bottle, guest/)
 #   Contents/Helpers/bin/             limactl, krunkit, bottle-audio (the sound player)
+#   Contents/Helpers/lib/             libportalistic_mtlcache.dylib (loaded into krunkit: the Metal
+#                                     library cache and vertex-shader mending, host/mtl-libcache)
 #   Contents/Helpers/libexec/lima/    Lima's krunkit driver
 #   Contents/Resources/share/krunkit/ the EFI firmware krunkit boots the VM with
 #   Contents/Resources/share/lima/    Lima's guest agent (Lima looks for it in ../share/lima from
@@ -188,6 +190,15 @@ EOF
 swiftc -O -target arm64-apple-macosx13.0 -o "$H/bin/bottle-audio" "$KIT/host/bottle-audio.swift" >"$OUT/audio-build.log" 2>&1 \
   || die "The sound player didn't build (build/audio-build.log)."
 
+# ---- the Metal library cache krunkit loads (host/mtl-libcache; bottle's vm_start puts it in
+# DYLD_INSERT_LIBRARIES: krunkit's entitlements allow that, and library validation takes it as it's
+# signed by the same team) ----
+mkdir -p "$H/lib"
+clang -dynamiclib -O2 -fno-objc-arc -mmacosx-version-min=14.0 -arch arm64 \
+  -framework Foundation -framework Metal -o "$H/lib/libportalistic_mtlcache.dylib" \
+  "$KIT/host/mtl-libcache/mtl_libcache.m" >"$OUT/mtlcache-build.log" 2>&1 \
+  || die "The Metal library cache didn't build (build/mtlcache-build.log)."
+
 # ---- the kit: the bottle command and the VM's side (not the kit's tests or build files) ----
 cp "$KIT/host/bottle" "$KIT/host/bottle-fexfix.py" "$C/Resources/kit/host/"
 # where the app gets its Linux system on first launch (host/build-image.sh writes it)
@@ -211,6 +222,8 @@ cat > "$ENT" <<'EOF'
 <dict>
 	<key>com.apple.security.hypervisor</key>
 	<true/>
+	<key>com.apple.security.cs.allow-dyld-environment-variables</key>
+	<true/>
 </dict>
 </plist>
 EOF
@@ -219,7 +232,22 @@ EOF
 xattr -cr "$APP"
 sign() { codesign --force --timestamp --options runtime --sign "$IDENTITY" "$@" 2>&1 | grep -v "replacing existing signature" || true; }
 for f in "$FW"/*.dylib; do sign "$f"; done
-sign "$H/bin/limactl" "$H/libexec/lima/lima-driver-krunkit" "$H/bin/bottle-audio"
+# limactl and Lima's driver pass DYLD_INSERT_LIBRARIES on to krunkit: under the hardened runtime
+# dyld would drop it from their environment unless they may have DYLD_ variables too (they then
+# load the cache library as well; it does nothing in them, they make no Metal device)
+ENT2="$WORK/dyld-env.entitlements"
+cat > "$ENT2" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.cs.allow-dyld-environment-variables</key>
+	<true/>
+</dict>
+</plist>
+PLIST
+sign "$H/lib/libportalistic_mtlcache.dylib" "$H/bin/bottle-audio"
+sign --entitlements "$ENT2" "$H/bin/limactl" "$H/libexec/lima/lima-driver-krunkit"
 sign --entitlements "$ENT" "$H/bin/krunkit"
 sign "$APP"
 codesign --verify --deep --strict "$APP" || die "The signature doesn't verify."

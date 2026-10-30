@@ -164,8 +164,17 @@ def diagnose(path):
             "Usually a shader the Mac couldn't build. Starting it again often gets further (the shaders "
             "built so far are kept).")
         return d
-    dll = re.search(r"err:module:import_dll (?:Library|Loading library) (\S+) \(which is needed by L?\"?([^\")]*)", text)
+    # (a DLL a plugin wanted - Qt's imageformats/, platforms/, plugins/ - is optional: the launcher goes on
+    # without it; Oct 26, GWENT's REDlauncher and Qt5Pdf.dll)
+    dll = None
+    for m in re.finditer(r"err:module:import_dll (?:Library|Loading library) (\S+) \(which is needed by L?\"?([^\")]*)", text):
+        needer = m.group(2).replace(chr(92), "/").lower()
+        if re.search(r"/(imageformats|platforms|plugins|iconengines|styles|bearer|sqldrivers)/", needer):
+            continue
+        dll = m
+        break
     if dll:
+        d["dll"] = dll.group(1)
         say("dll", f"{gone}: it needs {dll.group(1)}, which isn't there",
             f"{Path(dll.group(2).replace(chr(92), '/')).name or 'The game'} asked for {dll.group(1)}; "
             "Proton doesn't include it. Some games install it with their redistributables on first launch.")
@@ -285,8 +294,51 @@ def notify(path):
         time.sleep(3)
         start_game(appid)
         return 0
-    notice(1, 25, d["title"], d["detail"])
+    problem_notice(d)
     return 0
+
+
+def fixes_note(appid):
+    """The fixes list's note for the game (bottle-fixes note): (status, note) or ("", "")."""
+    try:
+        out = subprocess.run(["bottle-fixes", "note", str(appid)], capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return "", ""
+    lines = out.split("\n")
+    return (lines[0].strip(), lines[1].strip()) if len(lines) >= 2 else ("", "")
+
+
+def dll_verb(name):
+    try:
+        return subprocess.run(["bottle-fixes", "dll", name], capture_output=True, text=True, timeout=10).stdout.strip()
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+
+
+VERB_NAMES = {"vcrun2022": "the Visual C++ 2015-2022 runtime", "vcrun2013": "the Visual C++ 2013 runtime",
+              "vcrun2012": "the Visual C++ 2012 runtime", "vcrun2010": "the Visual C++ 2010 runtime",
+              "vcrun2008": "the Visual C++ 2008 runtime", "vcrun2005": "the Visual C++ 2005 runtime",
+              "vcrun2003": "the Visual C++ 2003 runtime", "xact": "the XAudio (XACT) libraries", "xinput": "the XInput libraries",
+              "physx": "PhysX", "mf": "the Media Foundation libraries", "dinput8": "DirectInput 8"}
+
+
+def problem_notice(d):
+    """The banner for a game that closed by itself: what happened, the fixes list's note if it has one, and
+    buttons (kind 4): "Install X and try again" for a missing DLL a Winetricks verb brings, and "Report this
+    problem…" (bottle report, on the Mac: a cleaned-up report file and a prefilled GitHub issue)."""
+    appid = d.get("appid") or ""
+    detail = d["detail"]
+    status, note = fixes_note(appid) if appid else ("", "")
+    if note:
+        detail += f"\n\nPortalistic's fixes list says: {note}"
+    lines = [detail]
+    verb = dll_verb(d["dll"]) if d.get("cause") == "dll" and d.get("dll") else ""
+    if verb and appid:
+        what = VERB_NAMES.get(verb, ("DirectX's " + verb) if verb.startswith(("d3dx", "d3dcompiler")) else verb)
+        lines.append(f"@@Install {what} and try again|fix {appid} {verb}")
+    if appid:
+        lines.append(f"@@Report this problem…|report {appid}")
+    notice(4 if len(lines) > 1 else 1, 25, d["title"], "\n".join(lines))
 
 
 def main():

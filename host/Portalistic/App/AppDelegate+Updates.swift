@@ -76,7 +76,7 @@ extension AppDelegate {
             }
         }
         guard c.start() else {
-            if when == .asked { tell("Couldn't run the bottle command.", BottleCommand.script ?? "") }
+            if when == .asked { tell("Couldn't run Portalistic's helper script.", BottleCommand.script ?? "") }
             return
         }
         quietCommands.removeAll { !$0.running }

@@ -31,20 +31,32 @@ extension AppDelegate {
             window.makeFirstResponder(view)
             showFirstStartTipsIfNew()            // (once per Mac: what to expect from games)
             LocalNetworkAccess.shared.ask()      // (macOS's local-network permission, for the LAN's file servers)
-        } else if !rebuilding {
+            startHelperOnce()
+        } else if !rebuilding && !shuttingDown {
             hostStats.stop()
             // A restart of the VM's screen server (an update) comes back within seconds.
             setStartScreen(true)
-            startView.show("Reconnecting to the bottle…", busy: true)
+            startView.show("Reconnecting to the VM…", busy: true)
             lostTimer = Timer.scheduledTimer(timeInterval: 10, target: self, selector: #selector(lostTimerFired),
                                              userInfo: nil, repeats: false)
         }
         updateSubtitle()
     }
 
+    /// The kit's background helper (`bottle _awake`: the VM's disk, game drives, the kit's own
+    /// checks). Starting the VM starts it; an app opened onto a VM that was already running started
+    /// none (Oct 30), so the first connection asks for it too (it's a no-op when it's running).
+    private static var helperAsked = false
+    func startHelperOnce() {
+        guard !AppDelegate.helperAsked else { return }
+        AppDelegate.helperAsked = true
+        let c = BottleCommand(["_awake-start"], log: "helper")
+        if c.start() { quietCommands.append(c) }
+    }
+
     @objc func lostTimerFired() {
         lostTimer = nil
-        guard !view.connected, starter == nil else { return }
+        guard !view.connected, starter == nil, !shuttingDown else { return }
         if activity.busy {
             startView.show("Portalistic is busy…", detail: "See Steam > Show Activity.", busy: true)
         } else {
@@ -54,7 +66,7 @@ extension AppDelegate {
 
     /// A Steam menu job ended (an update, a shutdown...): if the screen is gone, say so.
     func activityEnded() {
-        guard !view.connected, starter == nil, lostTimer == nil, !rebuilding else { return }
+        guard !view.connected, starter == nil, lostTimer == nil, !rebuilding, !shuttingDown else { return }
         showStopped()
     }
 
@@ -82,10 +94,10 @@ extension AppDelegate {
         c.onLine = { [weak self] line in self?.startProgress(line) }
         c.onExit = { [weak self, unowned c] code in self?.startDone(code, c) }
         starter = c
-        startView.show("Starting the bottle…", busy: true)
+        startView.show("Starting the VM…", busy: true)
         if !c.start() {
             starter = nil
-            startView.show("Couldn't run the bottle command.", detail: BottleCommand.script ?? "", busy: false,
+            startView.show("Couldn't run Portalistic's helper script.", detail: BottleCommand.script ?? "", busy: false,
                            button: "Try Again")
         }
     }
@@ -109,14 +121,14 @@ extension AppDelegate {
             // The screen is there, but something after it didn't start (Steam, say).
             if code != 0 {
                 let alert = NSAlert()
-                alert.messageText = "Part of the bottle didn't start"
+                alert.messageText = "Part of the VM didn't start"
                 alert.informativeText = c.problem + "\n\nSteam > Restart Steam tries again; Steam > Save Logs saves what helps find out why."
                 alert.beginSheetModal(for: window, completionHandler: nil)
             }
             return
         }
         if code == 0 {
-            startView.show("Waiting for the bottle's screen…", busy: true)
+            startView.show("Waiting for the VM's screen…", busy: true)
             startedCommand = c
             screenTimer = Timer.scheduledTimer(timeInterval: 20, target: self, selector: #selector(screenTimerFired),
                                                userInfo: nil, repeats: false)

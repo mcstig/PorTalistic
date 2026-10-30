@@ -469,7 +469,7 @@ extension AppDelegate {
             self.askToUninstall(Installation.rows(from: list.lines))
         }
         if !list.start() {
-            installNotice("Couldn't run the bottle command.", BottleCommand.script ?? "")
+            installNotice("Couldn't run Portalistic's helper script.", BottleCommand.script ?? "")
             return
         }
         quietCommands.removeAll { !$0.running }

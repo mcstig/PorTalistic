@@ -1,0 +1,347 @@
+{
+  "format": 1,
+  "updated": "2026-10-30T09:25:20Z",
+  "about": "Portalistic's game fixes: what the bottle applies when a game starts, and what it tells the player when a game quits. Keys: steam:<appid>, gog:<id>, epic:<app name>. Fields: name; note (shown with Portalistic's banner when the game quits, and in the fixes list); env (KEY: value, the game's environment, like guest/games/<appid>.env); args (added to the game's command line); dlloverrides (Wine's WINEDLLOVERRIDES additions); winetricks (verbs installed into the game's prefix once); status: works | needs-login | crashes | wont-run (a known, hard reason) | unlikely (a reason that applies to its class, not tested with this game).",
+  "games": {
+    "steam:1284410": {
+      "name": "GWENT: The Witcher Card Game",
+      "status": "needs-login",
+      "note": "Sign in to the GOG/RED account in the launcher window it opens: without it the launcher quits, and the game crashed in Galaxy's layer on the dev Mac (Oct 26). The GOG build of GWENT (Stores > GOG Games…) signs in by itself."
+    },
+    "gog:1971477531": {
+      "name": "GWENT: The Witcher Card Game",
+      "status": "works",
+      "note": "Signed in through Portalistic's Galaxy stand-in (Comet) with your GOG account."
+    },
+    "steam:588650": {
+      "name": "Dead Cells",
+      "status": "works",
+      "note": "Runs as its Windows version (the Linux one can't run on this Mac). If Steam installed it while running, Portalistic restarts Steam once to switch it."
+    },
+    "epic:BioshockRemastered": {
+      "name": "BioShock Remastered",
+      "status": "crashes",
+      "note": "A 32-bit game: it freezes about 30 s into play under the x86 translator (a thread-suspension problem, Oct 22). Not fixed yet."
+    },
+    "steam:3259780": {
+      "name": "FINAL FANTASY RESONANCE",
+      "status": "wont-run",
+      "note": "Its copy protection (Denuvo) crashes 3 s in, before DirectX, on every start in the bottle; it also needs DirectX 12 only. Nothing to set."
+    },
+    "steam:4474710": {
+      "name": "FINAL FANTASY RESONANCE DEMO",
+      "status": "wont-run",
+      "note": "Same as the full game: the copy protection crashes before DirectX."
+    },
+    "steam:2483190": {
+      "name": "Forza Horizon 6",
+      "status": "wont-run",
+      "note": "Its anti-tamper layer (Arxan) crashes right after the game loads, before it draws anything: a check the x86 translator doesn't pass. Nothing to install or set; the same build runs on a Steam Deck (real x86). It also needs Vulkan features the Mac's GPU path doesn't have yet."
+    },
+    "steam:1551360": {
+      "name": "Forza Horizon 5",
+      "status": "wont-run",
+      "note": "Its anti-tamper layer (Arxan; the same code as in Forza Horizon 6) crashes right after the game loads, before it draws anything: a check the x86 translator doesn't pass. Nothing to install or set; the same build runs on a Steam Deck (real x86)."
+    },
+    "steam:2807960": {
+      "name": "Battlefield 6 (and REDSEC)",
+      "status": "wont-run",
+      "note": "EA's Javelin anti-cheat is a Windows kernel driver and EA offers no Linux version: the game refuses to start on any Linux system (Steam Deck included)."
+    },
+    "steam:1517290": {
+      "name": "Battlefield 2042",
+      "status": "wont-run",
+      "note": "EA's Javelin anti-cheat is a Windows kernel driver and EA offers no Linux version: the game refuses to start on any Linux system (Steam Deck included)."
+    },
+    "steam:1238810": {
+      "name": "Battlefield V",
+      "status": "wont-run",
+      "note": "EA's Javelin anti-cheat is a Windows kernel driver and EA offers no Linux version: the game refuses to start on any Linux system (Steam Deck included)."
+    },
+    "steam:1238840": {
+      "name": "Battlefield 1",
+      "status": "wont-run",
+      "note": "EA's Javelin anti-cheat is a Windows kernel driver and EA offers no Linux version: the game refuses to start on any Linux system (Steam Deck included)."
+    },
+    "steam:3405690": {
+      "name": "EA SPORTS FC 26",
+      "status": "wont-run",
+      "note": "EA's Javelin anti-cheat is a Windows kernel driver and EA offers no Linux version: the game refuses to start on any Linux system (Steam Deck included)."
+    },
+    "steam:2669320": {
+      "name": "EA SPORTS FC 25",
+      "status": "wont-run",
+      "note": "EA's Javelin anti-cheat is a Windows kernel driver and EA offers no Linux version: the game refuses to start on any Linux system (Steam Deck included)."
+    },
+    "steam:3230400": {
+      "name": "Madden NFL 26",
+      "status": "wont-run",
+      "note": "EA's Javelin anti-cheat is a Windows kernel driver and EA offers no Linux version: the game refuses to start on any Linux system (Steam Deck included)."
+    },
+    "steam:3059520": {
+      "name": "F1 25",
+      "status": "wont-run",
+      "note": "EA's Javelin anti-cheat is a Windows kernel driver and EA offers no Linux version: the game refuses to start on any Linux system (Steam Deck included)."
+    },
+    "steam:2488620": {
+      "name": "F1 24",
+      "status": "wont-run",
+      "note": "EA's Javelin anti-cheat is a Windows kernel driver and EA offers no Linux version: the game refuses to start on any Linux system (Steam Deck included)."
+    },
+    "steam:1849250": {
+      "name": "EA SPORTS WRC",
+      "status": "wont-run",
+      "note": "EA's Javelin anti-cheat is a Windows kernel driver and EA offers no Linux version: the game refuses to start on any Linux system (Steam Deck included)."
+    },
+    "steam:3354750": {
+      "name": "skate.",
+      "status": "wont-run",
+      "note": "EA's Javelin anti-cheat is a Windows kernel driver and EA offers no Linux version: the game refuses to start on any Linux system (Steam Deck included)."
+    },
+    "steam:1262240": {
+      "name": "Plants vs. Zombies: Battle for Neighborville",
+      "status": "wont-run",
+      "note": "EA's Javelin anti-cheat is a Windows kernel driver and EA offers no Linux version: the game refuses to start on any Linux system (Steam Deck included)."
+    },
+    "steam:1938090": {
+      "name": "Call of Duty (Warzone / MWII / MWIII)",
+      "status": "wont-run",
+      "note": "Activision's RICOCHET anti-cheat is a Windows kernel driver with no Linux version: the game refuses to start on any Linux system."
+    },
+    "steam:4384550": {
+      "name": "Call of Duty: Black Ops 6",
+      "status": "wont-run",
+      "note": "Activision's RICOCHET anti-cheat is a Windows kernel driver with no Linux version: the game refuses to start on any Linux system."
+    },
+    "steam:3606480": {
+      "name": "Call of Duty: Black Ops 7",
+      "status": "wont-run",
+      "note": "Activision's RICOCHET anti-cheat is a Windows kernel driver with no Linux version: the game refuses to start on any Linux system."
+    },
+    "steam:4435490": {
+      "name": "Call of Duty: Modern Warfare 4",
+      "status": "wont-run",
+      "note": "Activision's RICOCHET anti-cheat is a Windows kernel driver with no Linux version: the game refuses to start on any Linux system."
+    },
+    "steam:1985820": {
+      "name": "Call of Duty: Vanguard",
+      "status": "wont-run",
+      "note": "Activision's RICOCHET anti-cheat is a Windows kernel driver with no Linux version: the game refuses to start on any Linux system."
+    },
+    "steam:3595230": {
+      "name": "Call of Duty: Modern Warfare II",
+      "status": "wont-run",
+      "note": "Activision's RICOCHET anti-cheat is a Windows kernel driver with no Linux version: the game refuses to start on any Linux system."
+    },
+    "steam:359550": {
+      "name": "Tom Clancy's Rainbow Six Siege X",
+      "status": "wont-run",
+      "note": "Its BattlEye anti-cheat isn't enabled for Linux by the developer: the game starts but can't get past the anti-cheat on any Linux system."
+    },
+    "steam:578080": {
+      "name": "PUBG: BATTLEGROUNDS",
+      "status": "wont-run",
+      "note": "Its BattlEye anti-cheat isn't enabled for Linux by the developer: the game starts but can't get past the anti-cheat on any Linux system."
+    },
+    "steam:1085660": {
+      "name": "Destiny 2",
+      "status": "wont-run",
+      "note": "Its BattlEye anti-cheat isn't enabled for Linux by the developer: the game starts but can't get past the anti-cheat on any Linux system."
+    },
+    "steam:3065800": {
+      "name": "Marathon",
+      "status": "wont-run",
+      "note": "Its BattlEye anti-cheat isn't enabled for Linux by the developer: the game starts but can't get past the anti-cheat on any Linux system."
+    },
+    "steam:646910": {
+      "name": "The Crew 2",
+      "status": "wont-run",
+      "note": "Its BattlEye anti-cheat isn't enabled for Linux by the developer: the game starts but can't get past the anti-cheat on any Linux system."
+    },
+    "steam:3240220": {
+      "name": "Grand Theft Auto V Enhanced",
+      "status": "unlikely",
+      "note": "GTA Online is blocked on Linux (BattlEye isn't enabled for it); the story mode works on Linux PCs, but under the x86 translator this edition is reported to crash before its launcher (FEX wiki). Try the Legacy edition for story mode."
+    },
+    "steam:252490": {
+      "name": "Rust",
+      "status": "wont-run",
+      "note": "Its Easy Anti-Cheat isn't enabled for Linux by the developer: the game refuses to start on any Linux system."
+    },
+    "steam:304390": {
+      "name": "FOR HONOR",
+      "status": "wont-run",
+      "note": "Its Easy Anti-Cheat isn't enabled for Linux by the developer: the game refuses to start on any Linux system."
+    },
+    "steam:678950": {
+      "name": "DRAGON BALL FighterZ",
+      "status": "wont-run",
+      "note": "Its Easy Anti-Cheat isn't enabled for Linux by the developer: the game refuses to start on any Linux system."
+    },
+    "steam:266410": {
+      "name": "iRacing",
+      "status": "wont-run",
+      "note": "Its Easy Anti-Cheat isn't enabled for Linux by the developer: the game refuses to start on any Linux system."
+    },
+    "steam:2399420": {
+      "name": "Le Mans Ultimate",
+      "status": "wont-run",
+      "note": "Its Easy Anti-Cheat isn't enabled for Linux by the developer: the game refuses to start on any Linux system."
+    },
+    "steam:641080": {
+      "name": "Trials Rising",
+      "status": "wont-run",
+      "note": "Its Easy Anti-Cheat isn't enabled for Linux by the developer: the game refuses to start on any Linux system."
+    },
+    "steam:2705130": {
+      "name": "Exoborne",
+      "status": "wont-run",
+      "note": "Its Easy Anti-Cheat isn't enabled for Linux by the developer: the game refuses to start on any Linux system."
+    },
+    "steam:1995520": {
+      "name": "Pax Dei",
+      "status": "wont-run",
+      "note": "Its Easy Anti-Cheat isn't enabled for Linux by the developer: the game refuses to start on any Linux system."
+    },
+    "steam:1170950": {
+      "name": "Mortal Online 2",
+      "status": "wont-run",
+      "note": "Its Easy Anti-Cheat isn't enabled for Linux by the developer: the game refuses to start on any Linux system."
+    },
+    "steam:1928420": {
+      "name": "Farlight 84",
+      "status": "wont-run",
+      "note": "Its Easy Anti-Cheat isn't enabled for Linux by the developer: the game refuses to start on any Linux system."
+    },
+    "steam:1172470": {
+      "name": "Apex Legends",
+      "status": "wont-run",
+      "note": "EA/Respawn removed Linux support from Apex Legends in October 2024: its anti-cheat refuses to start the game on any Linux system."
+    },
+    "steam:2073620": {
+      "name": "Arena Breakout: Infinite",
+      "status": "wont-run",
+      "note": "Its Anti-Cheat Expert (Tencent) anti-cheat allows only real Steam Deck hardware on Linux; anywhere else it refuses to start the game."
+    },
+    "steam:2507950": {
+      "name": "Delta Force",
+      "status": "wont-run",
+      "note": "Its Anti-Cheat Expert (Tencent) anti-cheat allows only real Steam Deck hardware on Linux; anywhere else it refuses to start the game."
+    },
+    "steam:2452280": {
+      "name": "Mecha BREAK",
+      "status": "wont-run",
+      "note": "Its Anti-Cheat Expert (Tencent) anti-cheat allows only real Steam Deck hardware on Linux; anywhere else it refuses to start the game."
+    },
+    "steam:3164330": {
+      "name": "Infinity Nikki",
+      "status": "wont-run",
+      "note": "Its Anti-Cheat Expert (Tencent) anti-cheat allows only real Steam Deck hardware on Linux; anywhere else it refuses to start the game."
+    },
+    "steam:1671200": {
+      "name": "Honkai Impact 3rd",
+      "status": "wont-run",
+      "note": "Its Anti-Cheat Expert (Tencent) anti-cheat allows only real Steam Deck hardware on Linux; anywhere else it refuses to start the game."
+    },
+    "steam:3513350": {
+      "name": "Wuthering Waves",
+      "status": "wont-run",
+      "note": "Its Anti-Cheat Expert (Tencent) anti-cheat allows only real Steam Deck hardware on Linux; anywhere else it refuses to start the game."
+    },
+    "steam:2767030": {
+      "name": "Marvel Rivals",
+      "status": "wont-run",
+      "note": "Its NEAC Protect anti-cheat takes the x86 translator for a virtual machine and blocks the game (FEX wiki, 2025). It works on a real Linux PC, not here."
+    },
+    "steam:2357570": {
+      "name": "Overwatch 2",
+      "status": "unlikely",
+      "note": "Reported to launch and then hang in the background under the x86 translator (FEX wiki, 2025): its anti-cheat doesn't behave. Works on a Linux PC."
+    },
+    "steam:1359090": {
+      "name": "Zero Hour",
+      "status": "wont-run",
+      "note": "Its Denuvo Anti-Cheat isn't enabled for Linux: the game refuses to start on any Linux system."
+    },
+    "steam:1466860": {
+      "name": "Age of Empires IV: Anniversary Edition",
+      "status": "wont-run",
+      "note": "Its Arxan anti-tamper layer (Microsoft-published PC games ship it) crashes under the x86 translator, right after the game loads and before it draws anything, like Forza Horizon 5 and 6. Nothing to install or set."
+    },
+    "steam:1250410": {
+      "name": "Microsoft Flight Simulator (2020)",
+      "status": "wont-run",
+      "note": "Its Arxan anti-tamper layer (Microsoft-published PC games ship it) crashes under the x86 translator, right after the game loads and before it draws anything, like Forza Horizon 5 and 6. Nothing to install or set."
+    },
+    "steam:1888160": {
+      "name": "ARMORED CORE VI FIRES OF RUBICON",
+      "status": "wont-run",
+      "note": "Its Arxan anti-tamper layer (Microsoft-published PC games ship it) crashes under the x86 translator, right after the game loads and before it draws anything, like Forza Horizon 5 and 6. Nothing to install or set."
+    },
+    "steam:2537590": {
+      "name": "Microsoft Flight Simulator 2024",
+      "status": "unlikely",
+      "note": "Microsoft's PC games ship the Arxan anti-tamper layer that crashes under the x86 translator (Forza, Flight Simulator 2020). Not tested with this one."
+    },
+    "steam:2523720": {
+      "name": "Gears of War: Reloaded",
+      "status": "unlikely",
+      "note": "Microsoft's PC games ship the Arxan anti-tamper layer that crashes under the x86 translator (Forza, Flight Simulator 2020), and this one adds Easy Anti-Cheat. Not tested."
+    },
+    "steam:1687950": {
+      "name": "Persona 5 Royal",
+      "status": "wont-run",
+      "note": "Its Denuvo copy protection doesn't pass under the x86 translator: the game doesn't run (FEX wiki, 2026). Other Denuvo games do run; this one is known not to."
+    },
+    "steam:429660": {
+      "name": "Tales of Berseria",
+      "status": "wont-run",
+      "note": "Its Denuvo copy protection crashes at startup under the x86 translator (FEX wiki, 2026)."
+    },
+    "steam:110800": {
+      "name": "L.A. Noire",
+      "status": "wont-run",
+      "note": "Its GameShield/Ironwrap copy protection doesn't run under the x86 translator (FEX wiki)."
+    },
+    "steam:1238080": {
+      "name": "Burnout Paradise Remastered",
+      "status": "wont-run",
+      "note": "The game's obfuscated code misreads the CPU under the x86 translator and quits claiming the CPU lacks SSE2 (FEX wiki, 2026)."
+    },
+    "steam:1974050": {
+      "name": "Torchlight: Infinite",
+      "status": "wont-run",
+      "note": "Its anti-tamper layer doesn't run under the x86 translator (FEX wiki)."
+    },
+    "steam:2868840": {
+      "name": "Slay the Spire 2",
+      "status": "wont-run",
+      "note": "The game embeds the .NET CoreCLR runtime, whose code generator doesn't work under the x86 translator: it crashes at startup (FEX wiki)."
+    },
+    "steam:590830": {
+      "name": "s&box",
+      "status": "wont-run",
+      "note": "The game embeds the .NET CoreCLR runtime, whose code generator doesn't work under the x86 translator: it crashes at startup (FEX wiki)."
+    },
+    "steam:2677660": {
+      "name": "Indiana Jones and the Great Circle",
+      "status": "unlikely",
+      "note": "Needs hardware ray tracing even at the lowest settings. The Mac's graphics path offers ray queries only on M3 and newer chips, and no one has reported this game running through it yet: expect it not to start, and not on M1/M2 at all."
+    },
+    "steam:3017860": {
+      "name": "DOOM: The Dark Ages",
+      "status": "unlikely",
+      "note": "Needs hardware ray tracing even at the lowest settings. The Mac's graphics path offers ray queries only on M3 and newer chips, and no one has reported this game running through it yet: expect it not to start, and not on M1/M2 at all."
+    },
+    "steam:1449560": {
+      "name": "Metro Exodus Enhanced Edition",
+      "status": "unlikely",
+      "note": "Needs hardware ray tracing even at the lowest settings. The Mac's graphics path offers ray queries only on M3 and newer chips, and no one has reported this game running through it yet: expect it not to start, and not on M1/M2 at all."
+    },
+    "steam:730": {
+      "name": "Counter-Strike 2",
+      "status": "crashes",
+      "note": "Can freeze on team selection or the first spawn: part of its graphics setup is refused on the Mac (being worked on). If it freezes, ⌘Q, then Quit, ends it. The launch option -nobreakpad makes it close instead of freezing."
+    }
+  }
+}

@@ -860,7 +860,7 @@ def cmd_sync(args):
         target = want if mine else cur_n
         if (cur is None and target != 0) or (cur is not None and cur != target):
             if write_default(path, target) and mine and not told:
-                say(f"New games install to {want_label} by default (Steam > Settings > Storage changes it)")
+                say(f"New games install to {want_label} by default (Steam's Settings > Storage changes it)")
                 told = True
         out[user] = target if mine else written.get(user)
     state = {"stamp": stamp, "written": {u: v for u, v in out.items() if v is not None}}

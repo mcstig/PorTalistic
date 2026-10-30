@@ -205,8 +205,9 @@ extension AppDelegate {
         let full = NSMenuItem(title: "Toggle Full Screen", action: #selector(NSWindow.toggleFullScreen(_:)), keyEquivalent: "f")
         full.keyEquivalentModifierMask = [.command, .control]
         viewMenu.addItem(full)
-        let release = NSMenuItem(title: "Release Mouse", action: #selector(releaseMouse(_:)), keyEquivalent: "\u{1b}")
-        release.keyEquivalentModifierMask = [.command]
+        // (Oct 28: ⌘Esc opens macOS 26's game overlay, which then kept the mouse; the release is
+        // Control and Option pressed together now, as in Parallels and VMware: BottleView)
+        let release = NSMenuItem(title: "Release Mouse (⌃⌥)", action: #selector(releaseMouse(_:)), keyEquivalent: "")
         release.target = self
         viewMenu.addItem(release)
         viewMenu.addItem(.separator())

@@ -122,9 +122,16 @@ extension AppDelegate {
         let declined = UserDefaults.standard.stringArray(forKey: AppDelegate.declinedDrivesKey) ?? []
         guard !declined.contains(id), !AppDelegate.offeredThisRun.contains(id) else { return false }
         AppDelegate.offeredThisRun.insert(id)
-        noticeView.show(problem: false, title: "“\(name)” is connected: use it for Steam games?",
-                        detail: "Click here to add it. Steam's own Add Drive can't see your Mac's drives; "
-                            + "Game Folders > Add a Game Folder… adds one any time.",
+        // (Oct 27) a drive that already has Portalistic games (from another Mac, say) says so
+        let hasGames = FileManager.default.fileExists(atPath: url.appendingPathComponent("Portalistic Library/.portalistic-library").path)
+        noticeView.show(problem: false,
+                        title: hasGames ? "“\(name)” has Portalistic games on it: use them here?"
+                                        : "“\(name)” is connected: use it for Steam games?",
+                        detail: hasGames
+                            ? "Click here to add the drive with its games (the VM restarts once to get it). "
+                              + "Without a click, the next start of Portalistic adds it by itself."
+                            : "Click here to add it. Steam's own Add Drive can't see your Mac's drives; "
+                              + "Game Folders > Add a Game Folder… adds one any time.",
                         seconds: 20) { [weak self] in self?.confirmGameFolder(url, offered: true) }
         return true
     }

@@ -124,7 +124,7 @@ struct StoreInfo {
         codePlaceholder: "Paste the address (or just the code) here",
         pasteFirst: ("Paste GOG's address first",
                      "After you sign in on GOG's page, copy the address of the page you end up on and paste it here."),
-        privacy: "Your password never reaches Portalistic. Only the sign-in GOG hands back is kept, inside the bottle.",
+        privacy: "Your password never reaches Portalistic. Only the sign-in GOG hands back is kept, inside the VM.",
         noGames: "No games with a Windows version in your GOG library.",
         installNote: "", slowFirstLoad: "", windowTitle: "GOG Games", frameName: "PortalisticGOGLibrary2",
         art: StoreArt(.gog))
@@ -141,7 +141,7 @@ struct StoreInfo {
         codePlaceholder: "Paste Epic's text (or just the code) here",
         pasteFirst: ("Paste Epic's text first",
                      "After you sign in on Epic's page, select all the text it shows, copy it and paste it here."),
-        privacy: "Your password never reaches Portalistic. Only the sign-in Epic hands back is kept, inside the bottle.",
+        privacy: "Your password never reaches Portalistic. Only the sign-in Epic hands back is kept, inside the VM.",
         noGames: "No games with a Windows version in your Epic library.",
         installNote: " Games that need anti-cheat software may not start.",
         slowFirstLoad: " The first time can take a minute or two.",
@@ -276,6 +276,8 @@ final class StoreCoverView: NSView {
     var title = "" { didSet { needsDisplay = true } }
     var installed = false { didSet { needsDisplay = true } }
     var progress: Double? { didSet { needsDisplay = true } }      // 0...100
+    /// A word on the cover instead of the Installed badge: "Queued", "Paused".
+    var label: String? { didSet { needsDisplay = true } }
     var selected = false { didSet { needsDisplay = true } }
     var accent = NSColor.systemBlue { didSet { needsDisplay = true } }
 
@@ -374,7 +376,9 @@ final class StoreCoverView: NSView {
                 r.fill(using: .saturation)
             }
         }
-        if let p = progress { drawProgress(p, in: r) } else if installed { drawBadge(in: r) }
+        if let p = progress { drawProgress(p, in: r) }
+        else if let l = label { drawBadge(l, dot: NSColor.systemOrange, in: r) }
+        else if installed { drawBadge("Installed", dot: StoreStyle.green, in: r) }
         NSGraphicsContext.restoreGraphicsState()
         NSColor.white.withAlphaComponent(0.10).setStroke()     // a hairline, so a dark cover doesn't melt into the window
         shape.lineWidth = 1
@@ -440,14 +444,14 @@ final class StoreCoverView: NSView {
                  options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine], context: nil)
     }
 
-    private func drawBadge(in r: NSRect) {
-        let text = NSAttributedString(string: "Installed", attributes: [
+    private func drawBadge(_ word: String, dot: NSColor, in r: NSRect) {
+        let text = NSAttributedString(string: word, attributes: [
             .font: NSFont.systemFont(ofSize: 11, weight: .semibold), .foregroundColor: NSColor.white])
         let size = text.size()
         let pill = NSRect(x: r.minX + 8, y: r.maxY - 28, width: ceil(size.width) + 30, height: 20)
         NSColor.black.withAlphaComponent(0.66).setFill()
         NSBezierPath(roundedRect: pill, xRadius: 10, yRadius: 10).fill()
-        StoreStyle.green.setFill()
+        dot.setFill()
         NSBezierPath(ovalIn: NSRect(x: pill.minX + 8, y: pill.midY - 3.5, width: 7, height: 7)).fill()
         text.draw(at: NSPoint(x: pill.minX + 20, y: pill.midY - size.height / 2))
     }
@@ -583,7 +587,7 @@ final class StoreTile: NSCollectionViewItem {
         tile.setHovered(true, animated: false)
     }
 
-    func configure(_ g: StoreGame, progress: Double?, store: StoreInfo) {
+    func configure(_ g: StoreGame, progress: Double?, label: String?, store: StoreInfo) {
         serial += 1
         let mine = serial
         tile.cover.accent = store.accent
@@ -592,6 +596,7 @@ final class StoreTile: NSCollectionViewItem {
         tile.cover.title = g.title
         tile.cover.installed = g.installed
         tile.cover.progress = progress
+        tile.cover.label = label
         tile.cover.image = nil
         tile.cover.selected = isSelected
         store.art.cover(for: g) { [weak self] img in
@@ -600,7 +605,7 @@ final class StoreTile: NSCollectionViewItem {
         }
     }
 
-    func setProgress(_ p: Double?) { tile.cover.progress = p }
+    func setProgress(_ p: Double?, label: String?) { tile.cover.progress = p; tile.cover.label = label }
 }
 
 // MARK: - small controls
@@ -724,6 +729,9 @@ final class StoreContentView: NSView, NSCollectionViewDataSource, NSCollectionVi
     var onRetry: (() -> Void)?
     var onInstall: ((StoreGame, StoreFolder?) -> Void)?
     var onRemove: ((StoreGame) -> Void)?
+    var onPause: (() -> Void)?
+    var onStop: (() -> Void)?
+    var onDequeue: ((StoreGame) -> Void)?
 
     private(set) var mode = Mode.loading
     /// A command is running (not a download): nothing that would start another is offered.
@@ -735,7 +743,13 @@ final class StoreContentView: NSView, NSCollectionViewDataSource, NSCollectionVi
     private var progress: [String: Double] = [:]
     private var busyID: String?
     private var busyText = ""
+    /// The running download can be paused and stopped (a removal can't).
+    private var busyIsDownload = false
     private var note: (id: String, text: String)?
+    /// Games waiting for the running download to end, in order.
+    private var queue: [String] = []
+    /// A word on a cover ("Paused") until the game is installed or chosen again.
+    private var labels: [String: String] = [:]
 
     // loading
     private let loadingView = NSView()
@@ -773,6 +787,8 @@ final class StoreContentView: NSView, NSCollectionViewDataSource, NSCollectionVi
     private let folderLabel = NSTextField(labelWithString: "Install to")
     private let folderPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let removeButton = NSButton(title: "Remove…", target: nil, action: nil)
+    private let pauseButton = NSButton(title: "Pause", target: nil, action: nil)
+    private let stopButton = NSButton(title: "Stop…", target: nil, action: nil)
     private let primary = StorePillButton("Install")
 
     init(frame: NSRect, store: StoreInfo) {
@@ -867,7 +883,7 @@ final class StoreContentView: NSView, NSCollectionViewDataSource, NSCollectionVi
         fill(self, with: signInView)
         let title = NSTextField(labelWithString: "Sign in to \(store.name)")
         title.font = NSFont.systemFont(ofSize: 24, weight: .semibold)
-        let intro = wrapping("Install the games you own. Portalistic downloads them inside the bottle and adds them to Steam, where they run through Proton like your Steam games.",
+        let intro = wrapping("Install the games you own. Portalistic downloads them inside the VM and adds them to Steam, where they run through Proton like your Steam games.",
                              size: 13, width: 460)
 
         openLoginButton.title = store.loginButton
@@ -1003,13 +1019,21 @@ final class StoreContentView: NSView, NSCollectionViewDataSource, NSCollectionVi
         removeButton.bezelStyle = .rounded
         removeButton.target = self
         removeButton.action = #selector(removePressed(_:))
+        pauseButton.bezelStyle = .rounded
+        pauseButton.target = self
+        pauseButton.action = #selector(pausePressed(_:))
+        pauseButton.toolTip = "Stops the download for now; Install picks it up where it left off."
+        stopButton.bezelStyle = .rounded
+        stopButton.target = self
+        stopButton.action = #selector(stopPressed(_:))
+        stopButton.toolTip = "Stops the download and deletes what came down."
         primary.target = self
         primary.action = #selector(installPressed(_:))
         let info = NSStackView(views: [trayTitle, traySub])
         info.orientation = .vertical
         info.alignment = .leading
         info.spacing = 3
-        let actions = NSStackView(views: [folderLabel, folderPopup, removeButton, primary])
+        let actions = NSStackView(views: [folderLabel, folderPopup, removeButton, pauseButton, stopButton, primary])
         actions.orientation = .horizontal
         actions.alignment = .centerY
         actions.spacing = 10
@@ -1130,10 +1154,11 @@ final class StoreContentView: NSView, NSCollectionViewDataSource, NSCollectionVi
 
     /// A download (or removal) is running on game `id`: its cover shows `pct`, the bar says `text`.
     /// `id` nil: it ended.
-    func setBusy(_ id: String?, progress pct: Double?, text: String) {
+    func setBusy(_ id: String?, progress pct: Double?, text: String, download: Bool = false) {
         let old = busyID
         busyID = id
         busyText = text
+        busyIsDownload = id != nil && download
         if let o = old, o != id {
             progress[o] = nil
             touch(o)
@@ -1181,10 +1206,29 @@ final class StoreContentView: NSView, NSCollectionViewDataSource, NSCollectionVi
         refreshTray()
     }
 
+    /// The games waiting their turn, in order (their covers say "Queued").
+    func setQueue(_ ids: [String]) {
+        let old = Set(queue)
+        queue = ids
+        for id in old.union(ids) { touch(id) }
+        refreshTray()
+    }
+
+    /// A word on a game's cover ("Paused"; nil: none).
+    func setLabel(_ id: String, _ word: String?) {
+        labels[id] = word
+        touch(id)
+        refreshTray()
+    }
+
+    private func label(for id: String) -> String? {
+        return queue.contains(id) ? "Queued" : labels[id]
+    }
+
     private func touch(_ id: String) {
         guard let row = shown.firstIndex(where: { $0.id == id }),
               let item = collection.item(at: IndexPath(item: row, section: 0)) as? StoreTile else { return }
-        item.setProgress(progress[id])
+        item.setProgress(progress[id], label: label(for: id))
     }
 
     // MARK: the grid
@@ -1223,7 +1267,7 @@ final class StoreContentView: NSView, NSCollectionViewDataSource, NSCollectionVi
         let item = collectionView.makeItem(withIdentifier: StoreTile.identifier, for: indexPath)
         if let tile = item as? StoreTile, indexPath.item < shown.count {
             let g = shown[indexPath.item]
-            tile.configure(g, progress: progress[g.id], store: store)
+            tile.configure(g, progress: progress[g.id], label: label(for: g.id), store: store)
         }
         return item
     }
@@ -1276,28 +1320,37 @@ final class StoreContentView: NSView, NSCollectionViewDataSource, NSCollectionVi
     private func refreshTray() {
         updateControls()
         let busy = busyID != nil
-        let game = busy ? games.first(where: { $0.id == busyID }) : selectedGame
+        let selected = selectedGame
+        // while a download runs the bar follows it, unless another game is chosen (to queue it)
+        let game = busy && (selected == nil || selected?.id == busyID) ? games.first(where: { $0.id == busyID }) : selected
         trayBar.value = busy ? busyID.flatMap { progress[$0] } : nil
+        for v in [folderLabel, folderPopup, removeButton, pauseButton, stopButton, primary] { v.isHidden = true }
         guard let g = game else {
             trayTitle.stringValue = games.isEmpty ? "" : "Choose a game"
             traySub.stringValue = games.isEmpty ? "" : "Pick a cover to install it, or to remove it again."
-            folderLabel.isHidden = true
-            folderPopup.isHidden = true
-            removeButton.isHidden = true
-            primary.isHidden = true
             return
         }
         trayTitle.stringValue = g.title
-        if busy {
+        if busy && g.id == busyID {
             traySub.stringValue = busyText
-            folderLabel.isHidden = true
-            folderPopup.isHidden = true
-            removeButton.isHidden = true
-            primary.isHidden = true
+            pauseButton.isHidden = !busyIsDownload
+            stopButton.isHidden = !busyIsDownload
+            pauseButton.isEnabled = !locked
+            stopButton.isEnabled = !locked
+            return
+        }
+        if let at = queue.firstIndex(of: g.id) {
+            traySub.stringValue = at == 0 ? "Queued: it's next, after the running download."
+                                          : "Queued: \(at + 1)\(StoreContentView.ordinal(at + 1)) in line."
+            primary.isHidden = false
+            primary.title = "Remove from Queue"
+            primary.isEnabled = true
             return
         }
         if let n = note, n.id == g.id {
             traySub.stringValue = n.text
+        } else if let l = labels[g.id] {
+            traySub.stringValue = l == "Paused" ? "Paused. Install picks up where it left off." : l
         } else if g.installed {
             let base = g.size > 0 ? "Installed, \(StoreStyle.bytes(g.size))" : "Installed"
             traySub.stringValue = g.update ? base + ". A newer version is available." : base
@@ -1308,13 +1361,33 @@ final class StoreContentView: NSView, NSCollectionViewDataSource, NSCollectionVi
             let s = traySub.stringValue
             traySub.stringValue = s + (s.hasSuffix(".") ? " " : ". ") + "Released \(g.year)."
         }
+        if busy {
+            // another download runs: a game not installed can wait its turn
+            guard !g.installed else { return }
+            folderLabel.isHidden = folders.isEmpty
+            folderPopup.isHidden = folders.isEmpty
+            primary.isHidden = false
+            primary.title = "Add to Queue"
+            primary.isEnabled = true
+            return
+        }
         folderLabel.isHidden = g.installed || folders.isEmpty
         folderPopup.isHidden = g.installed || folders.isEmpty
         removeButton.isHidden = !g.installed
         primary.isHidden = false
-        primary.title = g.installed ? "Update" : "Install"
+        primary.title = g.installed ? "Update" : (labels[g.id] == "Paused" ? "Resume" : "Install")
         removeButton.isEnabled = !locked
         primary.isEnabled = !locked
+    }
+
+    /// "nd" for 2, "rd" for 3, "th" otherwise.
+    private static func ordinal(_ n: Int) -> String {
+        switch n % 10 {
+        case 1 where n % 100 != 11: return "st"
+        case 2 where n % 100 != 12: return "nd"
+        case 3 where n % 100 != 13: return "rd"
+        default: return "th"
+        }
     }
 
     // MARK: actions
@@ -1345,9 +1418,13 @@ final class StoreContentView: NSView, NSCollectionViewDataSource, NSCollectionVi
 
     @objc private func installPressed(_ sender: Any?) {
         guard let g = selectedGame else { return }
+        if queue.contains(g.id) { onDequeue?(g); return }
         let i = folderPopup.indexOfSelectedItem
         onInstall?(g, !g.installed && i >= 0 && i < folders.count ? folders[i] : nil)
     }
+
+    @objc private func pausePressed(_ sender: Any?) { onPause?() }
+    @objc private func stopPressed(_ sender: Any?) { onStop?() }
 
     @objc private func removePressed(_ sender: Any?) {
         guard let g = selectedGame, g.installed else { return }

@@ -11,7 +11,7 @@ final class BottleView: NSView {
     var connected = false { didSet { refreshCapture() } }
     var covered = false { didSet { refreshCapture() } }   // the starting screen is over the picture
     private(set) var captured = false
-    var autoCapture = true                      // false after Command-Escape, until the next click
+    var autoCapture = true                      // false after Control-Option (⌃⌥), until the next click
     var remoteCursorVisible = true
     var onCaptureChange: ((Bool) -> Void)?
 
@@ -171,7 +171,7 @@ final class BottleView: NSView {
     // MARK: mouse capture
 
     /// Capture while the game hides its pointer, the window has focus and the user hasn't
-    /// released the mouse with Command-Escape.
+    /// released the mouse with Control-Option (⌃⌥).
     func refreshCapture() {
         let focused = (window?.isKeyWindow ?? false) && NSApp.isActive
         setCaptured(connected && !covered && focused && autoCapture && !remoteCursorVisible)
@@ -301,6 +301,10 @@ final class BottleView: NSView {
         guard let bit = modifierBits[code] else { return } // Command and Fn aren't sent
         let down = (e.modifierFlags.rawValue & bit) != 0
         if down != keysDown.contains(code) { key(code, down) }
+        // Control and Option together, nothing else held: the mouse goes free (the keys still
+        // reach the game, which sees Ctrl+Alt pressed and let go)
+        let f = e.modifierFlags.intersection([.control, .option, .command, .shift])
+        if captured && down && f == [.control, .option] { releaseMouse() }
     }
 
     override func performKeyEquivalent(with e: NSEvent) -> Bool {

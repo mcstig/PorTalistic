@@ -90,6 +90,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <sys/ipc.h>
 #include <sys/shm.h>
 #include <sys/socket.h>
@@ -596,7 +597,7 @@ static void notices_check(int cfd) {
         fclose(f);
         unlink(path);
         if (!len) continue;
-        body[0] = (uint8_t)(kind < 0 ? 0 : kind > 3 ? 1 : kind); body[1] = 0;   /* 0 news, 1 a problem, 2 progress (a card that stays until the next kind-2 notice), 3 a question about the VM's disk */
+        body[0] = (uint8_t)(kind < 0 ? 0 : kind > 4 ? 1 : kind); body[1] = 0;   /* 0 news, 1 a problem, 2 progress (a card that stays until the next kind-2 notice), 3 a question about the VM's disk, 4 a problem with buttons (@@Label|bottle args lines) */
         put16(body + 2, (uint16_t)(secs < 3 ? 3 : secs > 120 ? 120 : secs));
         send_msg(cfd, MSG_NOTICE, body, (uint32_t)(4 + len));
         char title[120];
@@ -1023,6 +1024,25 @@ static int x_error(Display *d, XErrorEvent *e) {
 
 /* The window that has the keyboard (and, for games, the mouse): logged when it changes, so a
  * window taking the focus from a game (a Steam notification, say) shows up in screen.log. */
+/* Is the active window a store launcher (REDlauncher, GOG GALAXY, Ubisoft Connect...)? Those
+ * are web views that put up a blank cursor over parts of their pages; the Mac would take that
+ * for a game hiding its pointer and capture the mouse (Oct 26: the pointer sat frozen in the
+ * middle of REDlauncher's login page). While one is active the pointer counts as shown. */
+static int g_launcher_active = 0;
+static int is_launcher(const char *title) {
+    /* (Oct 27) and Steam's own windows: Big Picture hides its pointer while it's driven by keys or
+     * a pad, and its web browser (a link a game opened) then took the mouse, so no click landed */
+    static const char *names[] = { "launcher", "galaxy", "ubisoft connect", "ea app", "battle.net",
+                                   "origin", "rockstar", "bethesda", "paradox", "epic games",
+                                   "steam big picture", NULL };
+    char low[160];
+    size_t i;
+    for (i = 0; title[i] && i + 1 < sizeof low; i++) low[i] = (char)tolower((unsigned char)title[i]);
+    low[i] = 0;
+    for (const char **n = names; *n; n++) if (strstr(low, *n)) return 1;
+    return 0;
+}
+
 static void log_active_window(Display *dpy, Window root, Atom active, Atom net_name, Atom utf8) {
     static Window last = (Window)-1;
     Atom type;
@@ -1052,7 +1072,8 @@ static void log_active_window(Display *dpy, Window root, Atom active, Atom net_n
     }
     XSync(dpy, False);
     g_quiet_x_errors = 0;
-    LOG("active window: %s", title);
+    g_launcher_active = is_launcher(title);
+    LOG("active window: %s%s", title, g_launcher_active ? " (launcher or Steam: pointer counts as shown)" : "");
 }
 
 int main(int argc, char **argv) {
@@ -1144,14 +1165,21 @@ int main(int argc, char **argv) {
         while (XPending(s.dpy)) {
             XEvent e;
             XNextEvent(s.dpy, &e);
-            if (e.type == PropertyNotify && e.xproperty.atom == net_active)
+            if (e.type == PropertyNotify && e.xproperty.atom == net_active) {
                 log_active_window(s.dpy, s.root, net_active, net_name, utf8);
+                int v = cursor_visible(s.dpy) || g_launcher_active;
+                if (v != cur_visible) {
+                    cur_visible = v;
+                    VLOG("pointer %s", v ? "shown" : "hidden");
+                    if (cfd >= 0) send_cursor(cfd, v);
+                }
+            }
             if (e.type == ConfigureNotify && e.xconfigure.window == s.root &&
                 (e.xconfigure.width != s.w || e.xconfigure.height != s.h))
                 geometry_due = 1;   /* xrandr: the capture follows right away */
             if (s.damage_event >= 0 && e.type == s.damage_event + XDamageNotify) dirty = 1;
             if (fixes_event >= 0 && e.type == fixes_event + XFixesCursorNotify) {
-                int v = cursor_visible(s.dpy);
+                int v = cursor_visible(s.dpy) || g_launcher_active;
                 if (v != cur_visible) {
                     cur_visible = v;
                     VLOG("pointer %s", v ? "shown" : "hidden");

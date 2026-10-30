@@ -146,7 +146,7 @@ final class ActivityWindow: NSWindowController {
         if !c.start() {
             spinner.stopAnimation(nil)
             spinner.isHidden = true
-            heading.stringValue = "Couldn't run the bottle command (\(BottleCommand.script ?? "no kit folder"))."
+            heading.stringValue = "Couldn't run Portalistic's helper script (\(BottleCommand.script ?? "no kit folder"))."
             doneButton.isHidden = false
         }
     }
