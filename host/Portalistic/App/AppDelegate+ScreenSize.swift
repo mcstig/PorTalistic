@@ -115,6 +115,27 @@ extension AppDelegate {
         return item
     }
 
+    /// Full screen hides the Mac's menu bar and Dock (they come back when the pointer goes to the
+    /// top or bottom edge), also when System Settings keeps the menu bar shown in full screen
+    /// ("Automatically hide and show the menu bar: Never"): Portalistic shows a game (Nov 2).
+    @objc func window(_ window: NSWindow, willUseFullScreenPresentationOptions proposedOptions: NSApplication.PresentationOptions = []) -> NSApplication.PresentationOptions {
+        guard window === self.window else { return proposedOptions }
+        return proposedOptions.union([.fullScreen, .autoHideMenuBar, .autoHideDock])
+    }
+
+    /// With "Never" in System Settings macOS keeps the menu bar in full screen even so (Michael's Mac,
+    /// Nov 2): a black strip covers it, and it comes back at the top edge (MenuBarCover).
+    @objc func windowDidEnterFullScreen(_ notification: Notification) {
+        guard (notification.object as? NSWindow) === window else { return }
+        if menuBarCover == nil { menuBarCover = MenuBarCover() }
+        menuBarCover?.start(for: window)
+    }
+
+    @objc func windowWillExitFullScreen(_ notification: Notification) {
+        guard (notification.object as? NSWindow) === window else { return }
+        menuBarCover?.stop()
+    }
+
     /// What the window's delegate hears.
     @objc func windowDidResize(_ notification: Notification) {
         guard (notification.object as? NSWindow) === window, !window.inLiveResize else { return }

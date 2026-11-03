@@ -37,6 +37,10 @@ final class StoreWindow: NSWindowController {
     private var games: [StoreGame] = []
     private var folders: [StoreFolder] = []
     private var userName = ""
+    /// Sizes to look up (the last chosen first), and the lookup running. They run beside the other
+    /// commands: a size takes a few seconds and shouldn't hold up an install.
+    private var sizeWanted: [StoreGame] = []
+    private var sizing: BottleCommand?
 
     init(_ info: StoreInfo) {
         store = info
@@ -67,6 +71,7 @@ final class StoreWindow: NSWindowController {
         content.onPause = { [weak self] in self?.stopDownload(.pause) }
         content.onStop = { [weak self] in self?.stopDownload(.discard) }
         content.onDequeue = { [weak self] g in self?.dequeue(g) }
+        content.onWantSize = { [weak self] g in self?.wantSize(g) }
     }
 
     // MARK: running bottle commands
@@ -111,8 +116,36 @@ final class StoreWindow: NSWindowController {
             return StoreGame(id: id, title: t, installed: (r["installed"] as? Bool) ?? false,
                              size: (r["size"] as? NSNumber)?.int64Value ?? 0, image: (r["image"] as? String) ?? "",
                              update: (r["update"] as? Bool) ?? false,
-                             year: (r["year"] as? NSNumber)?.intValue ?? 0)
+                             year: (r["year"] as? NSNumber)?.intValue ?? 0,
+                             download: (r["download"] as? NSNumber)?.int64Value ?? 0,
+                             disk: (r["disk"] as? NSNumber)?.int64Value ?? 0)
         }
+    }
+
+    // MARK: game sizes (shown in the bar when a game not installed is chosen)
+
+    private func wantSize(_ g: StoreGame) {
+        sizeWanted.removeAll { $0.id == g.id }
+        sizeWanted.append(g)
+        nextSize()
+    }
+
+    private func nextSize() {
+        guard sizing == nil, let g = sizeWanted.popLast() else { return }
+        let c = BottleCommand([store.id, "size", g.id], log: "\(store.id)-size")
+        c.onExit = { [weak self, unowned c] _ in
+            guard let self = self else { return }
+            self.sizing = nil
+            let o = StoreWindow.json(c.lines)
+            self.content.setSize(g.id, download: (o?["download"] as? NSNumber)?.int64Value ?? 0,
+                                 disk: (o?["disk"] as? NSNumber)?.int64Value ?? 0)
+            self.nextSize()
+        }
+        guard c.start() else {
+            content.setSize(g.id, download: 0, disk: 0)
+            return
+        }
+        sizing = c
     }
 
     private func showStopped() {

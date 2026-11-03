@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "updated": "2026-10-30T09:25:20Z",
+  "updated": "2026-11-02T16:18:21Z",
   "about": "Portalistic's game fixes: what the bottle applies when a game starts, and what it tells the player when a game quits. Keys: steam:<appid>, gog:<id>, epic:<app name>. Fields: name; note (shown with Portalistic's banner when the game quits, and in the fixes list); env (KEY: value, the game's environment, like guest/games/<appid>.env); args (added to the game's command line); dlloverrides (Wine's WINEDLLOVERRIDES additions); winetricks (verbs installed into the game's prefix once); status: works | needs-login | crashes | wont-run (a known, hard reason) | unlikely (a reason that applies to its class, not tested with this game).",
   "games": {
     "steam:1284410": {
@@ -342,6 +342,11 @@
       "name": "Counter-Strike 2",
       "status": "crashes",
       "note": "Can freeze on team selection or the first spawn: part of its graphics setup is refused on the Mac (being worked on). If it freezes, ⌘Q, then Quit, ends it. The launch option -nobreakpad makes it close instead of freezing."
+    },
+    "steam:601150": {
+      "name": "Devil May Cry 5",
+      "status": "works",
+      "note": "Runs in DirectX 11 (about 60 fps on the M4 Max). After an install it starts in DirectX 12, which stops with an error box on the Mac (a shader the Mac's GPU can't build); Portalistic then sets it to DirectX 11 (dmc5config.ini) and starts it again."
     }
   }
 }

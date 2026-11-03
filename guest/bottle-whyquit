@@ -19,6 +19,12 @@ violation: the detailed log the next launch gets shows it), the x86 translator (
 instruction), memory. Otherwise: "closed after N s before showing anything", and the logs are
 saved for a closer look (the Mac's watcher saves them when a game ends).
 
+Capcom's RE Engine games (Devil May Cry 5, the Resident Evil remakes; Nov 2) choose DirectX 11 or 12 in
+an ini file in their folder (TargetPlatform=), start in DirectX 12 after an install, and can stop with an
+error box at any time when a DirectX 12 shader can't be built on the Mac (DMC5: "CreatePipelineState()
+failed", 0x8007000e, a minute in). Any launch of one in DirectX 12 that hit that (or closed by itself)
+gets TargetPlatform=DirectX11, a notice saying so, and one more start.
+
 DirectX 11 retry: an Unreal Engine game takes -dx11, a Unity game -force-d3d11. This writes
 BOTTLE_GAME_ARGS=... into the game's own settings (~/.config/steamos-bottle/games/<appid>.env;
 steam-arm64's user_settings.py adds it to the game's command line) and starts the game again,
@@ -98,6 +104,34 @@ def engine_switch(folder):
     return None
 
 
+def re_engine_ini(folder):
+    """An RE Engine game's settings file (dmc5config.ini, re2_config.ini, ...): the .ini in its folder with
+    a TargetPlatform= line."""
+    if not folder or not folder.is_dir():
+        return None
+    try:
+        for p in sorted(folder.glob("*.ini")):
+            if p.stat().st_size < 1_000_000 and re.search(rb"^TargetPlatform=", p.read_bytes(), re.M):
+                return p
+    except OSError:
+        pass
+    return None
+
+
+def re_engine_dx11(ini):
+    """TargetPlatform=DirectX11 in that file (its line ends kept). True when it says so now."""
+    try:
+        b = ini.read_bytes()
+        nb = re.sub(rb"^(TargetPlatform=)[A-Za-z0-9]*", rb"\1DirectX11", b, flags=re.M)
+        if nb != b:
+            tmp = ini.with_suffix(".ini.tmp")
+            tmp.write_bytes(nb)
+            os.replace(tmp, ini)
+        return True
+    except OSError:
+        return False
+
+
 # Lines that look like trouble but aren't the game's: Proton's accessibility helper (Xalia, a
 # .NET program) fails without a screen reader's display; Wine reserving address space halves its
 # request until it fits ("out of memory for allocation").
@@ -127,14 +161,25 @@ def diagnose(path):
     # the Mac side refusing the GPU's work: Venus reports it, DXVK throws, and Wine then says
     # "Exception frame is not in stack limits" (DMC5, CS2, Witcher 3 on Oct 7-9)
     lost = re.search(r"VK_ERROR_DEVICE_LOST|DEVICE_LOST|Device lost|MESA-VIRTIO|Exception frame is not in stack limits", text)
-    if not (secs < QUICK_SECS and (not frames or crash or ill or lost)):
-        return d
-    d["quick"] = True
     who = d["name"]
     gone = f"{who} closed after {d['secs']} s" if d["secs"] else f"{who} closed at launch"
 
     def say(cause, title, detail):
         d["cause"], d["title"], d["detail"] = cause, title, detail
+
+    # an RE Engine game in DirectX 12 that hit a shader the Mac can't build, at any point (see the top)
+    dx12 = re.search(r"vkd3d-proton - build|vkd3d-proton:", text)
+    ini = re_engine_ini(folder) if dx12 else None
+    psofail = re.search(r"Failed to create Vulkan (graphics|compute) pipeline|CreatePipelineState\(\)[^\n]*failed", text)
+    if ini and (psofail or (secs < QUICK_SECS and (not frames or crash or lost))):
+        d["quick"], d["switch"], d["ini"] = True, "ini", str(ini)
+        say("dx12-re", f"{who} couldn't run in DirectX 12",
+            "One of its DirectX 12 shaders can't be built on the Mac's GPU, so the game stopped with an error. "
+            "It also runs in DirectX 11, which works here.")
+        return d
+    if not (secs < QUICK_SECS and (not frames or crash or ill or lost)):
+        return d
+    d["quick"] = True
 
     loaded = "\n".join(re.findall(r"Loaded L\"([^\"]*)\"", text))
     for pat, ac in ANTICHEAT:
@@ -284,6 +329,21 @@ def notify(path):
         save_state(st)
         notice(1, 25, d["title"], d["detail"] + f" Starting it in DirectX 11 ({args_now}) didn't help either,"
                " so that setting is gone again.")
+        return 0
+    if d["cause"] == "dx12-re":
+        ok = re_engine_dx11(Path(d["ini"]))
+        if not ok:
+            problem_notice(d)
+            return 0
+        again = time.time() - mine.get("retried", 0) > 600   # (one start again; not a loop)
+        mine.update(retried=time.time())
+        st[appid or "?"] = mine
+        save_state(st)
+        notice(0, 20, d["title"], d["detail"] + f" It's set to DirectX 11 now ({Path(d['ini']).name}: "
+               "TargetPlatform=DirectX11)" + (", starting it again…" if again and appid else ": start it again."))
+        if again and appid:
+            time.sleep(3)
+            start_game(appid)
         return 0
     if d["cause"] == "dx12" and d["switch"] and not args_now and time.time() - mine.get("retried", 0) > 86400:
         set_game_args(appid, d["switch"])

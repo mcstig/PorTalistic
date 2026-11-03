@@ -103,7 +103,7 @@ restart_vm() {
 
 guest_report() {
   info "What the VM sees now:"
-  limactl shell "$VM_NAME" sh -c '
+  limactl shell --workdir / "$VM_NAME" sh -c '
     icd=$(ls /usr/share/vulkan/icd.d/virtio_icd*.json | head -1)
     VK_DRIVER_FILES=$icd vulkaninfo --summary 2>/dev/null | grep -E "apiVersion|deviceName|driverName" | head -4
     VK_DRIVER_FILES=$icd vulkaninfo 2>/dev/null | grep -E "^\s+(geometryShader|nullDescriptor|robustBufferAccess2|transformFeedback|shaderFloat64|synchronization2)\s+=" | sort -u

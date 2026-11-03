@@ -125,6 +125,7 @@ LEGENDARY_DIR = os.environ.get("BOTTLE_LEGENDARY_DIR", "/usr/local/share/steamos
 LGD_CONFIG = STATE / "legendary"       # Legendary's own folder (LEGENDARY_CONFIG_PATH)
 EPIC_LIBCACHE = STATE / "epic-library.json"
 EPIC_YEARS = STATE / "epic-years.json"  # each game's release year, from Epic's public store (kept: a year doesn't change)
+SIZES = STATE / "sizes.json"          # what each game needs, as looked up ("gog:ID" -> download, disk, at)
 # Epic's store site answers the questions its own pages ask (what Legendary uses for the same host); no sign-in
 EPIC_GRAPHQL = os.environ.get("BOTTLE_EPIC_GRAPHQL", "https://store.epicgames.com/graphql")
 EPIC_YEARS_RETRY = 3600                # after Epic's store couldn't be reached, wait this long (seconds)
@@ -749,7 +750,7 @@ def gog_list(args):
     have = installed("gog")
     rows = [{"id": g["id"], "title": g["title"], "installed": g["id"] in have,
              "size": have.get(g["id"], {}).get("size", 0), "image": g.get("image", ""),
-             "year": int(g.get("year") or 0)} for g in games]
+             "year": int(g.get("year") or 0), **(size_known("gog", g["id"]) or {})} for g in games]
     for gid, rec in have.items():     # an installed game the list doesn't show (removed from the account)
         if not any(r["id"] == gid for r in rows):
             rows.append({"id": gid, "title": rec["title"], "installed": True, "size": rec.get("size", 0),
@@ -1245,6 +1246,85 @@ def _read_download(proc, progress):
     return proc.wait(), tail
 
 
+# ------------------------------------------------------------------ how big a game is
+
+SIZE_KEEP = 14 * 86400   # a size looked up stays good for two weeks (an update can change it)
+
+
+def size_known(store, gid):
+    """The size looked up before for a game: {"download": n, "disk": n}, or None."""
+    e = (read_json(SIZES, {}) or {}).get(f"{store}:{gid}")
+    if isinstance(e, dict) and int(e.get("disk") or 0) > 0 and time.time() - float(e.get("at") or 0) < SIZE_KEEP:
+        return {"download": int(e.get("download") or 0), "disk": int(e["disk"])}
+    return None
+
+
+def size_remember(store, gid, download, disk):
+    if disk <= 0:
+        return
+    allsizes = read_json(SIZES, {}) or {}
+    allsizes[f"{store}:{gid}"] = {"download": int(download), "disk": int(disk), "at": int(time.time())}
+    write_json(SIZES, allsizes)
+
+
+def gog_sizes(info, lang):
+    """(download, disk) bytes from gogdl's info: its "size" has the files every language gets ("*")
+    and each language's own; an older gogdl gave the two numbers directly."""
+    s = info.get("size") or {}
+    if "disk_size" in s:
+        return int(s.get("download_size") or 0), int(s.get("disk_size") or 0)
+    own = s.get(lang)
+    if own is None:   # (a language spelled another way: the first English one, else any)
+        langs = [k for k in s if k != "*"]
+        en = [k for k in langs if k.lower().startswith("en")]
+        own = s.get((en or langs or ["*"])[0]) if (en or langs) else {}
+    parts = [s.get("*") or {}, own or {}]
+    return (sum(int(p.get("download_size") or 0) for p in parts),
+            sum(int(p.get("disk_size") or 0) for p in parts))
+
+
+def print_size(gid, download, disk):
+    print(json.dumps({"id": gid, "download": int(download), "disk": int(disk)}))
+    return 0
+
+
+def gog_size(args):
+    gid = str(args.id)
+    if not gid.isdigit():
+        die("usage: bottle-stores gog size GAME_ID")
+    known = size_known("gog", gid)
+    if known:
+        return print_size(gid, known["download"], known["disk"])
+    if not AUTH.is_file():
+        die("You're not signed in to GOG.")
+    code, out, err = gogdl_run(["info", gid, "--platform", "windows"], timeout=120)
+    info = last_json(out)
+    if code != 0 or not isinstance(info, dict):
+        die("GOG didn't give the game's size.")
+    download, disk = gog_sizes(info, pick_language(info, None))
+    size_remember("gog", gid, download, disk)
+    return print_size(gid, download, disk)
+
+
+def epic_size(args):
+    app = str(args.id)
+    if not EPIC_APP.fullmatch(app):
+        die("usage: bottle-stores epic size GAME_ID")
+    known = size_known("epic", app)
+    if known:
+        return print_size(app, known["download"], known["disk"])
+    if not epic_user():
+        die("You're not signed in to Epic Games (or the sign-in expired).")
+    code, out, err = legendary_run(["info", app, "--json", "--platform", "Windows"], timeout=120)
+    info = last_json(out)
+    m = (info or {}).get("manifest") if isinstance(info, dict) else None
+    if code != 0 or not isinstance(m, dict) or not m.get("disk_size"):
+        die("Epic didn't give the game's size.")
+    download, disk = int(m.get("download_size") or 0), int(m.get("disk_size") or 0)
+    size_remember("epic", app, download, disk)
+    return print_size(app, download, disk)
+
+
 def gog_install(args):
     gid = str(args.id)
     if not gid.isdigit():
@@ -1268,7 +1348,9 @@ def gog_install(args):
         die(f"GOG didn't give the details for {title}: {why[0] or 'no answer'}. "
             "Is it in your library, and are you still signed in?")
     lang = pick_language(info, args.lang)
-    need = int((info.get("size") or {}).get("disk_size") or 0)
+    # (before Oct 30 this read size.disk_size, which gogdl doesn't give: the space check never ran)
+    download, need = gog_sizes(info, lang)
+    size_remember("gog", gid, download, need)
     base.mkdir(parents=True, exist_ok=True)
     dest = base / info["folder_name"]
     free = free_space(base) + (sum(f.stat().st_size for f in dest.rglob("*") if f.is_file()) if dest.is_dir() else 0)
@@ -1729,7 +1811,8 @@ def epic_list(args):
     rows = [{"id": g["id"], "title": g["title"], "installed": g["id"] in have,
              "size": have.get(g["id"], {}).get("size", 0), "image": g.get("image", ""),
              "year": years.get(g["id"], 0),
-             "update": bool(g["id"] in have and g.get("version") and have[g["id"]].get("version") != g["version"])}
+             "update": bool(g["id"] in have and g.get("version") and have[g["id"]].get("version") != g["version"]),
+             **(size_known("epic", g["id"]) or {})}
             for g in games]
     for gid, rec in have.items():     # an installed game the list doesn't show (gone from the account)
         if not any(r["id"] == gid for r in rows):
@@ -1999,6 +2082,7 @@ def main():
     p = g.add_parser("install"); p.add_argument("id"); p.add_argument("--folder"); p.add_argument("--lang"); p.set_defaults(fn=gog_install)
     p = g.add_parser("remove"); p.add_argument("id"); p.add_argument("--purge", action="store_true"); p.set_defaults(fn=gog_remove)
     p = g.add_parser("stop"); p.add_argument("id"); p.add_argument("--discard", action="store_true"); p.set_defaults(fn=gog_stop)
+    p = g.add_parser("size"); p.add_argument("id"); p.set_defaults(fn=gog_size)
     e = sub.add_parser("epic").add_subparsers(dest="ecmd", required=True)
     p = e.add_parser("status"); p.add_argument("--json", action="store_true"); p.set_defaults(fn=epic_status)
     p = e.add_parser("login-url"); p.set_defaults(fn=lambda a: say(EPIC_LOGIN_URL) or 0)
@@ -2009,6 +2093,7 @@ def main():
     p = e.add_parser("install"); p.add_argument("id"); p.add_argument("--folder"); p.set_defaults(fn=epic_install)
     p = e.add_parser("remove"); p.add_argument("id"); p.add_argument("--purge", action="store_true"); p.set_defaults(fn=epic_remove)
     p = e.add_parser("stop"); p.add_argument("id"); p.add_argument("--discard", action="store_true"); p.set_defaults(fn=epic_stop)
+    p = e.add_parser("size"); p.add_argument("id"); p.set_defaults(fn=epic_size)
     p = sub.add_parser("sync"); p.add_argument("--force", action="store_true"); p.set_defaults(fn=cmd_sync)
     p = sub.add_parser("adopt", help="records for GOG/Epic games already in the game folders (after a reinstall)"); p.set_defaults(fn=cmd_adopt)
     p = sub.add_parser("run", help="run a game with Comet (GOG) or Epic's sign-in beside it")

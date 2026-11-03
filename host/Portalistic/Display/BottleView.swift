@@ -13,6 +13,12 @@ final class BottleView: NSView {
     private(set) var captured = false
     var autoCapture = true                      // false after Control-Option (⌃⌥), until the next click
     var remoteCursorVisible = true
+    /// The VM pointer's shape (CURSOR_IMAGE, VM pixels): shown as the Mac pointer over the picture, at
+    /// the picture's scale, so a window's edges show the resize arrows and text the I-beam (Nov 3).
+    private var remoteCursorImage: CGImage?
+    private var remoteCursorHot = CGPoint.zero
+    private var remoteCursor: NSCursor?
+    private var remoteCursorScale: CGFloat = 0
     var onCaptureChange: ((Bool) -> Void)?
 
     private let imageLayer = CALayer()          // the display without Metal
@@ -247,7 +253,37 @@ final class BottleView: NSView {
         }
     }
 
-    override func mouseMoved(with e: NSEvent) { motion(e) }
+    func setRemoteCursor(_ img: CGImage, hotX: Int, hotY: Int) {
+        remoteCursorImage = img
+        remoteCursorHot = CGPoint(x: hotX, y: hotY)
+        remoteCursor = nil
+        window?.invalidateCursorRects(for: self)
+        if !captured, let w = window, w.isKeyWindow,
+           bounds.contains(convert(w.mouseLocationOutsideOfEventStream, from: nil)) { currentRemoteCursor().set() }
+    }
+
+    /// The VM's pointer at the picture's scale (one VM pixel = the picture's size of one), or the arrow.
+    private func currentRemoteCursor() -> NSCursor {
+        guard let img = remoteCursorImage, screenW > 0 else { return .arrow }
+        let scale = pictureRect().width / CGFloat(screenW)
+        if let c = remoteCursor, abs(scale - remoteCursorScale) < 0.001 { return c }
+        let size = NSSize(width: CGFloat(img.width) * scale, height: CGFloat(img.height) * scale)
+        let c = NSCursor(image: NSImage(cgImage: img, size: size),
+                         hotSpot: NSPoint(x: min(remoteCursorHot.x * scale, size.width - 1),
+                                          y: min(remoteCursorHot.y * scale, size.height - 1)))
+        remoteCursor = c
+        remoteCursorScale = scale
+        return c
+    }
+
+    override func resetCursorRects() {
+        addCursorRect(pictureRect(), cursor: currentRemoteCursor())
+    }
+
+    override func mouseMoved(with e: NSEvent) {
+        if !captured, remoteCursorImage != nil { currentRemoteCursor().set() }
+        motion(e)
+    }
     override func mouseDragged(with e: NSEvent) { motion(e) }
     override func rightMouseDragged(with e: NSEvent) { motion(e) }
     override func otherMouseDragged(with e: NSEvent) { motion(e) }
@@ -282,10 +318,37 @@ final class BottleView: NSView {
         conn.send(ClientMsg.key, le32(ks) + [down ? 1 : 0])
     }
 
+    /// Called right before a paste key goes to the VM: the Mac's newest text goes first.
+    var beforePaste: (() -> Void)?
+
     override func keyDown(with e: NSEvent) {
-        if e.modifierFlags.contains(.command) { return }   // Command shortcuts stay with the Mac
+        if e.modifierFlags.contains(.command) {           // other Command shortcuts stay with the Mac
+            if connected && !covered { _ = commandEdit(e) }
+            return
+        }
         if e.isARepeat { return }                          // the game sees the key held down
+        let f = e.modifierFlags
+        if (e.keyCode == 0x09 && f.contains(.control)) || (e.keyCode == 0x72 && f.contains(.shift)) {
+            beforePaste?()                                 // Ctrl+V (Ctrl+Shift+V) or Shift+Insert
+        }
         key(e.keyCode, true)
+    }
+
+    /// ⌘C, ⌘V and ⌘X (with Shift: ⌘⇧C, ⌘⇧V for a terminal) reach the VM as Control+C, V, X,
+    /// as a Mac user expects; with the clipboard shared (Nov 3) they copy and paste between the
+    /// two. The app has no Edit menu, so nothing on the Mac used them. Returns true if it was one.
+    private func commandEdit(_ e: NSEvent) -> Bool {
+        let f = e.modifierFlags.intersection([.command, .control, .option, .shift])
+        guard f == [.command] || f == [.command, .shift], [0x08, 0x09, 0x07].contains(e.keyCode),
+              let ks = keysyms[e.keyCode] else { return false }
+        if e.isARepeat { return true }
+        if e.keyCode == 0x09 { beforePaste?() }
+        let control: UInt32 = 0xffe3
+        conn.send(ClientMsg.key, le32(control) + [1])
+        conn.send(ClientMsg.key, le32(ks) + [1])
+        conn.send(ClientMsg.key, le32(ks) + [0])
+        conn.send(ClientMsg.key, le32(control) + [0])
+        return true
     }
 
     override func keyUp(with e: NSEvent) {
@@ -313,6 +376,7 @@ final class BottleView: NSView {
             if e.type == .keyDown { keyDown(with: e) }
             return true
         }
+        if e.type == .keyDown && window?.firstResponder === self && connected && !covered && commandEdit(e) { return true }
         return super.performKeyEquivalent(with: e)
     }
 }

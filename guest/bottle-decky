@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# bottle-decky: Decky Loader (plugins in Big Picture's quick access menu, as on a Steam Deck), built in
+# to Portalistic's Linux system (Nov 3). Decky's own installer would fetch its x86 build; since 3.3
+# Decky publishes an ARM one (PluginLoader-arm64), which this installs: a pinned version, checked
+# against its SHA-256, into ~/homebrew/services as Decky's installer does, with the same systemd
+# service (plugin_loader, as root), and Steam's debugging port switched on (a file in Steam's folder:
+# Decky reaches Steam's interface through it; the port answers inside the VM only). Plugins go to
+# ~/homebrew/plugins (Decky's store, in the quick access menu). Ones that ship x86 programs, or need
+# a Steam Deck's hardware (battery, power limits), don't work here.
+#
+#   sudo bottle-decky [install]   install or update to the pinned version (update-guest runs this)
+#   sudo bottle-decky remove      the service and the loader go (plugins and their settings stay)
+#   bottle-decky status
+# BOTTLE_DECKY=0 (update-guest): leave it out.
+set -uo pipefail
+VER=v3.3.1
+URL="https://github.com/SteamDeckHomebrew/decky-loader/releases/download/$VER/PluginLoader-arm64"
+SHA256=6320bcf990aacc1c7a8aff67e17c98ece66601d1a7cc3d21d4259c7273adb2bb
+U="${SUDO_USER:-${TARGET_USER:-}}"
+[[ -n "$U" ]] || U="$(id -un)"
+H="$(getent passwd "$U" | cut -d: -f6)"
+HB="$H/homebrew"
+SVC=/etc/systemd/system/plugin_loader.service
+say() { printf '%s\n' "$*"; }
+
+case "${1:-install}" in
+  status)
+    say "Decky Loader: $(cat "$HB/services/.loader.version" 2>/dev/null || echo "not installed"), service $(systemctl is-active plugin_loader 2>/dev/null)"
+    exit 0 ;;
+  remove)
+    [[ $EUID -eq 0 ]] || { echo "run with sudo" >&2; exit 1; }
+    systemctl disable --now plugin_loader 2>/dev/null; rm -f "$SVC"; systemctl daemon-reload
+    rm -rf "$HB/services"; say "Decky Loader removed (plugins stay in $HB/plugins)."; exit 0 ;;
+  install) ;;
+  *) echo "usage: bottle-decky [install | remove | status]" >&2; exit 2 ;;
+esac
+[[ $EUID -eq 0 ]] || { echo "run with sudo" >&2; exit 1; }
+[[ "$(uname -m)" == aarch64 ]] || { say "Decky: not an ARM VM"; exit 0; }
+
+install -d -o "$U" -g "$(id -gn "$U")" "$HB" "$HB/plugins" "$HB/services"
+# Steam's debugging port, which Decky uses (Steam reads this at its start)
+for s in "$H/.local/share/Steam" "$H/.steam/steam"; do
+  [[ -d "$s" ]] && sudo -u "$U" touch "$s/.cef-enable-remote-debugging"
+done
+
+if [[ "$(cat "$HB/services/.loader.version" 2>/dev/null)" != "$VER" || ! -x "$HB/services/PluginLoader" ]]; then
+  tmp="$(mktemp)"
+  if ! curl -fsSL --max-time 300 -o "$tmp" "$URL"; then rm -f "$tmp"; say "  couldn't download Decky Loader $VER"; exit 0; fi
+  if ! echo "$SHA256  $tmp" | sha256sum -c --quiet -; then rm -f "$tmp"; say "  checksum mismatch for Decky Loader $VER"; exit 0; fi
+  systemctl stop plugin_loader 2>/dev/null
+  install -m 0755 -o "$U" "$tmp" "$HB/services/PluginLoader"; rm -f "$tmp"
+  command -v getenforce >/dev/null && getenforce | grep -q Enforcing && chcon -t bin_t "$HB/services/PluginLoader" 2>/dev/null
+  echo "$VER" > "$HB/services/.loader.version"
+  chown "$U" "$HB/services/.loader.version"
+  say "  Decky Loader $VER installed"
+fi
+unit="[Unit]
+Description=Decky Loader (Steam plugins)
+After=network.target
+[Service]
+Type=simple
+User=root
+Restart=always
+KillMode=process
+TimeoutStopSec=15
+ExecStart=$HB/services/PluginLoader
+WorkingDirectory=$HB/services
+Environment=UNPRIVILEGED_PATH=$HB
+Environment=PRIVILEGED_PATH=$HB
+Environment=LOG_LEVEL=INFO
+[Install]
+WantedBy=multi-user.target"
+if [[ "$(cat "$SVC" 2>/dev/null)" != "$unit" ]]; then printf '%s\n' "$unit" > "$SVC"; systemctl daemon-reload; fi
+systemctl enable plugin_loader >/dev/null 2>&1
+systemctl restart plugin_loader 2>/dev/null || systemctl start plugin_loader
+sleep 2
+say "  Decky Loader $VER: service $(systemctl is-active plugin_loader) (in Big Picture's quick access menu from Steam's next start)"

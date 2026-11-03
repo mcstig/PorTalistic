@@ -20,6 +20,9 @@ struct StoreGame {
     var update = false
     /// The year it came out (0: the store doesn't say).
     var year = 0
+    /// What installing it takes, in bytes: the download, and the room on disk (0: not looked up yet).
+    var download: Int64 = 0
+    var disk: Int64 = 0
 }
 
 /// How the grid orders the games. Installed games always come first; this orders each group.
@@ -732,6 +735,8 @@ final class StoreContentView: NSView, NSCollectionViewDataSource, NSCollectionVi
     var onPause: (() -> Void)?
     var onStop: (() -> Void)?
     var onDequeue: ((StoreGame) -> Void)?
+    /// A game not installed was chosen and its size isn't known yet: look it up (then `setSize`).
+    var onWantSize: ((StoreGame) -> Void)?
 
     private(set) var mode = Mode.loading
     /// A command is running (not a download): nothing that would start another is offered.
@@ -750,6 +755,9 @@ final class StoreContentView: NSView, NSCollectionViewDataSource, NSCollectionVi
     private var queue: [String] = []
     /// A word on a cover ("Paused") until the game is installed or chosen again.
     private var labels: [String: String] = [:]
+    /// Games whose size was asked for (once per window), and those still being looked up.
+    private var sizeAsked = Set<String>()
+    private var sizeLooking = Set<String>()
 
     // loading
     private let loadingView = NSView()
@@ -1201,6 +1209,25 @@ final class StoreContentView: NSView, NSCollectionViewDataSource, NSCollectionVi
     }
 
     /// A line to show under the game's name in the bar (until another game is chosen).
+    /// A game's size, looked up (0 and 0: the store didn't say).
+    func setSize(_ id: String, download: Int64, disk: Int64) {
+        sizeLooking.remove(id)
+        if disk > 0 {
+            for i in games.indices where games[i].id == id { games[i].download = download; games[i].disk = disk }
+            for i in shown.indices where shown[i].id == id { shown[i].download = download; shown[i].disk = disk }
+        }
+        refreshTray()
+    }
+
+    /// "Needs 25.3 GB (a 12.1 GB download)": what installing it takes, for the bar.
+    static func needs(_ g: StoreGame) -> String {
+        guard g.disk > 0 else { return "" }
+        let room = "Needs \(StoreStyle.bytes(g.disk))"
+        // (a download about as big as what it unpacks to isn't worth a second number)
+        guard g.download > 0, Double(g.download) < Double(g.disk) * 0.9 else { return room + "." }
+        return room + " (a \(StoreStyle.bytes(g.download)) download)."
+    }
+
     func setNote(_ id: String, _ text: String) {
         note = (id, text)
         refreshTray()
@@ -1331,6 +1358,11 @@ final class StoreContentView: NSView, NSCollectionViewDataSource, NSCollectionVi
             return
         }
         trayTitle.stringValue = g.title
+        if !g.installed && g.disk == 0 && !sizeAsked.contains(g.id), let want = onWantSize {
+            sizeAsked.insert(g.id)
+            sizeLooking.insert(g.id)
+            want(g)
+        }
         if busy && g.id == busyID {
             traySub.stringValue = busyText
             pauseButton.isHidden = !busyIsDownload
@@ -1354,8 +1386,10 @@ final class StoreContentView: NSView, NSCollectionViewDataSource, NSCollectionVi
         } else if g.installed {
             let base = g.size > 0 ? "Installed, \(StoreStyle.bytes(g.size))" : "Installed"
             traySub.stringValue = g.update ? base + ". A newer version is available." : base
+        } else if g.disk > 0 {
+            traySub.stringValue = "Not installed. " + StoreContentView.needs(g)
         } else {
-            traySub.stringValue = "Not installed"
+            traySub.stringValue = sizeLooking.contains(g.id) ? "Not installed. Looking up its size…" : "Not installed"
         }
         if g.year > 0, !(note?.id == g.id) {
             let s = traySub.stringValue

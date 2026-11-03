@@ -24,9 +24,8 @@
 #                             Game Mode (Steam's Big Picture fills the screen; the default) or
 #                             Desktop Mode (KDE Plasma, as on a Steam Deck; the first switch to it
 #                             downloads about 550 MB); no argument: which one
-#   bottle steam-gpu [on|off] Steam's own interface (Big Picture) drawn on the Mac's GPU (OpenGL
-#                             via zink) instead of the VM's processors: on checks that it works
-#                             first, then restarts Steam; off goes back; no argument: which one
+#   bottle steam-gpu [on]     Steam's own interface (Big Picture) is always drawn on the Mac's GPU
+#                             (OpenGL via zink); on checks it again and restarts Steam
 #   bottle settings           open Steam's settings (without its menus)
 #   bottle steam-url URL      open a steam:// link in Steam (e.g. steam://uninstall/<app id>)
 #   bottle wm [openbox|xfwm4] the VM's window manager (Steam's menus differ between them)
@@ -252,15 +251,17 @@ app_words() {
     -e 's/bottle stop/Steam > Shut Down the VM…/g' \
     -e 's/bottle library add ("[^"]*"|[^ ),]+)( --default)?/Game Folders > Add a Game Folder…/g' \
     -e 's/bottle library remove [^ ),]+/Game Folders > Remove a Game Folder…/g' \
-    -e 's/bottle library folders( lists them)?/Game Folders > Show Game Folders/g' \
-    -e 's/bottle steam-gpu (on|off)( tries the Mac'"'"'s GPU| goes back)?/Steam > Steam'"'"'s Interface: GPU or Processor…/g'
+    -e 's/bottle library folders( lists them)?/Game Folders > Show Game Folders/g'
 }
 info() { printf '\033[1;34m==>\033[0m %s\n' "$(app_words "$*")"; }
 warn() { printf '\033[1;33mwarn:\033[0m %s\n' "$(app_words "$*")" >&2; }
 die()  { printf '\033[1;31merror:\033[0m %s\n' "$(app_words "$*")" >&2; exit 1; }
 err()  { printf '\033[1;31merror:\033[0m %s\n' "$(app_words "$*")" >&2; }   # (and carry on)
 
-# limactl shell enters the same folder inside the VM; home is always shared.
+# (Our own commands in the VM start in its "/" (--workdir /, below), not in the Mac folder we're
+# in: limactl shell enters that folder in the VM by default, through the Mac home's share, and on
+# Nov 2 that share hung (a look into ~/Library waited on a macOS privacy question) and with it
+# every command the app sent the VM.)
 cd "$HOME"
 
 vm_status() { limactl list --format '{{.Status}}' "$VM_NAME" 2>/dev/null || true; }
@@ -291,12 +292,12 @@ vm_tools_damaged() {
       if [ ! -s "$f" ] || [ -z "$(head -c 512 "$f" | tr -d "\0")" ]; then echo "$f"; fi
     done' 2>/dev/null || true
 }
-vsh() { limactl shell "$VM_NAME" "$@"; }
+vsh() { limactl shell --workdir / "$VM_NAME" "$@"; }
 # vsh that gives up after $1 seconds: a VM stuck (say, on a full disk) can leave ssh hanging.
 vsh_for() {
   local secs="$1" p w rc=0
   shift
-  limactl shell "$VM_NAME" "$@" </dev/null &   # not vsh: $! must be limactl itself
+  limactl shell --workdir / "$VM_NAME" "$@" </dev/null &   # not vsh: $! must be limactl itself
   p=$!
   VSH_FOR_PID=$p   # with VSH_FOR_TIMER: for a Ctrl-C trap to end them (steam_gpu_back)
   # the timer keeps none of our output open (or "$(vsh_for …)" would wait for it)
@@ -361,8 +362,15 @@ krunkit_has_kk() {
 
 # limactl start with KEY=VALUE settings for krunkit. Not through /usr/bin/env: macOS drops DYLD_*
 # variables on the way into its own programs, and krunkit needs DYLD_INSERT_LIBRARIES (vm_start).
+# Also with the most open files macOS allows a process: krunkit keeps about four descriptors for
+# every graphics allocation a game shares with the Mac, and an app opened from Finder starts with a
+# limit of 256 (a game with many graphics allocations runs out and loses its GPU; krunkit held 225 with Steam
+# idle). Its child processes (the host agent, krunkit) inherit it.
 lima_start_env() {
-  ( local e; for e in "$@"; do export "$e"; done; limactl start "$VM_NAME" )
+  ( local e n
+    n="$(sysctl -n kern.maxfilesperproc 2>/dev/null || echo 10240)"
+    ulimit -Sn "$n" 2>/dev/null || ulimit -Sn 10240 2>/dev/null || true
+    for e in "$@"; do export "$e"; done; limactl start "$VM_NAME" )
 }
 
 vm_start() {
@@ -439,6 +447,16 @@ vm_start() {
   # it from starting at once: once more without the game folders. (Not after a long try: on a
   # full disk Lima gives up only after 10 minutes, and bottle disk grow carries on from there.)
   if (( SECONDS - t0 < 120 )) && [[ -f "$LIB_APPLIED" && "$(cat "$LIB_APPLIED")" != "$LIB_HOME_ONLY" ]]; then
+    # the Mac's drives first (a drive macOS hasn't let the VM open yet): the game folders stay
+    if [[ "$(cat "$LIB_APPLIED")" != "$(lib_mounts_expr games)" ]]; then
+      warn "The VM didn't start with the Mac's drives shared; starting it without them…"
+      limactl stop --force "$VM_NAME" >/dev/null 2>&1 || true
+      if lib_mounts_apply games && lima_start_env ${envs[@]+"${envs[@]}"}; then
+        warn "The VM runs without the Mac's drives. If macOS asked whether it may use a drive, allow it, then: bottle restart"
+        lib_push_conf
+        return 0
+      fi
+    fi
     warn "The VM didn't start with the game folders shared; starting it without them…"
     limactl stop --force "$VM_NAME" >/dev/null 2>&1 || true
     if lib_mounts_apply none && lima_start_env ${envs[@]+"${envs[@]}"}; then
@@ -546,8 +564,11 @@ steam_stop() {
   vsh_for 120 bash -c '
     mkdir -p ~/.cache/steamos-bottle && touch ~/.cache/steamos-bottle/steam-stopped
     pkill -9 -f "[w]ineserver|[w]ine64|[w]ine-preloader|[.]exe" 2>/dev/null
-    # a native game (CS2 under the x86 translator, Oct 28) is no ".exe": everything Steam started a
-    # game with (under its reaper) goes too; a game frozen on a hung child never quits by itself
+    # a native game (CS2 under the x86 translator, Oct 28) is no Windows program: everything Steam
+    # started a game with (under its reaper) goes too; a game frozen on a hung child never quits by itself
+    # (Nothing in this script may spell a Windows program ending: pkill -f above reads the command line of
+    # this very shell, script and all, and the Oct 28 comment here made it kill this shell, so from then
+    # on Steam was never stopped: Nov 2.)
     kids() { local c; for c in $(pgrep -P "$1"); do echo "$c"; kids "$c"; done; }
     for r in $(pgrep -f "[r]eaper SteamLaunch"); do kill -KILL $(kids "$r") 2>/dev/null; done
     pkill -TERM -f "[s]teamrtarm64/steam" 2>/dev/null || exit 0
@@ -560,7 +581,7 @@ steam_stop() {
              && { p="$(cat ~/.steam/steam.pid 2>/dev/null)"; [ -z "$p" ] || ! kill -0 "$p" 2>/dev/null; }; }
     for _ in $(seq 1 30); do gone && exit 0; sleep 1; done
     pkill -KILL -x steamwebhelper 2>/dev/null; pkill -KILL -f "[s]teamrtarm64/" 2>/dev/null; true' \
-    || warn "Steam didn't answer within 2 minutes; going on without it."
+    || warn "Steam didn't quit cleanly (or within 2 minutes); going on."
 }
 
 port_listening() { lsof -nP -iTCP:"$VNC_PORT" -sTCP:LISTEN >/dev/null 2>&1; }
@@ -1296,7 +1317,8 @@ cmd_up() {
   lib_adopt_drives
   # the game folders' drives (or shares) Lima should give the VM changed (an update made the folders
   # drives, a folder was added by hand): Lima takes that only at a start, so the VM restarts once
-  if [[ "$(vm_status)" == Running && -f "$LIB_APPLIED" ]] && [[ "$(cat "$LIB_APPLIED")" != "$(lib_mounts_expr 2>/dev/null)" ]]; then
+  # (the game folders only: a drive plugged in or out restarts nothing; it's shared from the next start)
+  if [[ "$(vm_status)" == Running && -f "$LIB_APPLIED" ]] && [[ "$(cat "$LIB_APPLIED.games" 2>/dev/null || cat "$LIB_APPLIED")" != "$(lib_mounts_expr games 2>/dev/null)" ]]; then
     info "The game folders changed (drives for the VM): restarting the VM once…"
     vm_splash show "Restarting Portalistic's Linux system for the game folders' drives…" 2>/dev/null || true
     steam_stop
@@ -1316,6 +1338,9 @@ cmd_up() {
   done
   (( ss_rc != 3 )) || die "The VM doesn't have the screen server yet. Run: bottle update"
   (( ss_rc == 0 )) || die "The VM started but doesn't answer. Run: bottle restart"
+  # the watcher as soon as the VM answers (Nov 1: a desktop that failed to start stopped this
+  # before it, and with it the kit's own checks; it's started again below, a no-op then)
+  awake_start
   # the desktop first: the "please wait" window (bottle-splash) can only show on it, and an update
   # of the Linux system or the move of games into a drive may take minutes (Oct 22: a black window)
   if vsh bash -c 'command -v bottle-desktop >/dev/null'; then
@@ -1568,7 +1593,7 @@ disk_grow() {  # $1 = new size in GB (default: 5 GB more). Safe to run again: it
 # ---- game folders: games on the Mac or a drive instead of the VM's disk ----
 # The VM's disk is one file on the Mac that grows as the VM fills it (and shrinks again when files
 # are deleted: the VM's file system hands freed blocks back), but inside the VM Steam sees the
-# disk's own size (20 GB since 0.7.0.1), not the Mac's free space. A game folder is a plain folder on this Mac
+# disk's own size (25 GB; 20 from 0.7.0.1 until Oct 23), not the Mac's free space. A game folder is a plain folder on this Mac
 # or on a drive, shared with the VM (a writable Lima mount at /mnt/portalistic/NAME): games there
 # are ordinary files on that drive, Steam sees its real free space before an install, and an
 # uninstall gives the space straight back. bottle-libraries in the VM makes each one a Steam
@@ -1582,7 +1607,8 @@ LIB_REMOVED="$STATE_DIR/libraries-removed"   # game folders the player took out 
 LIB_MOUNT_ROOT=/mnt/portalistic
 LIB_MAC_DIR="$HOME/Games/Portalistic"
 LIB_DRIVE_DIR="Portalistic Library"
-LIB_HOME_ONLY='.mounts = [{"location": "~"}] | .additionalDisks = []'
+LIB_HOME_ONLY='.mounts = [{"location": "~", "writable": true}] | .additionalDisks = []'
+MAC_DRIVES_ROOT=/mnt/mac-drives   # the Mac's own drives, whole (mac_drives_rows)
 LIB_FOLDER_ROOT=/mnt/portalistic-folders   # the folders themselves (virtiofs), for moving games into the drive
 LIB_IMAGE="Portalistic Games.img"          # in each game folder: the drive the VM gets (see lib_disk_prepare)
 MAC_STEAM_LIBS="$HOME/Library/Application Support/Steam/config/libraryfolders.vdf"
@@ -1611,13 +1637,13 @@ lib_save() {  # $1 default, $2 stamp; the rows on stdin
   } > "$LIB_CONF.tmp" && mv -f "$LIB_CONF.tmp" "$LIB_CONF"
 }
 
-# The VM's shares as Lima mounts (a yq expression): the home folder, read-only as always, and
-# each game folder that's there right now.
+# The VM's shares as Lima mounts (a yq expression): the home folder (writable since Nov 2), each
+# game folder that's there right now, and the Mac's drives (mac_drives_rows).
 # ---- a game folder is a drive (Oct 22) ----
 # The VM used to see each game folder straight (a virtiofs share at /mnt/portalistic/NAME). On a
 # 2020 M1 MacBook Pro that share sometimes never answered a request, and a game's start, Steam's
 # install step or the watcher waited forever (libkrun 1.19.6's virtio-fs; the cause is open). The
-# VM's own 20 GB drive, a plain file read through virtio-blk, never did that. So each game folder
+# VM's own 25 GB drive, a plain file read through virtio-blk, never did that. So each game folder
 # now holds a drive image, "Portalistic Games.img": a sparse file (it takes Mac space as games fill
 # it, and gives it back when they're uninstalled: fstrim in the VM) as big as the Mac volume it's
 # on, registered with Lima as the disk pg-NAME (a symlink in ~/.lima/_disks/pg-NAME/datadisk) and
@@ -1655,8 +1681,33 @@ lib_disk_forget() {  # $1 = NAME: Lima's disk entry (the image stays in the fold
   [[ -d "$dir" ]] || return 0
   rm -f "$dir/datadisk" "$dir/in_use_by" 2>/dev/null; rmdir "$dir" 2>/dev/null || true
 }
-lib_mounts_expr() {
-  local expr='.mounts = [{"location": "~"}' disks="" sep="" name label path
+# ---- the whole Mac in the VM (Nov 2) ----
+# The Linux desktop saw only the game folders and the Mac's home (read-only), so a Switch emulator
+# got its games over the network (Dolphin's SFTP to this very Mac: slow, and an update file failed
+# to read). Now the home is writable and every drive of this Mac is shared whole, straight
+# (virtiofs), at /mnt/mac-drives/NAME (Dolphin lists them by the drive's own name). A drive is one
+# in /Volumes that macOS shows in Finder: not the startup disk (that's the home), not its hidden
+# volumes (nobrowse), not a network share or an opened disk image. A drive plugged in later comes
+# in at the VM's next start. BOTTLE_MAC_DRIVES=0: the game folders and the home only.
+mac_drives_rows() {  # SLUG<TAB>NAME<TAB>PATH<TAB>rw|ro, one per drive
+  [[ "${BOTTLE_MAC_DRIVES:-1}" != 0 ]] || return 0
+  local dev path opts slug seen=" " n
+  while IFS=$'\t' read -r dev path opts; do
+    [[ -d "$path" && ! -L "$path" ]] || continue
+    case ",$opts," in *",local,"*) ;; *) continue ;; esac
+    case ",$opts," in *",nobrowse,"*) continue ;; esac
+    diskutil info "$dev" 2>/dev/null | grep -Eq 'Protocol: +Disk Image|Virtual: +Yes' && continue
+    slug="$(basename "$path" | tr 'A-Z' 'a-z' | tr -cs 'a-z0-9' '-' | sed 's/^-*//; s/-*$//')"
+    [[ -n "$slug" ]] || slug=drive
+    n="$slug"; local i=2
+    while [[ "$seen" == *" $n "* ]]; do n="$slug-$i"; i=$(( i + 1 )); done
+    seen="$seen$n "
+    case ",$opts," in *",read-only,"*|*",rdonly,"*) printf '%s\t%s\t%s\tro\n' "$n" "$(basename "$path")" "$path" ;;
+      *) printf '%s\t%s\t%s\trw\n' "$n" "$(basename "$path")" "$path" ;; esac
+  done < <(/sbin/mount | /usr/bin/perl -ne 'print "$1\t$2\t".join(",", map { s/^\s+|\s+$//gr } split /,/, $3)."\n" if m{^(/dev/disk\S+) on (/Volumes/.+) \(([^()]*)\)$}')
+}
+lib_mounts_expr() {  # $1 = games: without the Mac's drives
+  local expr='.mounts = [{"location": "~", "writable": true}' disks="" sep="" name label path rw
   while IFS=$'\t' read -r name label path; do
     [[ -n "$name" && -d "$path" ]] || continue
     if [[ "${BOTTLE_GAME_DISKS:-1}" != 0 ]] && lib_disk_prepare "$name" "$path"; then
@@ -1667,13 +1718,19 @@ lib_mounts_expr() {
       expr="$expr, {\"location\": $(json_str "$path"), \"mountPoint\": \"$LIB_MOUNT_ROOT/$name\", \"writable\": true}"
     fi
   done < <(lib_rows)
+  if [[ "${1:-}" != games ]]; then
+    while IFS=$'\t' read -r name label path rw; do
+      expr="$expr, {\"location\": $(json_str "$path"), \"mountPoint\": \"$MAC_DRIVES_ROOT/$name\", \"writable\": $([[ "$rw" == rw ]] && echo true || echo false)}"
+    done < <(mac_drives_rows)
+  fi
   echo "$expr] | .additionalDisks = [$disks]"
 }
-# Before the VM starts (Lima reads its mounts then). $1 = none: the home folder only.
+# Before the VM starts (Lima reads its mounts then). $1 = none: the home folder only; games: and the
+# game folders (not the Mac's drives).
 lib_mounts_apply() {
   local expr name label path
   [[ -f "$LIB_CONF" || -f "$LIB_APPLIED" ]] || return 0   # never used: Lima's settings stay as they are
-  if [[ "${1:-}" == none ]]; then expr="$LIB_HOME_ONLY"; else expr="$(lib_mounts_expr)"; fi
+  if [[ "${1:-}" == none ]]; then expr="$LIB_HOME_ONLY"; else expr="$(lib_mounts_expr "${1:-}")"; fi
   if [[ "${1:-}" != none ]]; then
     while IFS=$'\t' read -r name label path; do
       [[ -z "$name" || -d "$path" ]] || warn "Game folder $label isn't there ($path): the VM starts without it (connect the drive, then: bottle restart)"
@@ -1685,6 +1742,7 @@ lib_mounts_apply() {
     return 1
   fi
   printf '%s\n' "$expr" > "$LIB_APPLIED"
+  if [[ "${1:-}" == none ]]; then rm -f "$LIB_APPLIED.games"; else lib_mounts_expr games > "$LIB_APPLIED.games"; fi
 }
 # The list, as the VM's bottle-libraries reads it (~/.config/steamos-bottle/libraries.json there).
 lib_moved_cleanup() {  # the folders' copies of games the VM moved into their drives (steamapps/.moved-into-drive)
@@ -1751,6 +1809,13 @@ lib_push_conf() {
     json="$json$sep{\"name\": $(json_str "$name"), \"label\": $(json_str "$label"), \"path\": $(json_str "$path"), \"free\": $(lib_mac_free "$path"), \"disk\": $([[ "${BOTTLE_GAME_DISKS:-1}" != 0 && -f "$path/$LIB_IMAGE" ]] && echo true || echo false)}"
     sep=", "
   done < <(lib_rows)
+  json="$json], \"drives\": ["
+  sep=""
+  while IFS=$'\t' read -r name label path rw; do
+    [[ -n "$name" ]] || continue
+    json="$json$sep{\"name\": $(json_str "$name"), \"label\": $(json_str "$label"), \"path\": $(json_str "$path")}"
+    sep=", "
+  done < <(mac_drives_rows)
   json="$json]}"
   # (base64: the text goes through ssh's command line unharmed)
   # shellcheck disable=SC2016  # runs in the VM
@@ -2138,7 +2203,7 @@ vm_homegames_names() {
 # Steam's web helper (the browser that draws Steam's windows) logs "eglGetMscRateANGLE:
 # glXGetMscRateOML failed" about every frame: our X server has no GLX_OML_sync_control. Oct 21: its
 # chrome_debug.log (8 GB, since Oct 6) and /s/logs/steamwebhelper.log (3.3 GB) filled most of this
-# Mac's 20 GB VM disk, with the cache the web helper really needs at 0.2 GB. Both only hold that
+# Mac's 25 GB VM disk, with the cache the web helper really needs at 0.2 GB. Both only hold that
 # noise, so any over 50 MB is emptied in place (the helper keeps writing to the same, now small, file).
 # >>> vmlogs
 vm_logs_cap_cmd() {  # the script the VM runs
@@ -2152,7 +2217,7 @@ VLEOF
 # <<< vmlogs
 
 # ---- games never go on the Linux system's drive (the watcher, every round) ----
-# Steam offers its own drive (the VM's 20 GB disk: Linux, Steam, Proton and its runtimes) next to
+# Steam offers its own drive (the VM's 25 GB disk: Linux, Steam, Proton and its runtimes) next to
 # the game folders when a game is installed, and once that drive is full Steam can't move
 # anything: on Oct 21 (a new laptop) Rocket League's download filled it, Steam said it was out of
 # space at every start, and Settings > Storage > Move sat at 0%. So each round the watcher asks
@@ -2256,7 +2321,7 @@ homegames_guard() {  # $1 = what Steam does (game, download, idle), $2 = the VM'
 # (gpu_auto_guard) confirms it from Steam's own logs: its web helper reports zink after a few tries
 # (the first ones normally fail: 2 to 4 on the M4 Max, once 9). Else Steam goes back to the processor
 # and says so. One line in the VM keeps the state, ~/.config/steamos-bottle/steam-gpu-auto, "STATE VERSION":
-#   on | off   chosen by hand (bottle steam-gpu on|off, Steam > Steam's Interface…): never changed by itself
+#   on         (Nov 1: always; the processor choice and the fallback are gone, see gpu_auto_prepare)
 #   pending    the Mac's GPU is set; waiting for Steam's web helper to confirm it
 #   ok         confirmed
 #   failed     the check or the confirmation failed with this VERSION of the kit: tried again at the next
@@ -2275,31 +2340,22 @@ gpu_auto_set() {  # $1 = on|off|pending|ok|failed (written with this kit's versi
   vsh_for 20 bash -c 'mkdir -p ~/.config/steamos-bottle && echo "$1 $2" > ~/.config/steamos-bottle/steam-gpu-auto' _ "$1" "$v" >/dev/null 2>&1 || true
 }
 GPU_AUTO_BUSY=0
+# Steam's interface is always drawn on the Mac's GPU (Nov 1: Michael: never on the processor, it
+# works badly; the processor choice and the fallback to it are gone). At each Steam start the VM's
+# setting is made sure of; once per kit version the zink check runs again, only to pick the stand-ins
+# zink needs (steam-gpu-fake): its result never changes where Steam draws.
 gpu_auto_prepare() {  # at the start of steam_start: never fails, never stops a start
-  local cur st="" ver="" setting="" kv
-  [[ "${BOTTLE_STEAM_GPU_AUTO:-1}" != 0 && "$GPU_AUTO_BUSY" != 1 ]] || return 0
+  local cur st="" ver="" kv
+  [[ "$GPU_AUTO_BUSY" != 1 ]] || return 0
   # shellcheck disable=SC2016  # runs in the VM
-  cur="$(vsh_for 20 bash -c 'echo "state $(head -n 1 ~/.config/steamos-bottle/steam-gpu-auto 2>/dev/null)"; echo "setting $(cat ~/.config/steamos-bottle/steam-gpu 2>/dev/null)"' 2>/dev/null)" || return 0
-  [[ -n "$cur" ]] || return 0
-  read -r st ver <<<"$(sed -n 's/^state //p' <<<"$cur")" || true
-  setting="$(sed -n 's/^setting //p' <<<"$cur")"
+  cur="$(vsh_for 20 bash -c 'mkdir -p ~/.config/steamos-bottle && echo zink > ~/.config/steamos-bottle/steam-gpu; head -n 1 ~/.config/steamos-bottle/steam-gpu-auto 2>/dev/null' 2>/dev/null)" || return 0
+  read -r st ver <<<"$cur" || true
   kv="$(kit_version)"
-  case "$st" in
-    on|off|pending|ok) return 0 ;;
-    failed) [[ "$ver" != "$kv" ]] || return 0 ;;
-  esac
-  if [[ "$setting" == zink ]]; then gpu_auto_set on; return 0; fi   # set by hand before this existed
+  [[ "$st" == on && "$ver" == "$kv" ]] && return 0
   GPU_AUTO_BUSY=1
-  info "Trying Steam's interface on the Mac's GPU (smoother than on the processor)…"
   desktop_start >/dev/null 2>&1 || true
-  if steam_gpu_check 120; then
-    vsh_for 20 bash -c 'mkdir -p ~/.config/steamos-bottle && echo zink > ~/.config/steamos-bottle/steam-gpu' >/dev/null 2>&1 || true
-    gpu_auto_set pending
-    info "Steam's interface will draw on the Mac's GPU. Portalistic checks it once Steam is up and goes back by itself if it can't."
-  else
-    gpu_auto_set failed
-    info "Steam's interface stays on the processor: the Mac's GPU didn't pass the check (Steam > Save Logs has the details)."
-  fi
+  steam_gpu_check 120 >/dev/null 2>&1 || warn "The check of OpenGL on the Mac's GPU didn't pass (Steam > Save Logs has the details); Steam's interface stays on the GPU."
+  gpu_auto_set on
   GPU_AUTO_BUSY=0
   return 0
 }
@@ -2326,48 +2382,8 @@ fi
 printf 'gpuauto\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "${gs:--}" "${gv:--}" "${gset:--}" "$grun" "${gup:-0}" "$(echo $gz)" "$(echo $gf)" "$gage"
 GAEOF
 }
-gpu_auto_guard() {  # $1 = what Steam does (game, download, idle), $2 = the VM's lines (see gpu_auto_cmd)
-  local line gs gv gset grun gup gz gf gage kv word
-  [[ "${BOTTLE_STEAM_GPU_AUTO:-1}" != 0 ]] || return 0
-  line="$(grep '^gpuauto' <<<"$2" | head -n 1 || true)"
-  [[ -n "$line" ]] || return 0
-  IFS=$'\t' read -r _ gs gv gset grun gup gz gf gage <<<"$line" || true
-  [[ "$grun" =~ ^[01]$ && "$gup" =~ ^[0-9]+$ && "$gz" =~ ^[0-9]+$ && "$gf" =~ ^[0-9]+$ && "$gage" =~ ^-?[0-9]+$ ]] || return 0
-  kv="$(kit_version)"
-  case "$gs" in
-    on|off|ok) return 0 ;;
-    pending)
-      if (( gz > 0 )); then
-        echo "$(date '+%F %T') Steam's interface draws on the Mac's GPU (Steam's web helper reported zink)"
-        gpu_auto_set ok
-        return 0
-      fi
-      [[ "$grun" == 1 && "$1" != game ]] || return 0
-      # 12 failed tries (10 s apart) or 5 minutes since the web helper first started: it isn't going to work
-      if (( gf >= 12 || gage >= 300 )); then
-        echo "$(date '+%F %T') Steam's web helper can't use the Mac's GPU ($gf failed tries, $gage s): back to the processor"
-        vsh_for 20 bash -c 'rm -f ~/.config/steamos-bottle/steam-gpu' >/dev/null 2>&1 || true
-        gpu_auto_set failed
-        log_export >/dev/null 2>&1 || true
-        steam_stop >/dev/null 2>&1 || true
-        steam_start >/dev/null 2>&1 || true
-        vm_notice 0 60 "Steam's interface is back on the processor" "Portalistic tried drawing it on the Mac's GPU, but Steam's web helper couldn't start OpenGL there. Steam > Save Logs saves what helps to find out why."
-      fi
-      return 0 ;;
-    *)  # never decided here, or failed with an older kit
-      if [[ "$gs" == failed && "$gv" == "$kv" ]]; then return 0; fi
-      if [[ "$gset" == zink ]]; then gpu_auto_set on; return 0; fi   # set by hand before this existed
-      # Steam already runs on the processor and nothing is going on: one restart to try the GPU
-      [[ "$grun" == 1 && "$1" == idle ]] && (( gup >= 180 )) || return 0
-      echo "$(date '+%F %T') Steam runs on the processor: restarting it once to try the Mac's GPU"
-      steam_stop >/dev/null 2>&1 || true
-      steam_start >/dev/null 2>&1 || true
-      word="$(vsh_for 20 bash -c 'head -n 1 ~/.config/steamos-bottle/steam-gpu-auto 2>/dev/null' 2>/dev/null | awk '{print $1}' || true)"
-      if [[ "$word" == pending ]]; then
-        vm_notice 0 45 "Steam restarted to draw on the Mac's GPU" "Its interface is smoother there. If it can't, Portalistic goes back to the processor by itself. Steam > Steam's Interface: GPU or Processor… lets you choose."
-      fi
-      return 0 ;;
-  esac
+gpu_auto_guard() {  # (Nov 1: no fallback to the processor any more: nothing to watch)
+  return 0
 }
 # <<< gpuauto
 
@@ -2392,7 +2408,7 @@ PM_FAST=0        # 1: look again in a few seconds (a game to restart Steam for w
 PM_FAST_N=0      # fast rounds in a row
 playmap_cmd() {  # the script the VM runs: "playmap TAB Steam's uptime"; with no game running a "pending TAB appid TAB name" line
                  # per game Steam would run as its Linux version; with a game starting a "launch TAB appid TAB pid TAB seconds TAB
-                 # prefix finished (0/1) TAB play|install TAB name" line per game
+                 # prefix finished (0/1) TAB play|install TAB its Windows components installed before (0/1) TAB name" line per game
   cat <<'PMEOF'
 pmp="$(pgrep -f "[s]teamrtarm64/steam" | head -n 1)"
 pmu=0
@@ -2419,7 +2435,13 @@ if [ -n "$pmp" ]; then
       pmd="$(printf '%s' "$pmf" | cut -f2-)"
       pmk=0
       [ -f "$pmd/pfx/creation_sync_guard" ] && pmk=1
-      printf 'launch\t%s\t%s\t%s\t%s\t%s\t%s\n' "$pma" "$pmr" "${pmt:-0}" "$pmk" "$pmy" "$pmn"
+      # Steam's install step ran to its end once already: it marks that in the game's Windows registry
+      # (Valve\Steam\Apps\APPID for the game's own install script, ...\228980 for the shared Visual C++ /
+      # DirectX installers). Steam runs the step again at every start, and under the translator even one
+      # with nothing left to install takes more than 20 s (Nov 2).
+      pmi=0
+      [ "$pmy" = install ] && grep -qE "^\[Software..(Wow6432Node..)?Valve..Steam..Apps..($pma|228980)\]" "$pmd/pfx/system.reg" 2>/dev/null && pmi=1
+      printf 'launch\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$pma" "$pmr" "${pmt:-0}" "$pmk" "$pmy" "$pmi" "$pmn"
     done
   elif ! pgrep -f "[w]ineserver" >/dev/null 2>&1; then
     command -v bottle-steamplay >/dev/null 2>&1 && bottle-steamplay pending 2>/dev/null
@@ -2448,20 +2470,22 @@ true
 PMEOF
 }
 playmap_guard() {  # $1 = what Steam does (game, download, idle), $2 = the VM's lines (see playmap_cmd)
-  local state="$1" lines="$2" kind a b c d k e up now t keep="" fresh names title text n
+  local state="$1" lines="$2" kind a b c d k r e up now t keep="" fresh names title text n
   local -a list=() ts=()
   PM_FAST=0
   # a game starting without a finished Wine prefix: its first start builds one. Steam's install
   # step (the game's Windows installers, after the download): it can take minutes too.
   if [[ "${BOTTLE_PREFIX_NOTICE:-1}" != 0 ]]; then
-    while IFS=$'\t' read -r kind a b c d k e; do
-      [[ "$kind" == launch && "$a" =~ ^[0-9]+$ && "$b" =~ ^[0-9]+$ && "$c" =~ ^[0-9]+$ && "$d" =~ ^[01]$ && -n "$e" ]] || continue
+    while IFS=$'\t' read -r kind a b c d k r e; do
+      [[ "$kind" == launch && "$a" =~ ^[0-9]+$ && "$b" =~ ^[0-9]+$ && "$c" =~ ^[0-9]+$ && "$d" =~ ^[01]$ && "$r" =~ ^[01]$ && -n "$e" ]] || continue
       [[ "$k" == play || "$k" == install ]] || continue
       [[ "$PM_NOTICED" != *" $a@$b "* ]] || continue
       if [[ "$k" == install ]]; then
-        if (( c < 20 )); then continue; fi
+        # (its components went in at an earlier start: the step only checks them, so no banner, unless it
+        # goes on for minutes, which means it really is installing something, a game update's new one)
+        if (( c < (r == 1 ? 180 : 20) )); then continue; fi
         PM_NOTICED="$PM_NOTICED $a@$b "
-        echo "$(date '+%F %T') $e: Steam's install step is still running after $c s: telling the player"
+        echo "$(date '+%F %T') $e: Steam's install step is still running after $c s (components installed before: $r): telling the player"
         vm_notice 0 120 "Finishing the install of $e" "Steam is running the game's Windows installers (DirectX, Visual C++). The first time, this also sets up the game's Windows folder. It can take a few minutes; Play is ready when it's done."
       else
         [[ "$d" == 0 ]] || continue
@@ -2655,7 +2679,7 @@ lan_hosts_push() {  # the servers to the VM (when the list changed, or $1 = forc
 # VM starts as it always does, and its first start brings it up to this kit (for its new user)
 # and installs Steam. The VM: its share of the Mac's memory (memory_suggested_gb: 4 GB on an 8 GB
 # Mac, 8 GB on a 16 GB one), its performance cores, a
-# 20 GB disk (Linux, Steam, Proton) that takes Mac space only as it fills, no Mac folders shared but the game folder
+# 25 GB disk (Linux, Steam, Proton) that takes Mac space only as it fills, no Mac folders shared but the game folder
 # ~/Games/Portalistic (bottle library). Downloads resume where they stopped.
 #   bottle setup [IMAGE]   IMAGE: a local image file instead of the download (development)
 IMAGE_ENV="$KIT_DIR/host/image.env"
@@ -3341,46 +3365,31 @@ cmd_steam_gpu() {
   [[ "$(vm_status)" == Running ]] || die "The VM isn't running. Use: bottle start"
   if [[ -z "$want" || "$want" == status ]]; then
     # shellcheck disable=SC2016  # runs in the VM
-    if [[ "$(vsh bash -c 'cat ~/.config/steamos-bottle/steam-gpu 2>/dev/null')" == zink ]]; then
-      [[ "$want" == status ]] && { echo gpu; return 0; }   # (the app: which choice to grey out)
-      info "Steam's interface: on the Mac's GPU (bottle steam-gpu off goes back)."
-    else
-      [[ "$want" == status ]] && { echo cpu; return 0; }
-      info "Steam's interface: on the VM's processors (bottle steam-gpu on tries the Mac's GPU)."
-    fi
+    [[ "$want" == status ]] && { echo gpu; return 0; }
+    info "Steam's interface is drawn on the Mac's GPU (always)."
     return 0
   fi
   if [[ "$want" == on ]]; then
-    steam_gpu_check || die "OpenGL on the Mac's GPU doesn't work in this VM yet (above); Steam stays as it is. The details are saved with the logs (Steam > Save Logs)."
+    steam_gpu_check || warn "OpenGL on the Mac's GPU didn't pass the check (above; Steam > Save Logs has the details). Steam's interface stays on the GPU."
     vsh bash -c 'mkdir -p ~/.config/steamos-bottle && echo zink > ~/.config/steamos-bottle/steam-gpu'
-    # from here on Ctrl-C puts it back (Steam isn't left on a mode that wasn't checked)
-    trap 'steam_gpu_back "Stopped before the check finished."' INT
     info "Restarting Steam with its interface on the Mac's GPU…"
-  elif [[ "$want" == off ]]; then
-    vsh bash -c 'rm -f ~/.config/steamos-bottle/steam-gpu'
-    gpu_auto_set off   # chosen by hand: not tried again by itself
-    info "Restarting Steam with its interface on the VM's processors…"
   else
-    die "usage: bottle steam-gpu [on|off|status]"
+    die "usage: bottle steam-gpu [on|status] (Steam's interface is always on the Mac's GPU)"
   fi
   desktop_start >/dev/null
   steam_stop
   since="$(vsh date '+%Y-%m-%d %H:%M:%S')"
   steam_start "$debug"
-  [[ "$want" == on ]] || { info "Done."; return 0; }
-  # Big Picture must really show: else straight back, keeping the attempt's log.
-  info "Checking that Big Picture shows on the Mac's GPU. Leave this running: the screen can stay"
-  info "black or blinking for up to five minutes (the first tries usually fail), and if it doesn't"
-  info "work Steam goes back as it was by itself."
+  info "Checking that Big Picture shows on the Mac's GPU (the screen can stay black or blink for a"
+  info "few minutes: the first tries usually fail)…"
   rc=0
   steam_screen_shows "$since" || rc=$?
-  trap - INT
   case "$rc" in
     0) ;;
-    3) steam_gpu_back "Steam's interface couldn't start OpenGL on the Mac's GPU." ;;
-    *) steam_gpu_back "Big Picture didn't show on the Mac's GPU." ;;
+    3) steam_gpu_failed "Steam's interface couldn't start OpenGL on the Mac's GPU." ;;
+    *) steam_gpu_failed "Big Picture didn't show on the Mac's GPU." ;;
   esac
-  gpu_auto_set on   # chosen by hand and it works
+  gpu_auto_set on
   local renderer
   renderer="$(steam_ui_renderer "$since")"
   case "$renderer" in
@@ -3392,31 +3401,15 @@ cmd_steam_gpu() {
       warn "Big Picture shows, but Steam's web views report $renderer, which is the VM's processors."
       info "It may not be smoother. Steam's log is kept in the VM: Steam > Save Logs." ;;
   esac
-  info "Back to the VM's processors any time: bottle steam-gpu off"
 }
 
-# Steam back on the VM's processors after a GPU attempt that didn't work ($1 says why), keeping
-# that attempt's log for Save Logs.
-steam_gpu_back() {
-  trap - INT
-  # a check still running (Ctrl-C during it): end it, its ssh (which ends the check in the VM)
-  # and its timer (which would otherwise fire later at process numbers that may be reused)
-  if [[ -n "${VSH_FOR_PID:-}" ]]; then
-    pkill -P "$VSH_FOR_PID" 2>/dev/null || true
-    kill "$VSH_FOR_PID" 2>/dev/null || true
-    if [[ -n "${VSH_FOR_TIMER:-}" ]]; then
-      pkill -P "$VSH_FOR_TIMER" 2>/dev/null || true
-      kill "$VSH_FOR_TIMER" 2>/dev/null || true
-    fi
-    VSH_FOR_PID='' VSH_FOR_TIMER=''
-  fi
-  warn "$1 Going back to the VM's processors…"
-  vsh bash -c 'cp ~/.config/steamos-bottle/steam.log ~/.config/steamos-bottle/steam-gpu-failed.log 2>/dev/null; rm -f ~/.config/steamos-bottle/steam-gpu'
-  gpu_auto_set failed
-  steam_stop
-  steam_start "$debug"
+# A GPU check of Big Picture that didn't pass ($1 says why): Steam stays on the GPU (Nov 1: never the
+# processor); that attempt's log is kept for Save Logs.
+steam_gpu_failed() {
+  warn "$1"
+  vsh bash -c 'cp ~/.config/steamos-bottle/steam.log ~/.config/steamos-bottle/steam-gpu-failed.log 2>/dev/null' || true
   log_export >/dev/null 2>&1 || true
-  die "Steam is back as it was. The GPU attempt's logs are saved with the logs (Steam > Save Logs)."
+  die "Steam's interface stays on the Mac's GPU. The attempt's logs are saved with the logs (Steam > Save Logs)."
 }
 
 # Steam's Big Picture window is up and not all black (a look at the VM's screen with xwd): waits
@@ -3554,8 +3547,8 @@ cmd_gog() {
   [[ $# -gt 0 ]] && shift
   case "$sub" in
     login-url) echo "$GOG_LOGIN_URL"; return 0 ;;
-    status|list|folders|login|logout|install|remove|stop) ;;
-    *) die "usage: bottle gog login-url | login ADDRESS | logout | status | list | folders | install ID | remove ID | stop ID [--discard]" ;;
+    status|list|folders|login|logout|install|remove|stop|size) ;;
+    *) die "usage: bottle gog login-url | login ADDRESS | logout | status | list | folders | install ID | remove ID | stop ID [--discard] | size ID" ;;
   esac
   need_vm
   [[ "$(vm_status)" == Running ]] || die "The VM isn't running. Use: bottle start"
@@ -3574,8 +3567,8 @@ cmd_epic() {   # the same as cmd_gog, for Epic Games (guest/bottle-stores epic .
   [[ $# -gt 0 ]] && shift
   case "$sub" in
     login-url) echo "$EPIC_LOGIN_URL"; return 0 ;;
-    status|list|folders|login|logout|install|remove|stop) ;;
-    *) die "usage: bottle epic login-url | login TEXT | logout | status | list | folders | install ID | remove ID | stop ID [--discard]" ;;
+    status|list|folders|login|logout|install|remove|stop|size) ;;
+    *) die "usage: bottle epic login-url | login TEXT | logout | status | list | folders | install ID | remove ID | stop ID [--discard] | size ID" ;;
   esac
   need_vm
   [[ "$(vm_status)" == Running ]] || die "The VM isn't running. Use: bottle start"
@@ -3659,7 +3652,9 @@ cmd_mode() {
       || die "The VM doesn't have Desktop Mode's tools yet. Run: bottle update"
   fi
   vsh bottle-session "$want"
-  [[ "$want" == on ]] && { lan_hosts_push force >/dev/null 2>&1 || true; }   # the LAN's file servers in Dolphin's Network place
+  # the LAN's file servers in Dolphin's Network place: in the background (the scan takes about 15 s; until
+  # Nov 3 the Activity window waited for it, open well after the desktop was up)
+  [[ "$want" == on ]] && { ( lan_hosts_push force </dev/null >/dev/null 2>&1 & ) ; }
   return 0
 }
 

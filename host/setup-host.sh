@@ -31,7 +31,7 @@ pcores="$(sysctl -n hw.perflevel0.physicalcpu 2>/dev/null || sysctl -n hw.ncpu)"
 mem_gib="$(( $(sysctl -n hw.memsize) / 1024 / 1024 / 1024 ))"
 CPUS="${CPUS:-$(( pcores < 4 ? 4 : pcores ))}"
 MEMORY="${MEMORY:-$(( mem_gib / 2 ))}"
-DISK="${DISK:-100}"
+DISK="${DISK:-25}"   # same as the app's VM_DISK_GB; it grows when low
 (( MEMORY >= 8 )) || warn "Only ${MEMORY} GiB RAM for the VM. Steam + a game wants 8+ (set MEMORY=8 if you can spare it)."
 
 # --- 2. Host tools ----------------------------------------------------------
@@ -113,12 +113,12 @@ fi
 
 # --- 4. Provision the guest -------------------------------------------------
 info "Copying guest scripts into the VM…"
-limactl shell "$VM_NAME" rm -rf /tmp/steamos-bottle-guest
+limactl shell --workdir / "$VM_NAME" rm -rf /tmp/steamos-bottle-guest
 limactl copy -r "$KIT_DIR/guest" "$VM_NAME:/tmp/steamos-bottle-guest"
 
 info "Provisioning the guest (Venus Mesa, FEX, desktop, ARM64 Steam launcher). This takes a while…"
 SECONDS=0
-limactl shell "$VM_NAME" sudo bash /tmp/steamos-bottle-guest/setup-guest.sh
+limactl shell --workdir / "$VM_NAME" sudo bash /tmp/steamos-bottle-guest/setup-guest.sh
 echo "provision: ${SECONDS}s" >> "$host_log"
 
 # --- 5. The bottle command + KosmicKrisp ------------------------------------

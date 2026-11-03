@@ -10,49 +10,6 @@ extension AppDelegate {
         activity.run("Restarting Steam", ["steam"], log: "steam")
     }
 
-    /// Steam's own interface (Big Picture) is drawn either on the Mac's GPU or on the Linux system's
-    /// processor. Portalistic tries the GPU by itself and goes back if it can't; this lets people pick
-    /// by hand, or try again after it went back.
-    /// Asks where Steam's interface should draw; the choice in use is shown greyed out (Oct 23:
-    /// choosing it again used to restart Steam for nothing). `bottle steam-gpu status` says which.
-    @objc func chooseSteamInterface(_ sender: Any?) {
-        guard starter == nil, !activity.busy else { showActivity(nil); return }
-        let status = BottleCommand(["steam-gpu", "status"], log: "steam-gpu-status")
-        status.onExit = { [weak self] _ in
-            let now = status.lines.last(where: { $0 == "gpu" || $0 == "cpu" }) ?? ""
-            self?.askSteamInterface(current: now)
-        }
-        if !status.start() { askSteamInterface(current: "") }
-    }
-
-    private func askSteamInterface(current: String) {
-        let alert = NSAlert()
-        alert.messageText = "Where should Steam's interface be drawn?"
-        var text = "On the Mac's GPU it is smoother and leaves the processor free. Portalistic tries that by itself "
-            + "and goes back to the processor if it doesn't work. Either way Steam restarts (about a minute, up to five "
-            + "when it tries the GPU); a game that's running closes."
-        switch current {
-        case "gpu": text += "\n\nRight now it draws on the Mac's GPU."
-        case "cpu": text += "\n\nRight now it draws on the processor."
-        default: break
-        }
-        alert.informativeText = text
-        let gpu = alert.addButton(withTitle: current == "gpu" ? "Using the Mac's GPU" : "Use the Mac's GPU")
-        let cpu = alert.addButton(withTitle: current == "cpu" ? "Using the Processor" : "Use the Processor")
-        alert.addButton(withTitle: "Cancel")
-        gpu.isEnabled = current != "gpu"
-        cpu.isEnabled = current != "cpu"
-        if current == "gpu" { cpu.keyEquivalent = "\r"; gpu.keyEquivalent = "" }
-        switch alert.runModal() {
-        case .alertFirstButtonReturn where current != "gpu":
-            activity.run("Steam's interface on the Mac's GPU", ["steam-gpu", "on"], log: "steam-gpu")
-        case .alertSecondButtonReturn where current != "cpu":
-            activity.run("Steam's interface on the processor", ["steam-gpu", "off"], log: "steam-gpu")
-        default:
-            break
-        }
-    }
-
     /// The watcher found the VM's disk almost full (a kind-3 notice): the user chooses between a bigger
     /// disk (5 GB more, the VM restarts) and moving games out of it in Steam's storage settings.
     func askAboutVMDisk(title: String, detail: String) {
@@ -88,15 +45,41 @@ extension AppDelegate {
     @objc func switchToDesktopMode(_ sender: Any?) {
         guard confirm("Switch to Desktop Mode?",
                       "Steam's Big Picture closes and a Linux desktop (KDE Plasma, like the Steam Deck's) opens in this window. "
-                      + "The first time it downloads about 550 MB. “Return to Game Mode” on the desktop, or this menu, switches back.",
+                      + "The first time it downloads about 550 MB, then the emulators it comes with (Ryujinx, RPCS3, Play!, RetroArch; about 4.5 GB) in the background. “Return to Game Mode” on the desktop, or this menu, switches back.",
                       "Switch to Desktop Mode") else { return }
         activity.run("Switching to Desktop Mode", ["mode", "desktop"], log: "mode") { [weak self] code, _ in
-            if code == 0 { self?.activity.window?.orderOut(nil) }
+            if code == 0 { self?.vmMode = "desktop"; self?.activity.window?.orderOut(nil) } else { self?.refreshMode() }
         }
     }
 
+    /// Game Mode from the menu asks first (Nov 3), as Desktop Mode does: leaving the desktop logs out of
+    /// it, and what's open there closes (what doesn't close by itself after about 12 s is ended).
     @objc func switchToGameMode(_ sender: Any?) {
-        runQuietly(["mode", "game"], log: "mode", failure: "Game Mode didn't start.")
+        guard confirm("Switch to Game Mode?",
+                      "The Linux desktop closes, with the apps open on it (save your work in them first; any that are still open after about 12 seconds are ended), "
+                      + "and Steam's Big Picture comes back in this window. “Switch to Desktop Mode” in this menu opens the desktop again.",
+                      "Switch to Game Mode") else { return }
+        let c = BottleCommand(["mode", "game"], log: "mode")
+        c.onExit = { [weak self, unowned c] code in
+            if code == 0 { self?.vmMode = "game" } else { self?.tell("Game Mode didn't start.", c.problem); self?.refreshMode() }
+        }
+        if !c.start() { tell("Couldn't run Portalistic's helper script.", BottleCommand.script ?? ""); return }
+        quietCommands.removeAll { !$0.running }
+        quietCommands.append(c)
+    }
+
+    /// Which mode the VM's screen is in, for the Steam menu (it shows only the switch to the other one):
+    /// asked when the screen connects; the VM tells the app of a switch made on the desktop (a notice).
+    func refreshMode() {
+        let c = BottleCommand(["mode", "status"], log: "mode-status")
+        c.onExit = { [weak self, unowned c] code in
+            guard code == 0, let line = c.lines.last(where: { $0.hasPrefix("mode: ") }) else { return }
+            let m = String(line.dropFirst(6)).trimmingCharacters(in: .whitespaces)
+            if m == "desktop" || m == "game" { self?.vmMode = m }
+        }
+        guard c.start() else { return }
+        quietCommands.removeAll { !$0.running }
+        quietCommands.append(c)
     }
 
     @objc func updateBottle(_ sender: Any?) {
@@ -181,9 +164,8 @@ extension AppDelegate {
         add("Start the VM", #selector(startBottle(_:)))
         add("Restart Steam…", #selector(restartSteam(_:)))
         add("Open Steam Settings", #selector(steamSettings(_:)))
-        add("Steam's Interface: GPU or Processor…", #selector(chooseSteamInterface(_:)))
         add("Switch to Desktop Mode…", #selector(switchToDesktopMode(_:)))
-        add("Switch to Game Mode", #selector(switchToGameMode(_:)))
+        add("Switch to Game Mode…", #selector(switchToGameMode(_:)))
         bottleMenu.addItem(.separator())
         add("Update the VM", #selector(updateBottle(_:)))
         add("Save Logs", #selector(saveLogs(_:)))
@@ -245,12 +227,14 @@ extension AppDelegate: NSMenuItemValidation {
         if item.action == #selector(restartSteam(_:)) || item.action == #selector(updateBottle(_:))
             || item.action == #selector(saveLogs(_:)) || item.action == #selector(shutDown(_:))
             || item.action == #selector(addGameFolder(_:)) || item.action == #selector(showGameFolders(_:))
-            || item.action == #selector(removeGameFolder(_:)) || item.action == #selector(chooseSteamInterface(_:)) {
+            || item.action == #selector(removeGameFolder(_:)) {
             return !busy
         }
         if item.action == #selector(uninstallPortalistic(_:)) || item.action == #selector(moveToApplicationsMenu(_:)) { return !busy }
         if item.action == #selector(steamSettings(_:)) { return !busy && view.connected }
         if item.action == #selector(switchToDesktopMode(_:)) || item.action == #selector(switchToGameMode(_:)) {
+            // only the switch to the other mode (both while the mode isn't known yet)
+            item.isHidden = vmMode == (item.action == #selector(switchToDesktopMode(_:)) ? "desktop" : "game")
             return !busy && view.connected
         }
         if item.action == #selector(checkForUpdatesNow(_:)) {

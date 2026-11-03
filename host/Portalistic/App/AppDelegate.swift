@@ -17,6 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var noticeView: NoticeView!                   // a notice from the VM over the picture
     var progressCard: ProgressCard!               // "please wait" while the VM gets Steam ready
     var hostStats: HostStats!                     // the Mac's GPU numbers, for Steam's performance monitor
+    var clipboard: ClipboardSync!                 // the clipboard shared with the VM (protocol 4)
 
     lazy var activity: ActivityWindow = {
         let a = ActivityWindow()
@@ -123,6 +124,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         conn.onNotice = { [weak self] kind, title, details, seconds in
             guard let self = self else { return }
+            if kind == 0 && title.hasPrefix("@@mode ") {   // the VM switched modes (bottle-session): not shown
+                let m = String(title.dropFirst(7)).trimmingCharacters(in: .whitespaces)
+                self.vmMode = (m == "desktop" || m == "game") ? m : nil
+                return
+            }
             if kind == 2 {   // progress: a card in the middle that stays until the next one (an empty one, or "-", takes it down)
                 let text = title == "-" ? "" : title
                 self.progressCard.show(text: text, detail: details)
@@ -153,8 +159,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             if !NSApp.isActive { NSApp.requestUserAttention(.informationalRequest) }
         }
         conn.onFrame = { [weak self] fb in self?.view.show(fb) }
+        clipboard = ClipboardSync(conn: conn)
+        conn.onClipboard = { [weak self] text in self?.clipboard.received(text) }
+        view.beforePaste = { [weak self] in self?.clipboard.pushIfChanged(forPaste: true) }
         view.renderer?.sharpScaling = UserDefaults.standard.object(forKey: sharpKey) as? Bool ?? true
         conn.setFrameRate(frameRate())
+        conn.onCursorImage = { [weak self] img, hx, hy in self?.view.setRemoteCursor(img, hotX: hx, hotY: hy) }
         conn.onCursor = { [weak self] visible in
             guard let v = self?.view else { return }
             v.remoteCursorVisible = visible
@@ -290,6 +300,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     var leaving = false
+    var menuBarCover: MenuBarCover?          // full screen: the menu bar covered, back at the top edge
+    var vmMode: String?                    // "desktop" or "game": the VM's screen (refreshMode), nil while not known
     var shuttingDown = false               // Quit: the VM is shutting down, then the app quits (AppDelegate+Quitting)
     var askingAboutDisk = false            // the VM-disk question is on screen (AppDelegate+Menus)
     var installing = false                 // moving to Applications: no quitting when the alert closes (AppDelegate+Quitting)
@@ -316,18 +328,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var infoAt = CACurrentMediaTime()
     var shownAt = 0
 
-    func applicationDidBecomeActive(_ notification: Notification) { view?.refreshCapture(); pads?.resendAll() }
+    func applicationDidBecomeActive(_ notification: Notification) { view?.refreshCapture(); pads?.resendAll(); clipboard?.pushIfChanged() }
 
     func applicationDidResignActive(_ notification: Notification) { view?.focusLost(); pads?.forget() }
 
     func windowDidBecomeKey(_ notification: Notification) {
         guard (notification.object as? NSWindow) === window else { return }
         view?.refreshCapture(); pads?.resendAll()
+        clipboard?.setActive(true)
     }
 
     func windowDidResignKey(_ notification: Notification) {
         guard (notification.object as? NSWindow) === window else { return }
         view?.focusLost(); pads?.forget()
+        clipboard?.setActive(false)
     }
 
     func applicationWillTerminate(_ notification: Notification) { view?.focusLost() }

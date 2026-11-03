@@ -291,6 +291,9 @@ tools() {
   install -m 0755 "$HERE/bottle-resolution" /usr/local/bin/bottle-resolution || return 1
   install -m 0755 "$HERE/bottle-whyquit"   /usr/local/bin/bottle-whyquit   || return 1
   install -m 0755 "$HERE/bottle-session"   /usr/local/bin/bottle-session   || return 1
+  install -m 0755 "$HERE/bottle-flatpak-gpu" /usr/local/bin/bottle-flatpak-gpu || return 1
+  install -m 0755 "$HERE/bottle-decky"     /usr/local/bin/bottle-decky     || return 1
+  install -m 0755 "$HERE/bottle-emulators" /usr/local/bin/bottle-emulators || return 1
   install -m 0755 "$HERE/bottle-libraries" /usr/local/bin/bottle-libraries || return 1
   install -m 0755 "$HERE/bottle-splash"    /usr/local/bin/bottle-splash    || return 1
   install -m 0755 "$HERE/bottle-stores"    /usr/local/bin/bottle-stores    || return 1
@@ -598,6 +601,9 @@ step "Bottle tools" tools
 step "GOG downloader (gogdl) for bottle-stores" gogdl_install
 step "Epic downloader (Legendary) for bottle-stores" legendary_install
 step "Comet, the Galaxy sign-in for GOG games" comet_install
+# Decky Loader, the Steam Deck's plugin loader (its ARM build; Nov 3). BOTTLE_DECKY=0 leaves it out.
+decky_install() { [[ "${BOTTLE_DECKY:-1}" == 0 ]] && return 0; TARGET_USER="$TARGET_USER" /usr/local/bin/bottle-decky install || warn "  Decky Loader couldn't be set up"; return 0; }
+step "Decky Loader (Steam plugins)" decky_install
 step "Desktop Mode settings (only if it is installed)" desktop_mode_settings
 step "FEX's x86 root file system mounted by the kernel" fex_rootfs_mount
 step "FEX's settings" fex_config

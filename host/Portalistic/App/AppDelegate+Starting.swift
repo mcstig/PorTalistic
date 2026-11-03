@@ -27,12 +27,16 @@ extension AppDelegate {
             applyWindowShapeRule()               // a screen server that follows the window frees its shape
             sendScreenSize()
             if conn.serverVersion >= 2 { hostStats.start() }
+            clipboard?.connected()               // the Mac's text, ready for a paste in the VM
+            if window.isKeyWindow { clipboard?.setActive(true) }
             if !rebuilding { setStartScreen(false) }
             window.makeFirstResponder(view)
             showFirstStartTipsIfNew()            // (once per Mac: what to expect from games)
             LocalNetworkAccess.shared.ask()      // (macOS's local-network permission, for the LAN's file servers)
             startHelperOnce()
+            refreshMode()                        // which switch the Steam menu shows
         } else if !rebuilding && !shuttingDown {
+            vmMode = nil
             hostStats.stop()
             // A restart of the VM's screen server (an update) comes back within seconds.
             setStartScreen(true)
@@ -156,6 +160,9 @@ extension AppDelegate {
     /// file in host/Portalistic changed after this executable was built.
     func appIsOutdated() -> Bool {
         guard !BottleCommand.isPackaged else { return false }   // (a packaged app updates as a whole)
+        // An Xcode build (DerivedData) is rebuilt in Xcode: building one here would put a second copy
+        // in ~/Applications and open that one instead (Nov 2, it did).
+        guard !Bundle.main.bundlePath.contains("/DerivedData/") else { return false }
         guard let kit = BottleCommand.kitDir, let exe = Bundle.main.executablePath else { return false }
         let fm = FileManager.default
         guard let built = (try? fm.attributesOfItem(atPath: exe))?[.modificationDate] as? Date,

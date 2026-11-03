@@ -37,9 +37,17 @@ mkdir -p "$STATE" "$CACHE"
 # What Desktop Mode is made of (Fedora's packages, KDE Plasma 6's X11 session; the dependencies come along).
 PKGS=(plasma-desktop plasma-workspace-x11 kwin-x11 dolphin konsole kate firefox spectacle plasma-systemmonitor
       plasma-discover plasma-discover-flatpak flatpak   # (Discover for Flatpak apps only: no PackageKit, which would offer to update the bottle's own Mesa)
-      cifs-utils samba-client nfs-utils kdnssd avahi-tools)   # network shares in Dolphin (smb://, nfs://; Oct 23, see lan-hosts)
+      cifs-utils samba-client nfs-utils kdnssd avahi-tools   # network shares in Dolphin (smb://, nfs://; Oct 23, see lan-hosts)
+      patchelf)   # Flatpak apps on the Mac's GPU (bottle-flatpak-gpu; Nov 3)
 
 say() { printf '%s\n' "$*"; }
+# The Mac app's Steam menu shows only the switch to the other mode, so it hears of every switch, also one
+# made here on the desktop ("Return to Game Mode"): a notice through the screen server, kind 0 with the
+# title "@@mode desktop|game", which the app takes as that and doesn't show (Nov 2).
+tell_mac() {
+  local d="$CACHE/notices"
+  mkdir -p "$d" && printf '0 3\n@@mode %s\n' "$(current)" > "$d/mode.txt.tmp" && mv -f "$d/mode.txt.tmp" "$d/mode.txt"
+}
 # The ordinary environment, for what Game Mode needs started. Run from the desktop (its "Return to Game
 # Mode" icon), this script carries Plasma's session: its private D-Bus, the session manager, the KDE desktop
 # names. Plasma is on its way out, so a program that talks to it dies: xfwm4 said "Xfconf could not be
@@ -129,8 +137,9 @@ cmd_install() {
 # user, so installing an app asks for no password).
 sync_places() {
   python3 - "$@" <<'PY' 2>>"$LOG"
-# Dolphin's Places get the folders the Mac shares with this VM (the game folders, and whatever else Lima
-# mounts), so they show in its sidebar. Our entries carry the ID "portalistic-N": each run replaces them.
+# Dolphin's Places get the folders the Mac shares with this VM (the Mac's home, its drives whole at
+# /mnt/mac-drives/NAME since Nov 2, the game folders), so they show in its sidebar. A drive is listed by
+# its own name ("SSD"), a game folder as "<its name> Games" ("SSD Games"). Our entries carry the ID "portalistic-N": each run replaces them.
 # Usage: python3 - [PLACES_FILE]. Exit 3: no places file yet (Dolphin makes it, with its own defaults, the
 # first time Plasma runs: writing one first would leave those out).
 import json, os, re, subprocess, sys
@@ -144,9 +153,13 @@ if not os.path.isfile(path):
     sys.exit(3)
 
 labels = {}
+drives = {}
 try:
-    for f in json.load(open(os.path.join(home, ".config/steamos-bottle/libraries.json"))).get("folders", []):
+    conf = json.load(open(os.path.join(home, ".config/steamos-bottle/libraries.json")))
+    for f in conf.get("folders", []):
         labels[f.get("name")] = f.get("label") or f.get("name")
+    for d in conf.get("drives", []):
+        drives[d.get("name")] = d.get("label") or d.get("name")
 except Exception:
     pass
 
@@ -163,12 +176,14 @@ for line in sorted(out.splitlines()):
     if not target.startswith("/") or target == "/":
         continue
     base = os.path.basename(target.rstrip("/"))
-    if target.startswith("/mnt/portalistic/"):
-        title = labels.get(base, base)
+    if target.startswith("/mnt/mac-drives/"):
+        title = drives.get(base, base)
+    elif target.startswith("/mnt/portalistic/"):
+        title = labels.get(base, base) + " Games"
     elif target.startswith("/mnt/portalistic-folders/"):
         if fstype != "virtiofs":
             continue
-        title = labels.get(base, base)
+        title = labels.get(base, base) + " Games"
         if os.path.ismount(os.path.join("/mnt/portalistic", base)):
             continue      # (its drive is the place)
     elif target.startswith("/Users/"):
@@ -425,6 +440,11 @@ PY
   mv -f "$HOME/Desktop/bottle-game-mode.desktop" "$HOME/Desktop/Return to Game Mode.desktop"
   mv -f "$HOME/Desktop/steam.desktop" "$HOME/Desktop/Steam.desktop"
   flathub_remote
+  # Flatpak apps (Discover's) on the Mac's GPU, not the processor: the VM's Vulkan driver for them (Nov 3)
+  command -v bottle-flatpak-gpu >/dev/null && { bottle-flatpak-gpu >>"$LOG" 2>&1 || true; }
+  # the emulators Desktop Mode comes with (Ryujinx, RPCS3, Play!) and their taskbar pins; in the background:
+  # the first time it downloads about 3.5 GB (Nov 3)
+  command -v bottle-emulators >/dev/null && spawn bottle-emulators install
   sync_places >/dev/null || true
   # With Plasma already up (bottle update while it runs), it picks the new icons up now.
   plasma_running && spawn "${BASH_SOURCE[0]}" look
@@ -442,6 +462,7 @@ cmd_look() {
   export DBUS_SESSION_BUS_ADDRESS="$bus"
   command -v kbuildsycoca6 >/dev/null && { timeout 60 kbuildsycoca6 >/dev/null 2>&1 || true; }
   for i in $(seq 1 40); do sync_places >/dev/null; [[ $? -eq 3 ]] || break; sleep 1; done   # (3: no places file yet)
+  command -v bottle-emulators >/dev/null && { bottle-emulators pin >>"$LOG" 2>&1 || true; }
   [[ -s "$icon" ]] && command -v qdbus-qt6 >/dev/null || return 0
   for i in $(seq 1 30); do
     if timeout 10 qdbus-qt6 org.kde.plasmashell /PlasmaShell org.kde.PlasmaShell.evaluateScript "
@@ -579,8 +600,8 @@ cmd_lan_hosts() {
 case "${1:-}" in
   status)    cmd_status ;;
   install)   cmd_install ;;
-  on|desktop) cmd_on ;;
-  off|game)  cmd_off ;;
+  on|desktop) cmd_on; rc=$?; tell_mac; exit "$rc" ;;
+  off|game)  cmd_off; rc=$?; tell_mac; exit "$rc" ;;
   configure) cmd_configure ;;
   look)      cmd_look ;;
   places)    sync_places ;;

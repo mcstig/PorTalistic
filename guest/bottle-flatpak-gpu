@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# bottle-flatpak-gpu: the Mac's GPU for Flatpak apps (Desktop Mode's Discover installs those).
+#
+# Flatpak apps bring their own graphics drivers (Freedesktop's Mesa), and that Mesa has no driver for
+# this VM's GPU (Venus, virtio): every Flatpak app drew on the processor (Nov 3: Ryujinx from Discover,
+# a frame every few seconds on llvmpipe). This hands Flatpak apps the VM's own Venus driver and the
+# bottle's present layer (Venus here can't show frames on the X screen by itself), from a folder the
+# apps may read, as their only Vulkan driver:
+#   ~/.local/share/portalistic/flatpak-gpu/   libvulkan_virtio.so (RUNPATH $ORIGIN), the libraries it
+#                                             needs that Flatpak runtimes lack (libdisplay-info),
+#                                             libVkLayer_bottle_present.so, the two JSON files
+#   flatpak override --user (every app): VK_DRIVER_FILES (that driver only: no llvmpipe to fall
+#   back to), VK_ADD_IMPLICIT_LAYER_PATH (the layer), the folder (read-only), the GPU device, shared
+#   memory (the layer's fast path to the X screen).
+# OpenGL apps stay as they were (Flatpak's Mesa); Vulkan is what emulators use on the GPU.
+#
+#   bottle-flatpak-gpu            set up (again; safe to repeat: after an update of the VM's Mesa)
+#   bottle-flatpak-gpu off        undo the override (the folder stays)
+#   bottle-flatpak-gpu status
+set -uo pipefail
+D="${HOME}/.local/share/portalistic/flatpak-gpu"
+ICD_LIB=/usr/lib64/libvulkan_virtio.so
+LAYER_LIB=/usr/local/lib64/libVkLayer_bottle_present.so
+LAYER_JSON=/etc/vulkan/implicit_layer.d/VkLayer_bottle_present.json
+say() { printf '%s\n' "$*"; }
+
+case "${1:-on}" in
+  off)
+    command -v flatpak >/dev/null && flatpak override --user --unset-env=VK_DRIVER_FILES --unset-env=VK_ADD_IMPLICIT_LAYER_PATH \
+      --nofilesystem="$D" 2>/dev/null
+    say "Flatpak apps: back to their own graphics drivers."; exit 0 ;;
+  status)
+    flatpak override --user --show 2>/dev/null | grep -E 'VK_|flatpak-gpu' || say "not set up"; exit 0 ;;
+  on) ;;
+  *) echo "usage: bottle-flatpak-gpu [on | off | status]" >&2; exit 2 ;;
+esac
+
+command -v flatpak >/dev/null || { say "No Flatpak here (Desktop Mode installs it)."; exit 0; }
+[[ -f "$ICD_LIB" && -f "$LAYER_LIB" && -f "$LAYER_JSON" ]] || { say "The VM's GPU driver or the bottle layer is missing."; exit 1; }
+command -v patchelf >/dev/null || sudo -n dnf install -y -q patchelf >/dev/null 2>&1 || { say "patchelf couldn't be installed."; exit 1; }
+mkdir -p "$D/implicit_layer.d"
+tmp="$(mktemp -d)"
+cp -f "$ICD_LIB" "$tmp/libvulkan_virtio.so" && patchelf --set-rpath '$ORIGIN' "$tmp/libvulkan_virtio.so" || { rm -rf "$tmp"; exit 1; }
+cp -f "$LAYER_LIB" "$tmp/libVkLayer_bottle_present.so" && patchelf --set-rpath '$ORIGIN' "$tmp/libVkLayer_bottle_present.so"
+# what Flatpak's runtimes lack (Freedesktop 24.08/25.08, KDE 6.x): Fedora's copy, next to the driver
+for l in libdisplay-info.so.3; do p="$(ldd "$ICD_LIB" | awk -v l="$l" '$1 == l {print $3}')"; [[ -n "$p" ]] && cp -fL "$p" "$tmp/$l"; done
+for f in "$tmp"/*; do mv -f "$f" "$D/"; done
+rmdir "$tmp"
+cat > "$D/virtio_icd.json" <<J
+{ "file_format_version": "1.0.1", "ICD": { "library_path": "$D/libvulkan_virtio.so", "api_version": "1.4.0", "library_arch": "64" } }
+J
+python3 - "$LAYER_JSON" "$D/implicit_layer.d/VkLayer_bottle_present.json" "$D/libVkLayer_bottle_present.so" <<'PY'
+import json,sys
+j=json.load(open(sys.argv[1])); j["layer"]["library_path"]=sys.argv[3]
+json.dump(j,open(sys.argv[2],"w"),indent=2)
+PY
+flatpak override --user --filesystem="$D:ro" --device=dri --share=ipc \
+  --env=VK_DRIVER_FILES="$D/virtio_icd.json" --env=VK_ADD_IMPLICIT_LAYER_PATH="$D/implicit_layer.d" \
+  || { say "flatpak override failed."; exit 1; }
+say "Flatpak apps now draw with Vulkan on the Mac's GPU (they start with it from their next start)."

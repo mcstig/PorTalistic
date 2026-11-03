@@ -27,7 +27,15 @@
  *             line, then the details (something for the player to read on the Mac: why a game
  *             closed at launch, say). From files in ~/.cache/steamos-bottle/notices/ (NAME.txt:
  *             first line "kind seconds", then the text), sent once and removed.
- *  HELLO's version is 2 since RESIZE, NOTICE and HOST_STATS (an older server ignores them).
+ *    8 CURSOR_IMAGE u16 width, u16 height, u16 hot x, u16 hot y, then width x height pixels,
+ *             u32 ARGB (premultiplied, as XFixes gives them): the pointer's shape, whenever it
+ *             changes (Nov 3: the Mac showed its own arrow everywhere, so a window's edge never
+ *             showed the resize pointer, nor text fields the I-beam). At most 128 x 128.
+ *    9 CLIPBOARD UTF-8 text copied in the VM (CLIPBOARD selection), for the Mac's pasteboard.
+ *             At most 1 MB (CLIP_MAX).
+ *  HELLO's version is 2 since RESIZE, NOTICE and HOST_STATS (an older server ignores them);
+ *  3 since CURSOR_IMAGE (an older client ignores it); 4 since CLIPBOARD (both ways; a client
+ *  must not send CLIPBOARD to an older server, which drops a client for a message over 1 KB).
  *  client -> server
  *    1 KEY        u32 X keysym, u8 down
  *    2 MOVE_REL   i16 dx, i16 dy
@@ -54,6 +62,8 @@
  *                 u32 GPU memory in use MB, u32 GPU memory MB, UTF-8 GPU name: the Mac's GPU,
  *                 once a second; written to /dev/shm/steamos-bottle-host-stats for Steam's
  *                 performance monitor (guest/nvml).
+ *   11 CLIPBOARD  UTF-8 text copied on the Mac: the VM's CLIPBOARD (Ctrl+V pastes it) until
+ *                 something in the VM is copied. At most 1 MB; the only message over 1 KB.
  *
  * Game controllers: each pad the client reports becomes a virtual Xbox 360 pad (uinput,
  * the same events and IDs as Linux's xpad driver), which SDL, Proton and games all know.
@@ -109,9 +119,11 @@
 #define MSG_FRAME 2
 #define MSG_STATS 6
 #define MSG_CURSOR 3
+#define MSG_CURSOR_IMAGE 8
 #define MSG_RUMBLE 4
 #define MSG_PAD_STATUS 5
 #define MSG_NOTICE 7
+#define MSG_CLIPBOARD 9
 #define IN_KEY 1
 #define IN_MOVE_REL 2
 #define IN_MOVE_ABS 3
@@ -122,6 +134,7 @@
 #define IN_PAD 8
 #define IN_RESIZE 9
 #define IN_HOST_STATS 10
+#define IN_CLIPBOARD 11
 
 static int g_verbose;
 /* With the time of day, so events line up with the game's log and the Mac's. */
@@ -884,6 +897,8 @@ static void wheel_clicks(Display *dpy, int n, unsigned pos, unsigned neg) {
     }
 }
 
+static void clip_from_mac(Display *dpy, const uint8_t *p, uint32_t len);   /* (clipboard, below) */
+
 /* Handle one client message; returns 0, or -1 to drop the client. */
 static int g_full_next = 1;       /* the next frame is a whole screen (new client, new settings) */
 
@@ -974,6 +989,9 @@ static int handle_input(Display *dpy, uint8_t type, const uint8_t *p, uint32_t l
     case IN_HOST_STATS:
         host_stats(p, len);
         break;
+    case IN_CLIPBOARD:
+        clip_from_mac(dpy, p, len);
+        break;
     default:
         VLOG("unknown message %u", type);
     }
@@ -997,6 +1015,279 @@ static int cursor_visible(Display *dpy) {
 static void send_cursor(int fd, int visible) {
     uint8_t v = (uint8_t)visible;
     send_small(fd, MSG_CURSOR, &v, 1);
+}
+
+/* The pointer's shape (CURSOR_IMAGE), when it differs from the one last sent (force: always). */
+static unsigned long g_cursor_serial_sent;
+static void send_cursor_image(Display *dpy, int fd, int force) {
+    if (fd < 0) return;
+    XFixesCursorImage *ci = XFixesGetCursorImage(dpy);
+    if (!ci) return;
+    if ((force || ci->cursor_serial != g_cursor_serial_sent) && ci->width > 0 && ci->height > 0 &&
+        ci->width <= 128 && ci->height <= 128) {
+        uint32_t n = (uint32_t)ci->width * ci->height, len = 8 + n * 4;
+        uint8_t *body = malloc(len);
+        if (body) {
+            put16(body, ci->width); put16(body + 2, ci->height);
+            put16(body + 4, ci->xhot < ci->width ? ci->xhot : 0);
+            put16(body + 6, ci->yhot < ci->height ? ci->yhot : 0);
+            for (uint32_t i = 0; i < n; i++) put32(body + 8 + i * 4, (uint32_t)(ci->pixels[i] & 0xffffffffu));
+            send_msg(fd, MSG_CURSOR_IMAGE, body, len);
+            free(body);
+            g_cursor_serial_sent = ci->cursor_serial;
+        }
+    }
+    XFree(ci);
+}
+
+/* ---------------------------------------------------------------- clipboard */
+
+/* CLIPBOARD (Nov 3): text copied in the VM goes to the Mac, text copied on the Mac can be
+ * pasted in the VM. Before the app had its own window, Screen Sharing did this over VNC.
+ *
+ * The VM's side: XFixes says when another X client takes CLIPBOARD (something was copied); we
+ * ask it for the text (UTF8_STRING, else STRING; INCR for big text) into a property on our own
+ * window, which is never shown, and send it on. Text from the Mac: we take CLIPBOARD with that
+ * window and hand the text to whoever pastes (SelectionRequest). Only CLIPBOARD (Ctrl+C / Ctrl+V,
+ * the Mac's Cmd+C / Cmd+V), not PRIMARY (select / middle click), which the Mac doesn't have.
+ * Text only, up to CLIP_MAX either way. A text that just came from the other side isn't sent
+ * back (g_clip.last), so the two never bounce one copy between them. Only sizes are logged. */
+#define CLIP_MAX (1 << 20)
+static int g_quiet_x_errors;          /* (defined with x_error, below) */
+
+typedef struct {
+    Window win;                       /* ours: owns CLIPBOARD for the Mac's text, receives the VM's */
+    Atom clipboard, utf8, string, text, targets, incr, prop, mime_utf8, mime_plain;
+    int on;                           /* XFixes is there: we can tell when something is copied */
+    char *mac;                        /* the Mac's text while we own CLIPBOARD (NULL: we don't) */
+    size_t mac_len;
+    char *last;                       /* the last text that crossed, either way */
+    size_t last_len;
+    int reading;                      /* 0 no, 1 asked for UTF8_STRING, 2 asked for STRING, 3 INCR */
+    double asked_at;
+    char *buf;                        /* the VM's text, as it arrives */
+    size_t len;
+    int too_big, again;               /* again: the owner changed while we were reading */
+    int latin1;                       /* the owner only had STRING (ISO Latin-1, by ICCCM) */
+} Clip;
+static Clip g_clip;
+
+static void clip_init(Display *dpy, Window root, int fixes_ok) {
+    g_clip.win = XCreateSimpleWindow(dpy, root, -10, -10, 1, 1, 0, 0, 0);
+    XSelectInput(dpy, g_clip.win, PropertyChangeMask);   /* INCR arrives as property changes */
+    g_clip.clipboard = XInternAtom(dpy, "CLIPBOARD", False);
+    g_clip.utf8 = XInternAtom(dpy, "UTF8_STRING", False);
+    g_clip.string = XA_STRING;
+    g_clip.text = XInternAtom(dpy, "TEXT", False);
+    g_clip.targets = XInternAtom(dpy, "TARGETS", False);
+    g_clip.incr = XInternAtom(dpy, "INCR", False);
+    g_clip.prop = XInternAtom(dpy, "BOTTLE_CLIPBOARD", False);
+    g_clip.mime_utf8 = XInternAtom(dpy, "text/plain;charset=utf-8", False);
+    g_clip.mime_plain = XInternAtom(dpy, "text/plain", False);
+    g_clip.on = fixes_ok;
+    if (fixes_ok) XFixesSelectSelectionInput(dpy, root, g_clip.clipboard, XFixesSetSelectionOwnerNotifyMask);
+    else LOG("no XFixes: text copied in the VM won't reach the Mac");
+}
+
+static int clip_is_last(const char *t, size_t n) {
+    return g_clip.last && g_clip.last_len == n && memcmp(g_clip.last, t, n) == 0;
+}
+
+static void clip_set_last(const char *t, size_t n) {
+    char *c = malloc(n ? n : 1);
+    if (!c) return;
+    memcpy(c, t, n);
+    free(g_clip.last);
+    g_clip.last = c;
+    g_clip.last_len = n;
+}
+
+static void clip_ask(Display *dpy, Atom target, Time when) {
+    XDeleteProperty(dpy, g_clip.win, g_clip.prop);
+    XConvertSelection(dpy, g_clip.clipboard, target, g_clip.prop, g_clip.win, when);
+    g_clip.reading = target == g_clip.utf8 ? 1 : 2;
+    g_clip.latin1 = target == g_clip.string;
+    g_clip.asked_at = now_ms();
+}
+
+/* Something in the VM was copied (another client owns CLIPBOARD now): ask it for the text. */
+static void clip_owner_changed(Display *dpy, XFixesSelectionNotifyEvent *e) {
+    if (e->selection != g_clip.clipboard || e->owner == None || e->owner == g_clip.win) return;
+    if (g_clip.reading) { g_clip.again = 1; return; }
+    g_clip.len = 0;
+    g_clip.too_big = 0;
+    clip_ask(dpy, g_clip.utf8, e->selection_timestamp);
+}
+
+/* Appends what's in our property (and deletes it, which for INCR asks for the next piece).
+ * Returns the number of bytes, or -1 when the property isn't text. */
+static long clip_take(Display *dpy, Atom *type_out) {
+    Atom type;
+    int fmt;
+    unsigned long n, after;
+    unsigned char *data = NULL;
+    if (XGetWindowProperty(dpy, g_clip.win, g_clip.prop, 0, CLIP_MAX / 4 + 1, True, AnyPropertyType,
+                           &type, &fmt, &n, &after, &data) != Success) return -1;
+    if (type_out) *type_out = type;
+    long got = -1;
+    if (type == g_clip.incr) {
+        got = 0;
+    } else if (data && fmt == 8) {
+        got = (long)n;
+        if (after || g_clip.len + n > CLIP_MAX) {
+            g_clip.too_big = 1;
+        } else if (n) {
+            char *b = realloc(g_clip.buf, g_clip.len + n);
+            if (b) { memcpy(b + g_clip.len, data, n); g_clip.buf = b; g_clip.len += n; }
+            else g_clip.too_big = 1;
+        }
+    }
+    if (data) XFree(data);
+    return got;
+}
+
+/* Is it UTF-8? (Some owners answer UTF8_STRING with Latin-1 bytes anyway: xclip, older apps.) */
+static int clip_is_utf8(const unsigned char *p, size_t n) {
+    size_t i = 0;
+    while (i < n) {
+        unsigned char c = p[i];
+        size_t k;                            /* continuation bytes after this one */
+        if (c < 0x80) k = 0;
+        else if (c >= 0xc2 && c <= 0xdf) k = 1;
+        else if (c >= 0xe0 && c <= 0xef) k = 2;
+        else if (c >= 0xf0 && c <= 0xf4) k = 3;
+        else return 0;
+        if (k > n - i - 1) return 0;          /* cut short */
+        for (size_t j = 1; j <= k; j++)
+            if ((p[i + j] & 0xc0) != 0x80) return 0;
+        i += k + 1;
+    }
+    return 1;
+}
+
+/* STRING is Latin-1: made UTF-8 (each byte over 0x7f becomes two). */
+static void clip_latin1_to_utf8(void) {
+    size_t extra = 0;
+    for (size_t i = 0; i < g_clip.len; i++) extra += (unsigned char)g_clip.buf[i] >= 0x80;
+    if (!extra) return;
+    if (g_clip.len + extra > CLIP_MAX) { g_clip.too_big = 1; return; }
+    char *u = malloc(g_clip.len + extra), *o = u;
+    if (!u) { g_clip.too_big = 1; return; }
+    for (size_t i = 0; i < g_clip.len; i++) {
+        unsigned char c = (unsigned char)g_clip.buf[i];
+        if (c < 0x80) *o++ = (char)c;
+        else { *o++ = (char)(0xc0 | c >> 6); *o++ = (char)(0x80 | (c & 0x3f)); }
+    }
+    free(g_clip.buf);
+    g_clip.buf = u;
+    g_clip.len += extra;
+}
+
+static void clip_done(Display *dpy, int cfd, int ok) {
+    if (ok && !g_clip.too_big && (g_clip.latin1 || !clip_is_utf8((const unsigned char *)g_clip.buf, g_clip.len)))
+        clip_latin1_to_utf8();
+    if (ok && g_clip.too_big) {
+        LOG("clipboard: text copied in the VM is over %d KB: not sent to the Mac", CLIP_MAX >> 10);
+    } else if (ok && g_clip.len > 0 && !clip_is_last(g_clip.buf, g_clip.len)) {
+        if (cfd >= 0) {
+            send_msg(cfd, MSG_CLIPBOARD, (const uint8_t *)g_clip.buf, (uint32_t)g_clip.len);
+            VLOG("clipboard: %zu bytes to the Mac", g_clip.len);
+        }
+        clip_set_last(g_clip.buf, g_clip.len);
+    }
+    free(g_clip.buf);
+    g_clip.buf = NULL;
+    g_clip.len = 0;
+    g_clip.too_big = 0;
+    g_clip.reading = 0;
+    if (g_clip.again) {   /* copied again while we read: read the newer one */
+        g_clip.again = 0;
+        if (XGetSelectionOwner(dpy, g_clip.clipboard) != g_clip.win) clip_ask(dpy, g_clip.utf8, CurrentTime);
+    }
+}
+
+/* The owner answered (or refused): the text, the start of an INCR transfer, or nothing. */
+static void clip_answer(Display *dpy, XSelectionEvent *e, int cfd) {
+    if (e->requestor != g_clip.win || e->selection != g_clip.clipboard || !g_clip.reading) return;
+    if (e->property == None) {          /* no UTF8_STRING: STRING, else nothing (not text: an image, say) */
+        if (g_clip.reading == 1) clip_ask(dpy, g_clip.string, e->time);
+        else clip_done(dpy, cfd, 0);
+        return;
+    }
+    Atom type = None;
+    long got = clip_take(dpy, &type);
+    if (type == g_clip.incr) { g_clip.reading = 3; g_clip.asked_at = now_ms(); return; }
+    clip_done(dpy, cfd, got >= 0);
+}
+
+/* INCR: each piece is a new value of our property; an empty one ends it. */
+static void clip_piece(Display *dpy, XPropertyEvent *e, int cfd) {
+    if (e->window != g_clip.win || e->atom != g_clip.prop || e->state != PropertyNewValue || g_clip.reading != 3) return;
+    g_clip.asked_at = now_ms();
+    long got = clip_take(dpy, NULL);
+    if (got <= 0) clip_done(dpy, cfd, got == 0);
+}
+
+/* An owner that never answers doesn't keep us from the next copy. */
+static void clip_timeout(Display *dpy, int cfd) {
+    if (g_clip.reading && now_ms() - g_clip.asked_at > 3000) {
+        VLOG("clipboard: the VM's copy never arrived");
+        clip_done(dpy, cfd, 0);
+    }
+}
+
+/* CLIPBOARD from the Mac: ours to hand out until something in the VM is copied. */
+static void clip_from_mac(Display *dpy, const uint8_t *p, uint32_t len) {
+    if (len == 0 || len > CLIP_MAX) return;
+    char *t = malloc(len);
+    if (!t) return;
+    memcpy(t, p, len);
+    free(g_clip.mac);
+    g_clip.mac = t;
+    g_clip.mac_len = len;
+    clip_set_last(t, len);
+    XSetSelectionOwner(dpy, g_clip.clipboard, g_clip.win, CurrentTime);
+    if (XGetSelectionOwner(dpy, g_clip.clipboard) != g_clip.win) {
+        LOG("clipboard: couldn't take CLIPBOARD for the Mac's text");
+        free(g_clip.mac);
+        g_clip.mac = NULL;
+        return;
+    }
+    VLOG("clipboard: %u bytes from the Mac", len);
+}
+
+/* Someone in the VM pastes the Mac's text. */
+static void clip_request(Display *dpy, XSelectionRequestEvent *r) {
+    XSelectionEvent ev = {.type = SelectionNotify, .display = dpy, .requestor = r->requestor,
+                          .selection = r->selection, .target = r->target, .property = None, .time = r->time};
+    Atom prop = r->property != None ? r->property : r->target;   /* (clients from before ICCCM 2) */
+    if (r->owner == g_clip.win && r->selection == g_clip.clipboard && g_clip.mac) {
+        Atom t = r->target;
+        long max_bytes = (XExtendedMaxRequestSize(dpy) ? XExtendedMaxRequestSize(dpy) : XMaxRequestSize(dpy)) * 4 - 256;
+        g_quiet_x_errors = 1;   /* the requestor's window may be gone already */
+        if (t == g_clip.targets) {
+            Atom list[] = {g_clip.targets, g_clip.utf8, g_clip.mime_utf8, g_clip.text, g_clip.string, g_clip.mime_plain};
+            XChangeProperty(dpy, r->requestor, prop, XA_ATOM, 32, PropModeReplace, (unsigned char *)list, 6);
+            ev.property = prop;
+        } else if ((t == g_clip.utf8 || t == g_clip.mime_utf8 || t == g_clip.text || t == g_clip.string ||
+                    t == g_clip.mime_plain) && (long)g_clip.mac_len <= max_bytes) {
+            XChangeProperty(dpy, r->requestor, prop, t == g_clip.text ? g_clip.utf8 : t, 8, PropModeReplace,
+                            (unsigned char *)g_clip.mac, (int)g_clip.mac_len);
+            ev.property = prop;
+        }
+        XSendEvent(dpy, r->requestor, False, NoEventMask, (XEvent *)&ev);
+        XSync(dpy, False);
+        g_quiet_x_errors = 0;
+        return;
+    }
+    XSendEvent(dpy, r->requestor, False, NoEventMask, (XEvent *)&ev);
+}
+
+/* Something in the VM was copied after the Mac's text: that one's gone. */
+static void clip_lost(XSelectionClearEvent *e) {
+    if (e->window != g_clip.win || e->selection != g_clip.clipboard) return;
+    free(g_clip.mac);
+    g_clip.mac = NULL;
 }
 
 /* ---------------------------------------------------------------- main */
@@ -1122,6 +1413,7 @@ int main(int argc, char **argv) {
         fixes_event = -1;
         LOG("no XFixes: can't tell when games hide the pointer");
     }
+    clip_init(s.dpy, s.root, fixes_event >= 0);
 
     Atom net_active = XInternAtom(s.dpy, "_NET_ACTIVE_WINDOW", False);
     Atom net_name = XInternAtom(s.dpy, "_NET_WM_NAME", False), utf8 = XInternAtom(s.dpy, "UTF8_STRING", False);
@@ -1134,8 +1426,9 @@ int main(int argc, char **argv) {
     int lfd = listen_on(port), cfd = -1;
     LOG("listening on 127.0.0.1:%d (display %s)", port, display);
 
-    uint8_t in[4096];
-    size_t inlen = 0;
+    size_t incap = 4096, inlen = 0;   /* grows for a big CLIPBOARD, back to 4 KB after */
+    uint8_t *in = malloc(incap);
+    if (!in) return 1;
     int dirty = 1;
     double last_frame = 0, last_change = 0;
     int need_sharp = 0;              /* a frame in motion quality was sent since the last sharp one */
@@ -1178,7 +1471,14 @@ int main(int argc, char **argv) {
                 (e.xconfigure.width != s.w || e.xconfigure.height != s.h))
                 geometry_due = 1;   /* xrandr: the capture follows right away */
             if (s.damage_event >= 0 && e.type == s.damage_event + XDamageNotify) dirty = 1;
+            if (fixes_event >= 0 && e.type == fixes_event + XFixesSelectionNotify)
+                clip_owner_changed(s.dpy, (XFixesSelectionNotifyEvent *)&e);
+            if (e.type == SelectionNotify) clip_answer(s.dpy, &e.xselection, cfd);
+            if (e.type == SelectionRequest) clip_request(s.dpy, &e.xselectionrequest);
+            if (e.type == SelectionClear) clip_lost(&e.xselectionclear);
+            if (e.type == PropertyNotify) clip_piece(s.dpy, &e.xproperty, cfd);
             if (fixes_event >= 0 && e.type == fixes_event + XFixesCursorNotify) {
+                if (cfd >= 0) send_cursor_image(s.dpy, cfd, 0);
                 int v = cursor_visible(s.dpy) || g_launcher_active;
                 if (v != cur_visible) {
                     cur_visible = v;
@@ -1188,6 +1488,7 @@ int main(int argc, char **argv) {
             }
         }
         if (s.damage_event < 0) dirty = 1;
+        clip_timeout(s.dpy, cfd);
 
         /* frame: when something changed (or a sharp still is due), a client is there, the
          * encoder can take one more, and the frame rate cap allows */
@@ -1293,10 +1594,11 @@ int main(int argc, char **argv) {
                 uint8_t hello[8 + 16] = {MSG_HELLO, 0, 0, 0};
                 put32(hello + 4, 16);
                 memcpy(hello + 8, "BTLS", 4);
-                put16(hello + 12, 2); put16(hello + 14, 0);   /* 2: RESIZE, NOTICE, HOST_STATS */
+                put16(hello + 12, 4); put16(hello + 14, 0);   /* 2: RESIZE, NOTICE, HOST_STATS; 3: CURSOR_IMAGE; 4: CLIPBOARD */
                 put32(hello + 16, (uint32_t)s.w); put32(hello + 20, (uint32_t)s.h);
                 send_all(fd, hello, sizeof hello);
                 send_cursor(fd, cur_visible);
+                send_cursor_image(s.dpy, fd, 1);
                 for (int i = 0; i < MAX_PADS; i++) pad_idle(i, -1, NULL);   /* the client sends its state */
                 g_uinput_failed = 0;
                 inlen = 0;
@@ -1306,7 +1608,7 @@ int main(int argc, char **argv) {
         }
 
         if (cfd >= 0 && (pf[2].revents & (POLLIN | POLLHUP | POLLERR))) {
-            ssize_t k = recv(cfd, in + inlen, sizeof in - inlen, 0);
+            ssize_t k = recv(cfd, in + inlen, incap - inlen, 0);
             if (k <= 0) {
                 LOG("client disconnected");
                 pthread_mutex_lock(&g_enc.m);
@@ -1325,7 +1627,7 @@ int main(int argc, char **argv) {
             int drop = 0;
             while (inlen - off >= 8) {
                 uint32_t len = get32(in + off + 4);
-                if (len > 1024) { drop = 1; break; }
+                if (len > (in[off] == IN_CLIPBOARD ? CLIP_MAX : 1024)) { drop = 1; break; }
                 if (inlen - off < 8 + len) break;
                 if (handle_input(s.dpy, in[off], in + off + 8, len, &s, &max_fps) < 0) { drop = 1; break; }
                 off += 8 + len;
@@ -1333,6 +1635,12 @@ int main(int argc, char **argv) {
             XFlush(s.dpy);
             memmove(in, in + off, inlen - off);
             inlen -= off;
+            size_t need = !drop && inlen >= 8 ? 8 + (size_t)get32(in + 4) : 4096;   /* the message being read */
+            if (need < 4096) need = 4096;
+            if (need > incap || (incap > 65536 && need == 4096 && inlen <= need)) {
+                uint8_t *b = realloc(in, need);
+                if (b) { in = b; incap = need; } else if (need > incap) drop = 1;
+            }
             if (drop) { LOG("bad message from client; dropping it"); shutdown(cfd, SHUT_RDWR); }
         }
 

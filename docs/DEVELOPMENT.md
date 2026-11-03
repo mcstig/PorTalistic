@@ -186,9 +186,85 @@ Proton and Steam's runtime (~2-2.5 GB more).
   Not tried: a real download in a browser (quarantine and translocation as macOS really does
   them) and how the dialogs look.
 
+**Full screen covers the menu bar (Nov 2-3)**
+
+With "Automatically hide and show the menu bar: Never" macOS keeps the menu bar in full screen whatever
+the app asks, so `MenuBarCover.swift` lays a black panel over it (level statusWindow+2; AppKit's own
+full-screen window over the menu bar is at +1). It checks the window every 50 ms rather than trusting
+the enter/exit notifications (after an exit the panel had stayed on the desktop, and the next full
+screen went uncovered): full screen and on the shown space, the panel sits over the gap above the
+window; anything else, it's off. The menu bar shows at once at the top edge, or after the pointer
+rests 0.25 s in it where another display sits above (the pointer passes through there), whichever app is
+in front, and is covered again below the title bar or off the screen, unless a menu is open. Its log: `log show --last 10m --predicate
+'subsystem == "Portalistic"'`. To see the windows themselves: `host/tests/mac-mbtrace.sh` (240 s of
+pointer and window changes).
+
+**Emulators with Desktop Mode (Nov 3)**
+
+`guest/bottle-emulators` (started in the background by `bottle-session configure`, so at Desktop Mode's
+install and at every update after) installs what's missing of: Ryujinx (Ryubing's ARM build, pinned
+version and SHA-256, in `~/.local/opt/ryujinx`, menu entry "Ryujinx (Mac GPU)", its icon from Flatpak's
+Flathub store data), RPCS3, Play! and RetroArch (Flathub; on the Mac's GPU through `bottle-flatpak-gpu`,
+Vulkan only). RetroArch is set to Vulkan once (`retroarch.cfg` in `~/.var/app/org.libretro.RetroArch`;
+its default OpenGL would draw on the processor); its cores come from its Online Updater (libretro's
+buildbot has about 240 `linux/aarch64` cores). Its menu pictures and fonts (assets) don't come with the
+Flatpak here: the menu showed white squares and a blocky built-in font (Nov 3). `retroarch_assets` puts
+libretro's `assets.zip` (what "Update Assets" gets, ~70 MB) in `.../config/retroarch/assets` when that has
+no `ozone/png` and `pkg`, and points `assets_directory` there; tried again at each Desktop Mode start
+until it works. The first time that's about 4.5 GB on the VM's disk (two
+KDE runtimes and their Mesa, RetroArch 750 MB): skipped without room for what's missing (about 1 GB an
+app, 2.5 GB a runtime not installed yet, 1 GB to spare). Each is pinned to the taskbar once (Plasma's scripting, while Plasma runs; a pin the
+player removes stays removed: `~/.config/steamos-bottle/emulators-pinned`). `BOTTLE_EMULATORS=0`:
+nothing. PCSX2 has no ARM build, so Play! is the PS2 emulator.
+
+**Decky Loader built in (Nov 3)**
+
+Decky (plugins in Big Picture's quick access menu, as on a Steam Deck) publishes an ARM build since 3.3
+(`PluginLoader-arm64`). `guest/bottle-decky`, run by update-guest at every update (`BOTTLE_DECKY=0` leaves
+it out), installs the pinned version (v3.3.1, SHA-256 checked) into `~/homebrew/services` as Decky's own
+installer does, with its systemd service `plugin_loader` (root), and creates Steam's
+`.cef-enable-remote-debugging` (Decky reaches Steam's interface through that port; it answers inside the
+VM only). First seen working Nov 3: "Loading Decky frontend!" in its journal after a Steam restart.
+Plugins that ship x86 programs, or need a Steam Deck's hardware, don't work here. `bottle-decky remove`
+takes the loader out (plugins stay). To update Decky: a new VER/SHA256 in `guest/bottle-decky`.
+
+**Flatpak apps on the Mac's GPU (Nov 3)**
+
+Apps from Discover are Flatpaks, and their own Mesa has no driver for this VM's GPU (Venus): Ryujinx from
+Discover drew on llvmpipe, a frame every few seconds. `guest/bottle-flatpak-gpu` (run by `bottle-session
+configure`, so at every update while Desktop Mode is installed) copies the VM's Venus driver
+(`libvulkan_virtio.so`, RUNPATH `$ORIGIN`), the one library Flatpak runtimes lack (`libdisplay-info.so.3`)
+and the bottle's present layer into `~/.local/share/portalistic/flatpak-gpu/`, and a user-wide `flatpak
+override` makes that every Flatpak's only Vulkan driver (`VK_DRIVER_FILES`), adds the layer
+(`VK_ADD_IMPLICIT_LAYER_PATH`), the folder (read-only), the GPU device and shared memory. Checked: RPCS3
+(KDE 6.11 runtime) and Play! (KDE 6.10) see only "Virtio-GPU Venus (Apple M4 Max)". OpenGL in Flatpaks is
+unchanged (Flatpak's Mesa, on the processor): emulators should be set to Vulkan. `bottle-flatpak-gpu off`
+undoes the override. PCSX2 has no ARM build (no aarch64 Flatpak); Play! is the PS2 emulator there.
+
+**The whole Mac in the VM (Nov 2)**
+
+The Linux desktop used to see only the game folders and the Mac's home (read-only). A Switch emulator then read
+its games over the network (Dolphin's SFTP to this same Mac): slow, and an update file failed to read. Now:
+
+- The Mac's home is shared writable, and every drive of the Mac is shared whole, straight through virtiofs, at
+  `/mnt/mac-drives/NAME` (`mac_drives_rows` in `host/bottle`). A drive is a volume in `/Volumes` that Finder shows:
+  not the startup disk (that's the home), not a hidden volume (`nobrowse`), not a network share or an opened disk
+  image. Read-only drives (NTFS) are shared read-only. `BOTTLE_MAC_DRIVES=0` turns this off.
+- Dolphin's Places list each drive by its own name ("SSD") and each game folder as "NAME Games" ("SSD Games");
+  the drives' names reach the VM in `libraries.json` (`drives`).
+- A drive plugged in later is shared from the VM's next start: only a change in the game folders restarts the VM
+  (`libraries-mounted.games`). A VM that won't start with the drives shared (a drive macOS hasn't allowed yet)
+  starts without them first, then without the game folders.
+- Our commands in the VM start in its `/` (`limactl shell --workdir /`). Before, limactl entered the Mac folder we
+  were in, through the home's share. On Nov 2 a look into `~/Library/Group Containers` waited on a macOS privacy
+  question, the share stopped answering, and every command the app sent the VM hung with it.
+- The first VM start after the home became writable still mounts it read-only: systemd reads the fstab of the
+  boot before, and cloud-init only rewrites it after. The start after that is writable; `mount -o remount,rw`
+  fixes it at once.
+
 **Games stay off the Linux system's drive (Oct 21, in 0.7.0.6)**
 
-Steam lists its own drive (the VM's 20 GB disk: Linux, Steam, Proton and its runtimes) next to the
+Steam lists its own drive (the VM's 25 GB disk: Linux, Steam, Proton and its runtimes) next to the
 game folders in the install window. On a new laptop a Rocket League install filled it: Steam said
 it was out of space at every start, and Settings > Storage > Move sat at 0% (a game that isn't fully
 installed can't be moved, and nothing could be written).
@@ -227,6 +303,11 @@ tries the Mac's GPU first, once per kit version, and goes back by itself if it c
   (`steam_gpu_check`, 120 s: zink on the Mac GPU, a transparent OpenGL 3.3 core window drawn through GLX and
   EGL; it installs glx-utils and xwd if they're missing) must pass; then `steam-gpu` is set to zink and the state is
   `pending`. A failed check is `failed` and not tried again until the kit's version changes.
+- **Nov 1: GPU only.** Michael: Steam's interface is never drawn on the processor (llvmpipe works badly). The
+  processor choice is gone (no `bottle steam-gpu off`, no Steam's Interface menu item), there's no fallback
+  (`gpu_auto_guard` does nothing, a failed `bottle steam-gpu on` check keeps the GPU and saves the logs), the VM's
+  `steam-arm64` always starts Steam with zink, and `gpu_auto_prepare` only makes sure of the setting and re-runs the
+  check once per kit version for zink's stand-ins. The notes below describe how it worked before.
 - **In the watcher, every round** (`gpu_auto_guard`, with a line from `gpu_auto_cmd`): `pending` becomes `ok` as
   soon as Steam's web helper reports a zink renderer since Steam's start (`webhelper_gpu.txt`). Its first tries
   normally fail ("failed to initialize GL thread"; 2 to 4 on the M4 Max, once 9), so it only gives up after 12
@@ -341,7 +422,7 @@ update 14 s, Steam's own steps 2 s, the window showed "Starting Steam…" and we
 
 The lost requests on the laptop's virtio-fs share (above) hit anything on the game path: Proton's chmod at a game's
 start, Steam's install step reading the game's installers (DMC5 sat "finishing" for 20 minutes), the watcher's
-find. Moving the prefixes (0.7.0.8) wasn't enough. The VM's own 20 GB drive, a plain file through virtio-blk,
+find. Moving the prefixes (0.7.0.8) wasn't enough. The VM's own 25 GB drive, a plain file through virtio-blk,
 never hung on either Mac, so games now live on drives too:
 
 - **Mac side** (`lib_disk_prepare`, from `lib_mounts_expr` at every VM start): each game folder gets
@@ -620,8 +701,34 @@ Game Mode (`bottle mode game`), switches back.
   Plasma alone, off, a Steam-like process spared, the real screen untouched) and then once on the
   real one (`mac-desktopmode3.sh`, with pictures). Plasma draws on the VM's processors like Big
   Picture does; games started from the desktop run as always.
-- **Not done**: no volume control in the panel, no clipboard between the Mac and the VM (that's the
-  stream's, not Plasma's), nothing for Plasma 6.8 (it drops X11; Fedora 44 ships 6.7).
+- **Not done**: no volume control in the panel, nothing for Plasma 6.8 (it drops X11; Fedora 44 ships 6.7).
+
+### The clipboard between the Mac and the VM (Nov 3)
+
+- **What it does.** Text copied in the VM (Ctrl+C, or ⌘C in the window) is on the Mac's
+  clipboard; text copied on the Mac pastes in the VM (Ctrl+V, or ⌘V). In the window ⌘C, ⌘V and
+  ⌘X (with Shift for a terminal: ⌘⇧C, ⌘⇧V) reach the VM as Control+C, V, X; the app has no
+  Edit menu, so nothing on the Mac used them. Text only, up to 1 MB either way.
+- **Why it broke.** Screen Sharing carried the clipboard over VNC; the app's own stream
+  (`bottle-screen`) carried only the picture and input, so once the window replaced Screen
+  Sharing there was no clipboard (`bottle vnc` still had one).
+- **How.** Screen protocol version 4: `CLIPBOARD` both ways (server 9, client 11; UTF-8). In the
+  VM (`guest/screen/bottle-screen.c`, "clipboard"): XFixes says when another client takes
+  CLIPBOARD; the text is asked for as UTF8_STRING, else STRING, into a property on a hidden window
+  of ours (INCR for big text), made UTF-8 when it isn't (Latin-1: STRING, and owners such as
+  xclip that answer UTF8_STRING with Latin-1 bytes) and sent. The Mac's text: that window takes
+  CLIPBOARD and answers SelectionRequest (TARGETS, UTF8_STRING, text/plain, STRING, TEXT). Only
+  CLIPBOARD, not PRIMARY. A text that just crossed isn't sent back. The client message limit is
+  still 1 KB for everything else; the input buffer grows for one big CLIPBOARD and shrinks after.
+  On the Mac (`Stream/Clipboard.swift`): the pasteboard's change count is looked at when the
+  window gets the keyboard, once a second while it has it, and before a paste key (Ctrl+V,
+  Shift+Insert, ⌘V) goes to the VM, which then gets the newest text first; the text is read only
+  when the count changed. Items a password manager marks concealed or transient cross only on a
+  paste key. Never sent to a screen server older than version 4 (it drops a client for a message
+  over 1 KB).
+- **Tried** on Xvfb with a test client and xclip: both ways, Romanian letters and emoji, no echo,
+  600 KB from the VM (INCR) and 900 KB from the Mac, Latin-1-only owners, input still working
+  after. Needs `bottle update` (new `bottle-screen`) and the app rebuilt.
 
 ### The window, notices and the Mac's GPU numbers (Oct 11)
 
@@ -710,7 +817,7 @@ the VM's port 4711. Lima forwards the port, and `bottle start` runs `bottle-audi
 output with ~60 ms of delay. `bottle audio off|on|status`; log in `~/.config/steamos-bottle/audio.log`.
 
 **Disk space.** Games live in a game folder on the Mac or a drive (see "Where games go"), or on
-the VM's disk (20 GB since 0.7.0.1, 200 GB before; a file that takes Mac space only as it fills,
+the VM's disk (25 GB since Oct 23, 20 from 0.7.0.1, 200 GB before; a file that takes Mac space only as it fills,
 and gets it back when files are deleted, since the VM's file system discards freed blocks).
 `bottle disk` shows what fills it, what it takes of the Mac now and the Mac's free space;
 `bottle disk grow [GB]` makes it bigger (Lima's `limactl edit --disk`, Lima 1.1+: stops Steam

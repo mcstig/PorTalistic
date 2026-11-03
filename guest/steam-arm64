@@ -10,9 +10,8 @@
 #
 # Steam starts in Big Picture (the SteamOS interface; -gamepadui) unless
 # ~/.config/steamos-bottle/steam-ui says "desktop" (bottle ui desktop).
-# ~/.config/steamos-bottle/steam-gpu = zink (bottle steam-gpu on): Steam's own interface draws
-# with OpenGL on the Mac's GPU (Mesa's zink, on the same Vulkan path games use) instead of on
-# the VM's processors (llvmpipe).
+# Steam's own interface always draws with OpenGL on the Mac's GPU (Mesa's zink, on the same
+# Vulkan path games use), never on the VM's processors (Nov 1: llvmpipe works badly).
 #
 # ~/.config/steamos-bottle/steam.env (optional, KEY=value lines) is exported first:
 # handy for PROTON_LOG=1, DXVK_HUD=fps, BOTTLE_PRESENT_DEBUG=1.
@@ -163,7 +162,8 @@ fi
 # and the stand-ins' list do; the shim sets zink's own settings inside the web helper.
 KOPPER_SHIM=/usr/local/lib64/libbottle_kopper.so
 steam_zink=0
-if [[ "$(cat "${LOG_DIR}/steam-gpu" 2>/dev/null)" == zink && -z "${MESA_LOADER_DRIVER_OVERRIDE:-}" ]]; then
+# (always, Nov 1: the steam-gpu setting file no longer turns it off)
+if [[ -z "${MESA_LOADER_DRIVER_OVERRIDE:-}" ]]; then
   if [[ -f "$KOPPER_SHIM" ]]; then
     steam_zink=1
     # The Mac's GPU (Venus on KosmicKrisp) has no transform feedback and no geometry shaders, so

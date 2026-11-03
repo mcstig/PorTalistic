@@ -9,6 +9,8 @@ enum ServerMsg {
     static let hello: UInt8 = 1, frame: UInt8 = 2, cursor: UInt8 = 3, rumble: UInt8 = 4, padStatus: UInt8 = 5
     static let stats: UInt8 = 6
     static let notice: UInt8 = 7          // version 2: something for the player to read (a game that closed, say)
+    static let cursorImage: UInt8 = 8     // version 3: the pointer's shape (a window edge's resize arrows, a text field's I-beam)
+    static let clipboard: UInt8 = 9       // version 4: UTF-8 text copied in the VM
 }
 
 enum ClientMsg {
@@ -16,6 +18,7 @@ enum ClientMsg {
     static let wheel: UInt8 = 5, settings: UInt8 = 6, release: UInt8 = 7, pad: UInt8 = 8
     static let resize: UInt8 = 9          // version 2: the screen size the window wants, and for games
     static let hostStats: UInt8 = 10      // version 2: the Mac's GPU numbers, for Steam's performance monitor
+    static let clipboard: UInt8 = 11      // version 4: UTF-8 text copied on the Mac (at most 1 MB; never to an older server)
 }
 
 func le16(_ v: Int) -> [UInt8] { let u = UInt16(truncatingIfNeeded: v); return [UInt8(u & 0xff), UInt8(u >> 8)] }

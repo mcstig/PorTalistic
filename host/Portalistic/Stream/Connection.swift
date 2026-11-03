@@ -12,9 +12,11 @@ final class Connection {
     var onSize: ((Int, Int) -> Void)?            // main thread
     var onFrame: ((Framebuffer) -> Void)?       // main thread, after one or more frames arrived
     var onCursor: ((Bool) -> Void)?              // main thread
+    var onCursorImage: ((CGImage, Int, Int) -> Void)?   // main thread: the VM pointer's shape and hot spot (VM pixels)
     var onRumble: ((Int, Float, Float, Double) -> Void)?   // main thread: pad, strong, weak, seconds (0 = stop)
     var onPadStatus: ((Bool) -> Void)?           // main thread: false = the VM can't create controllers
     var onNotice: ((Int, String, String, Double) -> Void)?   // main thread: kind (0 news, 1 problem, 2 progress), title, details, seconds
+    var onClipboard: ((String) -> Void)?         // main thread: text copied in the VM
     /// The screen server's protocol version (2: RESIZE, NOTICE, HOST_STATS); 0 while not connected.
     private(set) var serverVersion = 0           // main thread
 
@@ -198,6 +200,22 @@ final class Connection {
                     stats.serverBytes = rd32(payload, 8)
                     stats.sharp = rd16(payload, 12)
                     statsLock.unlock()
+                case ServerMsg.cursorImage:
+                    guard len >= 8 else { break }
+                    let w = rd16(payload, 0), h = rd16(payload, 2), hx = rd16(payload, 4), hy = rd16(payload, 6)
+                    guard w > 0, h > 0, w <= 128, h <= 128, len >= 8 + w * h * 4 else { break }
+                    // u32 little-endian ARGB, premultiplied: in memory B, G, R, A
+                    let data = Data(bytes: payload + 8, count: w * h * 4) as CFData
+                    let info = CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
+                    guard let provider = CGDataProvider(data: data),
+                          let img = CGImage(width: w, height: h, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: w * 4,
+                                            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: info, provider: provider,
+                                            decode: nil, shouldInterpolate: true, intent: .defaultIntent) else { break }
+                    DispatchQueue.main.async { self.onCursorImage?(img, hx, hy) }
+                case ServerMsg.clipboard:
+                    guard len > 0 else { break }
+                    let text = String(decoding: Data(bytes: payload, count: len), as: UTF8.self)
+                    DispatchQueue.main.async { self.onClipboard?(text) }
                 case ServerMsg.cursor:
                     let visible = len >= 1 && payload.load(as: UInt8.self) != 0
                     DispatchQueue.main.async { self.onCursor?(visible) }
