@@ -203,6 +203,13 @@ if [[ ! -e "${STEAM}" && ${#HOME} -gt 16 && -d /s && -w /s ]]; then
   ln -s /s "${STEAM}"
 fi
 mkdir -p "${STEAM}" "${LOG_DIR}"
+# Decky Loader reaches Steam's interface through Steam's debugging port, which Steam opens when this file
+# is in its folder at its start. bottle-decky writes it, but on a new system it runs (update-guest) before
+# Steam has installed itself and the folder isn't there yet, so a fresh install had no Decky (Nov 4,
+# Michael's M1): written here too, before every start, while Decky is installed.
+if [[ -x "${HOME}/homebrew/services/PluginLoader" && "${BOTTLE_DECKY:-1}" != 0 ]]; then
+  touch "${STEAM}/.cef-enable-remote-debugging" 2>/dev/null || true
+fi
 
 install_steam_runtime_arm64() {
   if [[ -d "${RUNTIME_DIR}" ]]; then

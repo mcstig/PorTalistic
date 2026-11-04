@@ -275,6 +275,13 @@ VM only). First seen working Nov 3: "Loading Decky frontend!" in its journal aft
 Plugins that ship x86 programs, or need a Steam Deck's hardware, don't work here. `bottle-decky remove`
 takes the loader out (plugins stay). To update Decky: a new VER/SHA256 in `guest/bottle-decky`.
 
+Nov 4: a fresh install had Decky's service running and no Decky in the quick access menu (Michael's
+M1). Steam opens its debugging port only with `.cef-enable-remote-debugging` in its folder at its start;
+`bottle-decky` writes it, but on a new system it runs (update-guest) before Steam has installed itself,
+so the folder wasn't there. `steam-arm64` now writes it before every start while Decky is installed
+(`~/homebrew/services/PluginLoader`). Tried on a fresh test VM (`host/tests/mac-dtest4.sh`): the port
+open and "Loading Decky frontend!" on Steam's first start.
+
 **Flatpak apps on the Mac's GPU (Nov 3)**
 
 Apps from Discover are Flatpaks, and their own Mesa has no driver for this VM's GPU (Venus): Ryujinx from
