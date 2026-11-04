@@ -59,6 +59,11 @@ D
   local ic="$HOME/.local/share/icons/hicolor/128x128/apps/ryujinx-gpu.png" f
   if [[ ! -s "$ic" ]]; then
     f="$(ls "$HOME"/.local/share/flatpak/appstream/flathub/*/active/icons/128x128/io.github.ryubing.Ryujinx.png 2>/dev/null | head -1)"
+    # a new system has no store data yet (Nov 4: Ryujinx showed a gamepad): Flathub's, a few MB
+    if [[ -z "$f" ]] && command -v flatpak >/dev/null; then
+      timeout 300 flatpak update --user --appstream flathub >/dev/null 2>&1 || true
+      f="$(ls "$HOME"/.local/share/flatpak/appstream/flathub/*/active/icons/128x128/io.github.ryubing.Ryujinx.png 2>/dev/null | head -1)"
+    fi
     [[ -n "$f" ]] && mkdir -p "${ic%/*}" && cp -f "$f" "$ic"
   fi
   if [[ -s "$ic" ]]; then sed -i "s|^Icon=.*|Icon=ryujinx-gpu|" "$APPS/ryujinx-gpu.desktop.tmp"
@@ -131,30 +136,48 @@ retroarch_assets() {
 
 # Each emulator on the taskbar, once (taken off by the player, it stays off): through Plasma's scripting,
 # so only while Plasma runs (bottle-session look runs this then).
+# A new desktop's taskbar has its launchers as Plasma's defaults, not in its settings: reading them gives
+# none, and until Nov 4 writing the emulators replaced them (System Settings, Discover, Dolphin and Firefox
+# went missing, Michael's M1). Now a taskbar whose launchers are none, or only the emulators, gets the
+# defaults back first, once (taskbar-defaults). And Plasma's list of applications is brought up to date
+# first: an emulator installed while the desktop was open was pinned as an application it didn't know yet
+# (a blank icon; a click on it opened the "Open with" chooser).
+DEFAULT_LAUNCHERS=(systemsettings.desktop org.kde.discover.desktop org.kde.dolphin.desktop org.mozilla.firefox.desktop)
 pin() {
-  local done_file="$STATE/emulators-pinned" bus add=() d
+  local done_file="$STATE/emulators-pinned" seeded="$STATE/taskbar-defaults" bus add=() d seed=0
   bus="$(cat "$HOME/.cache/steamos-bottle/plasma-bus" 2>/dev/null)"
   [[ -n "$bus" ]] && command -v qdbus-qt6 >/dev/null || return 0
   for d in "${PIN[@]}"; do
     grep -qx "$d" "$done_file" 2>/dev/null && continue
     [[ -f "$APPS/$d" || -f "$HOME/.local/share/flatpak/exports/share/applications/$d" || -f "/var/lib/flatpak/exports/share/applications/$d" ]] && add+=("$d")
   done
-  (( ${#add[@]} )) || return 0
-  local list; list="$(printf "'applications:%s'," "${add[@]}")"
-  if DBUS_SESSION_BUS_ADDRESS="$bus" timeout 15 qdbus-qt6 org.kde.plasmashell /PlasmaShell org.kde.PlasmaShell.evaluateScript "
-    var add = [${list%,}], n = 0, ps = panels();
+  [[ -e "$seeded" ]] || seed=1
+  (( ${#add[@]} || seed )) || return 0
+  command -v kbuildsycoca6 >/dev/null && { DBUS_SESSION_BUS_ADDRESS="$bus" timeout 60 kbuildsycoca6 >/dev/null 2>&1 || true; }
+  local list ours defaults out
+  list=""; (( ${#add[@]} )) && list="$(printf "'applications:%s'," "${add[@]}")"
+  ours="$(printf "'applications:%s'," "${PIN[@]}")"
+  defaults="$(printf "'applications:%s'," "${DEFAULT_LAUNCHERS[@]}")"
+  out="$(DBUS_SESSION_BUS_ADDRESS="$bus" timeout 15 qdbus-qt6 org.kde.plasmashell /PlasmaShell org.kde.PlasmaShell.evaluateScript "
+    var add = [${list%,}], ours = [${ours%,}], defaults = [${defaults%,}], seed = $seed, n = 0, ps = panels();
+    function base(x) { return x.split('?')[0]; }
     for (var i = 0; i < ps.length; i++) { var ids = ps[i].widgetIds;
       for (var j = 0; j < ids.length; j++) { var w = ps[i].widgetById(ids[j]);
         if (w.type == 'org.kde.plasma.icontasks' || w.type == 'org.kde.plasma.taskmanager') {
           w.currentConfigGroup = ['General'];
           var l = w.readConfig('launchers', []); if (typeof l == 'string') l = l ? l.split(',') : [];
+          l = l.filter(function (x) { return base(x) != 'applications:' && x != ''; });
+          if (seed) { var onlyOurs = true;
+            for (var m = 0; m < l.length; m++) if (ours.indexOf(base(l[m])) < 0) onlyOurs = false;
+            if (onlyOurs) l = defaults.concat(l); }
           for (var k = 0; k < add.length; k++) { var have = false;
-            for (var m = 0; m < l.length; m++) if (l[m].split('?')[0] == add[k]) have = true;
+            for (var m = 0; m < l.length; m++) if (base(l[m]) == add[k]) have = true;
             if (!have) l.push(add[k]); }
           w.writeConfig('launchers', l); w.reloadConfig(); n++; } } }
-    print('pinned ' + n);" 2>/dev/null | grep -q '^pinned [1-9]'; then
-    printf '%s\n' "${add[@]}" >> "$done_file"
-    say "  pinned to the taskbar: ${add[*]}"
+    print('pinned ' + n);" 2>/dev/null)"
+  if grep -q '^pinned [1-9]' <<<"$out"; then
+    (( ${#add[@]} )) && { printf '%s\n' "${add[@]}" >> "$done_file"; say "  pinned to the taskbar: ${add[*]}"; }
+    (( seed )) && touch "$seeded"
   fi
 }
 

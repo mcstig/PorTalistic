@@ -165,7 +165,14 @@ upload() {
   size="$(stat -f %z "$f")"
   if grep -qx "$name $size" <<<"$UP"; then echo "  $name: already up"; return; fi
   info "  uploading $name ($(( size / 1048576 )) MB)…"
-  gh release upload "$TAG" --repo "$REPO" --clobber "$f"
+  # GitHub's upload server turns an upload down now and then (Nov 4: HTTP 404 for a draft it had just
+  # taken two files for): a few more tries before giving up
+  local try
+  for try in 1 2 3 4; do
+    gh release upload "$TAG" --repo "$REPO" --clobber "$f" && return 0
+    (( try < 4 )) && { echo "  (that didn't go through; again in $(( try * 15 )) s)"; sleep $(( try * 15 )); }
+  done
+  die "$name didn't upload. Run this again later: it carries on with the draft."
 }
 for f in "$ZIP" "$KIT/LICENSES.md" "$KFW_TGZ" "$KTAR"; do
   upload "$f"

@@ -393,6 +393,7 @@ cmd_configure() {
   local f p apps="$HOME/.local/share/applications" prof
   installed || return 0
   pins_lock   # (held where they are: a dnf update would take Plasma to 6.8, which has no X11 desktop)
+  window_shortcuts
   command -v kwriteconfig6 >/dev/null || return 0
   kwriteconfig6 --file startkderc --group General --key systemdBoot false
   kwriteconfig6 --file kwinrc --group Compositing --key Enabled false
@@ -600,6 +601,28 @@ PY
   # With Plasma already up (bottle update while it runs), it picks the new icons up now.
   plasma_running && spawn "${BASH_SOURCE[0]}" look
   return 0
+}
+
+# KDE's window shortcuts. On these desktops kglobalaccel registered every one as "none" with no default
+# (Nov 4: 184 of 222 in kglobalshortcutsrc, the development VM's too), so Alt+Tab did nothing (KWin's
+# switcher itself works: invoked over D-Bus it changes windows). The usual Alt ones are set, only where
+# the shortcut is still "none" (one the player set stays). Command keys aren't sent to the VM, so none
+# with Meta. Written before Plasma starts (kglobalaccel reads them then).
+window_shortcuts() {
+  local f="$HOME/.config/kglobalshortcutsrc" g k keys name cur
+  command -v kwriteconfig6 >/dev/null || return 0
+  while IFS='|' read -r g k keys name; do
+    cur="$(kreadconfig6 --file "$f" --group "$g" --key "$k" 2>/dev/null)"
+    [[ -z "$cur" || "$cur" == none,* ]] || continue
+    kwriteconfig6 --file "$f" --group "$g" --key "$k" "$keys,$keys,$name"
+  done <<'KEYS'
+kwin|Walk Through Windows|Alt+Tab|Walk Through Windows
+kwin|Walk Through Windows (Reverse)|Alt+Shift+Tab|Walk Through Windows (Reverse)
+kwin|Walk Through Windows of Current Application|Alt+`|Walk Through Windows of Current Application
+kwin|Window Close|Alt+F4|Close Window
+kwin|Window Operations Menu|Alt+F3|Window Menu
+plasmashell|activate application launcher|Alt+F1|Activate Application Launcher
+KEYS
 }
 
 # What only a running Plasma can be told: its application list (new launchers and icons), and the Start

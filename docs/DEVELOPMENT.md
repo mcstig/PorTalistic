@@ -186,6 +186,22 @@ Proton and Steam's runtime (~2-2.5 GB more).
   Not tried: a real download in a browser (quarantine and translocation as macOS really does
   them) and how the dialogs look.
 
+**A new desktop's taskbar, and Alt+Tab (Nov 4)**
+
+On Michael's M1, the first new desktop since the emulators came had a taskbar with only them (System
+Settings, Discover, Dolphin and Firefox gone), some as blank icons, and a click on one opened the "Open
+with" chooser. A new taskbar keeps its launchers as Plasma's defaults, not in its settings, so
+`bottle-emulators pin` read none and wrote back only the emulators. Now a taskbar whose launchers are
+none or only the emulators gets `DEFAULT_LAUNCHERS` first, once (`~/.config/steamos-bottle/taskbar-defaults`),
+`kbuildsycoca6` runs before pinning (an emulator installed while the desktop was open was otherwise an
+application Plasma didn't know yet: the blank icon), and Ryujinx's icon comes from Flathub's store data,
+fetched (`flatpak update --appstream`) when a new system has none yet. Also: every KDE global shortcut
+was registered as "none" with no default (184 of 222, the development VM's too), so Alt+Tab did nothing;
+`window_shortcuts` sets Alt+Tab, Alt+Shift+Tab, Alt+\`, Alt+F4, Alt+F3 and Alt+F1 where they are still
+"none", before Plasma starts (Command isn't sent to the VM, so nothing with Meta). Tried on a test VM
+(`host/tests/mac-dtest3*.sh`): a fresh setup with the background install and the emulators, its taskbar
+as the M1 had it and as a brand-new one, then Alt+Tab and Alt+F4 with xdotool.
+
 **Desktop Mode held on Plasma 6.7.5, the last with X11 (Nov 4)**
 
 Fedora 44's updates moved KDE to Plasma 6.8 at the end of October. 6.8 has no X11 session: its `kwin` and
