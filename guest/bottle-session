@@ -30,6 +30,9 @@ BUS_FILE="$CACHE/plasma-bus"
 LOG="$STATE/desktop-mode.log"
 INSTALL_LOCK="$CACHE/desktop-install.lock"   # one install of Desktop Mode at a time (prefetch, below)
 PREFETCH_LOG="$STATE/desktop-prefetch.log"
+PINS="${BOTTLE_DESKTOP_PINS:-/usr/local/share/steamos-bottle/desktop-pins.txt}"   # Desktop Mode's package versions (below)
+RPMS="$CACHE/desktop-rpms"                     # those Fedora's repositories no longer have, from its build archive
+KOJI=https://kojipkgs.fedoraproject.org/packages
 N="${DISPLAY_NUM:-1}"
 export DISPLAY=":$N" DISPLAY_NUM="$N"
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
@@ -111,11 +114,114 @@ cmd_status() {
 
 missing_pkgs() { local p; for p in "${PKGS[@]}"; do rpm -q "$p" >/dev/null 2>&1 || echo "$p"; done; }
 
+# ---- Desktop Mode held on KDE Plasma 6.7.5, the last with an X11 session (Nov 4) ----
+# Fedora 44's updates moved to Plasma 6.8 at the end of October; 6.8 has no X11 session (its kwin and
+# plasma-workspace obsolete kwin-x11 and plasma-workspace-x11), and this VM's desktop is an X server
+# (Xvnc, sent to the Mac by bottle-screen). A VM set up after that got 6.8 and no desktop ("Desktop Mode
+# didn't install completely", Michael's M1, Nov 4). So PINS lists Desktop Mode's Qt 6, KDE Frameworks,
+# Plasma and KDE apps at the versions that run on the development VM; each is locked with dnf versionlock
+# (our entries in /etc/dnf/versionlock.toml carry PIN_TAG), and one the repositories don't offer at that
+# version any more comes from Fedora's build archive (koji keeps every build; its signed copies of an
+# old one go after a while, the plain one stays), taken only if rpm finds it whole and its header's
+# SHA-256 is the one in PINS (from the development VM's package database). A VM that got 6.8 goes back.
+PIN_TAG="Portalistic: Desktop Mode on Plasma 6.7.5 (X11)"
+pins_list() { [[ -f "$PINS" ]] && awk '!/^#/ && NF >= 8' "$PINS"; }
+pin_evr() { [[ "$2" == 0 ]] && echo "$3" || echo "$2:$3"; }   # name epoch vr -> dnf's evr
+
+# Our versionlock entries, written again when the list changed (others, Mesa's, stay as they are).
+pins_lock() {
+  [[ -f "$PINS" ]] || return 0
+  sudo -n python3 - "$PINS" "$PIN_TAG" <<'PY' >>"$LOG" 2>&1
+import os, sys, tomllib
+path, tag = "/etc/dnf/versionlock.toml", sys.argv[2]
+try:
+    data = tomllib.load(open(path, "rb"))
+except FileNotFoundError:
+    data = {}
+pins = []
+for line in open(sys.argv[1]):
+    if line.startswith("#") or len(line.split()) < 8:
+        continue
+    n, e, vr = line.split()[:3]
+    pins.append((n, vr if e == "0" else f"{e}:{vr}"))
+names = {n for n, _ in pins}
+keep = [p for p in data.get("packages", []) if p.get("comment") != tag and p.get("name") not in names]
+def q(v):
+    return '"' + str(v).replace("\\", "\\\\").replace('"', '\\"') + '"'
+out = ['version = "1.0"', ""]
+def emit(p):
+    out.append("[[packages]]")
+    for k, v in p.items():
+        if k != "conditions":
+            out.append(f"{k} = {q(v)}")
+    out.append("")
+    for c in p.get("conditions", []):
+        out.append("[[packages.conditions]]")
+        out.extend(f"{k} = {q(v)}" for k, v in c.items())
+        out.append("")
+for p in keep:
+    emit(p)
+for n, evr in pins:
+    emit({"name": n, "comment": tag, "conditions": [{"key": "evr", "comparator": "=", "value": evr}]})
+new = "\n".join(out)
+old = open(path).read() if os.path.exists(path) else ""
+if new != old:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    open(path + ".tmp", "w").write(new)
+    os.replace(path + ".tmp", path)
+    print(f"versionlock: {len(pins)} Desktop Mode packages held")
+PY
+}
+
+# Pins installed at another version (a VM that got Plasma 6.8): "name evr" lines.
+pins_due() {
+  local n e vr rest have
+  while read -r n e vr rest; do
+    have="$(rpm -q --qf '%{epochnum}:%{version}-%{release}\n' "$n" 2>/dev/null | head -n 1)"
+    [[ "$have" == *:* && "$have" != "$e:$vr" ]] && echo "$n $(pin_evr "$n" "$e" "$vr")"
+  done < <(pins_list)
+}
+
+# A downloaded package: whole (rpm's digests) and the one pinned (its header's SHA-256, $2).
+rpm_pinned() {
+  LC_ALL=C rpm -K --nosignature "$1" 2>/dev/null | grep -q ': digests OK$' \
+    && [[ "$(rpm -qp --nosignature --qf '%{sha256header}' "$1" 2>/dev/null)" == "$2" ]]
+}
+
+# What the dnf transaction needs besides PKGS, one per line, for each pin not installed at its version:
+# nothing when the repositories (behind the lock) offer it and it isn't installed; its spec (name-evr)
+# when it's installed at another version and offered; the file from koji (checked) otherwise.
+pins_fetch() {
+  local n e vr a sn sv sr h evr f offered have
+  [[ -f "$PINS" ]] || return 0
+  # shellcheck disable=SC2046
+  offered="$(timeout 300 dnf -q repoquery --qf '%{name} %{evr}\n' $(pins_list | awk '{print $1}') 2>/dev/null | sort -u)"
+  mkdir -p "$RPMS"
+  while read -r n e vr a sn sv sr h; do
+    evr="$(pin_evr "$n" "$e" "$vr")"
+    have="$(rpm -q --qf '%{epochnum}:%{version}-%{release}\n' "$n" 2>/dev/null | head -n 1)"
+    [[ "$have" == "$e:$vr" ]] && continue
+    if grep -qxF "$n $evr" <<<"$offered"; then
+      [[ "$have" == *:* ]] && echo "$n-$evr"
+      continue
+    fi
+    f="$RPMS/$n-$vr.$a.rpm"
+    if [[ ! -s "$f" ]] || ! rpm_pinned "$f" "$h"; then
+      rm -f "$f"
+      curl -fsSL --retry 3 --max-time 900 -o "$f.part" "$KOJI/$sn/$sv/$sr/$a/$n-$vr.$a.rpm" \
+        && mv -f "$f.part" "$f" \
+        || { rm -f "$f.part"; echo "error: $n $vr didn't download from Fedora's build archive." >&2; return 1; }
+      rpm_pinned "$f" "$h" || { rm -f "$f"; echo "error: $n $vr from Fedora's build archive isn't the package it should be: not installed." >&2; return 1; }
+    fi
+    echo "$f"
+  done < <(pins_list)
+}
+
 # Downloads what's missing of PKGS (all of it the first time; later only apps added to the list).
 cmd_install() {
-  local need free tailer
+  local need free tailer extra=""
   need="$(missing_pkgs | tr '\n' ' ')"
-  if [[ -z "$need" ]]; then say "Desktop Mode is installed."; cmd_configure; return 0; fi
+  if [[ -z "$need" && -z "$(pins_due)" ]]; then say "Desktop Mode is installed."; cmd_configure; return 0; fi
   # the background install (prefetch) may be under way: its progress here until it's done, then on
   exec 9>"$INSTALL_LOCK"
   if ! flock -n 9; then
@@ -124,7 +230,7 @@ cmd_install() {
     flock 9
     kill "$tailer" 2>/dev/null; wait "$tailer" 2>/dev/null
     need="$(missing_pkgs | tr '\n' ' ')"
-    if [[ -z "$need" ]]; then exec 9>&-; say "Desktop Mode is installed."; return 0; fi
+    if [[ -z "$need" && -z "$(pins_due)" ]]; then exec 9>&-; say "Desktop Mode is installed."; return 0; fi
   fi
   free="$(df -Pk / | awk 'NR == 2 {print int($4 / 1048576)}')"
   if (( free < 2 )); then
@@ -132,12 +238,20 @@ cmd_install() {
     return 1
   fi
   if installed; then say "Downloading Desktop Mode's apps…"; else say "Downloading Desktop Mode (KDE Plasma and a few apps; about 550 MB)…"; fi
+  pins_lock
+  if [[ -f "$PINS" ]]; then
+    say "Getting the KDE Plasma 6.7 packages (the last with the X11 desktop it runs on)…"
+    extra="$(pins_fetch)" || { echo "error: Desktop Mode's packages didn't all download (see above). Try again: it carries on from what's there." >&2; return 1; }
+  fi
   # shellcheck disable=SC2086
-  if ! sudo -n dnf install -y --setopt=install_weak_deps=False $need; then
+  if ! sudo -n dnf install -y --allowerasing --setopt=install_weak_deps=False $need $extra; then
     echo "error: The download or install didn't work (see above). Run it again: it carries on from what's there." >&2
     return 1
   fi
-  if ! installed; then echo "error: Desktop Mode didn't install completely." >&2; return 1; fi
+  if ! installed || [[ -n "$(pins_due)" ]]; then
+    echo "error: Desktop Mode didn't install completely.$( [[ -n "$(pins_due)" ]] && echo " Not at the version it needs: $(pins_due | head -n 4 | awk '{print $1}' | tr '\n' ' ')")" >&2
+    return 1
+  fi
   # Flatpak adds Fedora's own app source for the whole system at the next boot; installing from it would
   # ask for an administrator password this user doesn't have. Discover has Flathub, for this user.
   sudo -n systemctl disable flatpak-add-fedora-repos.service >/dev/null 2>&1 || true
@@ -154,19 +268,19 @@ cmd_install() {
 # Desktop Mode meanwhile waits for it (the lock) and shows its progress. Stopped by Quit, it carries on at
 # the next start (dnf keeps what came down).
 cmd_prefetch() {
-  local wait="${1:-90}"
-  [[ -n "$(missing_pkgs)" ]] || return 0
+  local wait="${1:-90}" rc
+  [[ -n "$(missing_pkgs)" || -n "$(pins_due)" ]] || return 0
   exec 8>"$CACHE/desktop-prefetch.lock"; flock -n 8 || return 0   # (one already waiting or at work)
   sleep "$wait"
   while game_running; do sleep 60; done
-  [[ -n "$(missing_pkgs)" ]] || return 0
+  [[ -n "$(missing_pkgs)" || -n "$(pins_due)" ]] || return 0
   renice -n 19 -p $$ >/dev/null 2>&1 || true
   ionice -c 3 -p $$ >/dev/null 2>&1 || true
   exec 9>"$INSTALL_LOCK"
   flock -n 9 || return 0   # (a switch is installing it right now)
   exec 9>&-                # (cmd_install takes it itself)
   { echo "$(date '+%F %T') installing Desktop Mode in the background"
-    cmd_install; echo "$(date '+%F %T') background install done (rc $?)"; } >>"$PREFETCH_LOG" 2>&1
+    cmd_install; rc=$?; echo "$(date '+%F %T') background install done (rc $rc)"; } >>"$PREFETCH_LOG" 2>&1
 }
 
 # Dolphin's sidebar gets the Mac's shared folders (the game folders), and Discover gets Flathub (for this
@@ -278,6 +392,7 @@ flathub_remote() {
 cmd_configure() {
   local f p apps="$HOME/.local/share/applications" prof
   installed || return 0
+  pins_lock   # (held where they are: a dnf update would take Plasma to 6.8, which has no X11 desktop)
   command -v kwriteconfig6 >/dev/null || return 0
   kwriteconfig6 --file startkderc --group General --key systemdBoot false
   kwriteconfig6 --file kwinrc --group Compositing --key Enabled false
@@ -637,6 +752,7 @@ case "${1:-}" in
   status)    cmd_status ;;
   install)   cmd_install ;;
   prefetch)  cmd_prefetch "${2:-90}" ;;
+  pins)      case "${2:-due}" in lock) pins_lock; tail -n 1 "$LOG" ;; due) pins_due ;; fetch) pins_fetch ;; *) echo "usage: bottle-session pins [due | fetch | lock]" >&2; exit 2 ;; esac ;;
   on|desktop) cmd_on; rc=$?; tell_mac; exit "$rc" ;;
   off|game)  cmd_off; rc=$?; tell_mac; exit "$rc" ;;
   configure) cmd_configure ;;

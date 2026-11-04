@@ -186,6 +186,25 @@ Proton and Steam's runtime (~2-2.5 GB more).
   Not tried: a real download in a browser (quarantine and translocation as macOS really does
   them) and how the dialogs look.
 
+**Desktop Mode held on Plasma 6.7.5, the last with X11 (Nov 4)**
+
+Fedora 44's updates moved KDE to Plasma 6.8 at the end of October. 6.8 has no X11 session: its `kwin` and
+`plasma-workspace` obsolete `kwin-x11` and `plasma-workspace-x11`, and the VM's desktop is an X server
+(Xvnc, sent by `bottle-screen`). A VM set up after that got 6.8, and the install ended with "Desktop Mode
+didn't install completely" (Michael's M1). `guest/desktop-pins.txt` lists Desktop Mode's 182 packages
+(every Qt 6 package, KDE Frameworks, the Plasma 6.7.5 release and the KDE apps) at the versions that run on
+the development VM, with each one's header SHA-256 from its package database. `bottle-session` locks each
+with dnf versionlock (entries in `/etc/dnf/versionlock.toml` tagged "Portalistic: Desktop Mode on Plasma
+6.7.5 (X11)"; Mesa's lock stays) at every install and configure. One the repositories no longer offer at
+that version (67 on Nov 4, 125 MB) comes from Fedora's build archive
+(`kojipkgs.fedoraproject.org/packages/SRC/VER/REL/ARCH/`, kept for good; its signed copies of old builds
+are removed after a while), taken only when `rpm -K` finds it whole and its header SHA-256 matches. A VM
+that got 6.8 is taken back to them in the same `dnf install --allowerasing`. `bottle-session pins
+[due | fetch | lock]` shows the state. Tried on test VMs (`host/tests/mac-dtest.sh`: fresh setup, 6.8 as
+the M1 got it, then the pinned install over it, Plasma started; `mac-dtest2.sh`: the background install
+after a fresh setup). Plasma, Qt and the KDE apps get no updates from Fedora while this holds; a later
+X11-less Plasma would need a Wayland session nested in the X server, not tried.
+
 **Desktop Mode installs itself in the background (Nov 4)**
 
 `bottle up` runs `bottle-session prefetch 90` in the VM (detached) after Steam starts, at every start:

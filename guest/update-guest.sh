@@ -291,6 +291,8 @@ tools() {
   install -m 0755 "$HERE/bottle-resolution" /usr/local/bin/bottle-resolution || return 1
   install -m 0755 "$HERE/bottle-whyquit"   /usr/local/bin/bottle-whyquit   || return 1
   install -m 0755 "$HERE/bottle-session"   /usr/local/bin/bottle-session   || return 1
+  install -d -m 0755 /usr/local/share/steamos-bottle || return 1
+  install -m 0644 "$HERE/desktop-pins.txt" /usr/local/share/steamos-bottle/desktop-pins.txt || return 1   # (Desktop Mode on Plasma 6.7.5, X11: bottle-session)
   install -m 0755 "$HERE/bottle-flatpak-gpu" /usr/local/bin/bottle-flatpak-gpu || return 1
   install -m 0755 "$HERE/bottle-decky"     /usr/local/bin/bottle-decky     || return 1
   install -m 0755 "$HERE/bottle-emulators" /usr/local/bin/bottle-emulators || return 1
