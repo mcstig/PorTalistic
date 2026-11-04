@@ -45,7 +45,7 @@ extension AppDelegate {
     @objc func switchToDesktopMode(_ sender: Any?) {
         guard confirm("Switch to Desktop Mode?",
                       "Steam's Big Picture closes and a Linux desktop (KDE Plasma, like the Steam Deck's) opens in this window. "
-                      + "The first time it downloads about 550 MB, then the emulators it comes with (Ryujinx, RPCS3, Play!, RetroArch; about 4.5 GB) in the background. “Return to Game Mode” on the desktop, or this menu, switches back.",
+                      + "It installs itself in the background after Portalistic starts (about 550 MB, then the emulators it comes with: Ryujinx, RPCS3, Play!, RetroArch, about 4.5 GB); if that isn't done yet, the switch waits for it. “Return to Game Mode” on the desktop, or this menu, switches back.",
                       "Switch to Desktop Mode") else { return }
         activity.run("Switching to Desktop Mode", ["mode", "desktop"], log: "mode") { [weak self] code, _ in
             if code == 0 { self?.vmMode = "desktop"; self?.activity.window?.orderOut(nil) } else { self?.refreshMode() }

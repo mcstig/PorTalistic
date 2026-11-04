@@ -186,6 +186,18 @@ Proton and Steam's runtime (~2-2.5 GB more).
   Not tried: a real download in a browser (quarantine and translocation as macOS really does
   them) and how the dialogs look.
 
+**Desktop Mode installs itself in the background (Nov 4)**
+
+`bottle up` runs `bottle-session prefetch 90` in the VM (detached) after Steam starts, at every start:
+nothing once Desktop Mode is installed; otherwise it waits 90 s (Steam, a sign-in), then while a game
+runs, then runs `cmd_install` at the lowest processor and disk priority, logged to
+`~/.config/steamos-bottle/desktop-prefetch.log`; its `cmd_configure` starts the emulators' install as a
+switch would. One install at a time (`flock` on `~/.cache/steamos-bottle/desktop-install.lock`; a second
+prefetch steps aside on its own lock): a switch to Desktop Mode meanwhile shows the background install's
+log in the Activity window and carries on once it's done. Cut off by Quit, it carries on at the next start.
+`BOTTLE_DESKTOP_PREFETCH=0`: only at the first switch, as before. Tested with a copy whose list had one
+extra package (`host/tests/mac-prefetch.sh`).
+
 **Full screen covers the menu bar (Nov 2-3)**
 
 With "Automatically hide and show the menu bar: Never" macOS keeps the menu bar in full screen whatever
@@ -522,7 +534,7 @@ the first time (games with a Linux version default to it).
 | `bottle xcode` | Opens the app's Xcode project and sets your signing team; from then on the app is built with Xcode, signed with your team |
 | `bottle steam-gpu [on\|off]` | Steam's interface (Big Picture) on the Mac's GPU through zink, after checking it works; off goes back |
 | `bottle ui [bigpicture\|desktop]` | Steam's interface in the bottle: Big Picture (default, as on SteamOS) or its desktop windows |
-| `bottle mode [game\|desktop\|install\|status]` | Game Mode (Steam's Big Picture fills the screen; the default) or Desktop Mode (KDE Plasma, as on a Steam Deck; the first switch to it downloads about 550 MB); no argument: which one |
+| `bottle mode [game\|desktop\|install\|status]` | Game Mode (Steam's Big Picture fills the screen; the default) or Desktop Mode (KDE Plasma, as on a Steam Deck; it installs itself in the background after Steam, about 550 MB); no argument: which one |
 | `bottle library` / `bottle play APP_ID` | The installed games (app id, name, state, last played) / start one |
 | `bottle library folders` | Where games go: each game folder, the VM's disk, the free space on each, how many games each has, and the default for new games |
 | `bottle library add PATH [--default]` | A new place for games: a folder on this Mac (`~/Games/Portalistic`) or a drive (`/Volumes/SSD`: Portalistic makes a "Portalistic Library" folder on it). Restarts the VM. Also in the app: Game Folders > Add a Game Folder… (see "Where games go" below) |
@@ -671,8 +683,9 @@ Dolphin, Konsole, Kate, Firefox, Spectacle, the System Monitor and Discover (for
 `bottle mode desktop`) switches; the "Return to Game Mode" icon on the desktop, or Steam > Switch to
 Game Mode (`bottle mode game`), switches back.
 
-- **Installed on first use, not shipped**: the first switch downloads about 550 MB with dnf (about
-  1.3 GB on the VM's disk; it wants 2 GB free) and sets Plasma up. Plasma takes about 800 MB of the
+- **Installed after the first start, not shipped in the image**: about 550 MB with dnf (about
+  1.3 GB on the VM's disk; it wants 2 GB free), in the background since Nov 4 (before: at the first
+  switch), and Plasma set up. Plasma takes about 800 MB of the
   VM's memory while it's on. `bottle update` keeps its settings in step with the kit when it's there.
 - **Discover and Dolphin:** Discover installs Flatpak apps from Flathub for this user (no password; its
   PackageKit part isn't installed, so it can't offer to update the system packages, such as the Mac-patched

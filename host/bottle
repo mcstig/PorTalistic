@@ -1360,10 +1360,20 @@ cmd_up() {
   desktop_start >/dev/null   # (again: an update restarts the screen server)
   fixes_push                 # (the fixes list the Mac has, before Steam reads the per-game settings)
   if steam_running; then info "Steam is running."; else steam_start "$debug"; fi
+  desktop_prefetch
   audio_start
   awake_start
   screen_check
   info "Ready."
+}
+
+# Desktop Mode installs itself in the background after Steam (Nov 4: the wait at the first switch was
+# frustrating): bottle-session prefetch, detached in the VM; it does nothing once Desktop Mode is there.
+# BOTTLE_DESKTOP_PREFETCH=0: only when the player switches.
+desktop_prefetch() {
+  [[ "${BOTTLE_DESKTOP_PREFETCH:-1}" != 0 ]] || return 0
+  vsh bash -c 'command -v bottle-session >/dev/null || exit 0
+    setsid -f bottle-session prefetch 90 </dev/null >/dev/null 2>&1' >/dev/null 2>&1 || true
 }
 
 # Lima has the VM's screen port open on this Mac (it forwards a port once the VM listens on it).
