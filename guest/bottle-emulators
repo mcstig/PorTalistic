@@ -17,7 +17,12 @@
 #
 #   bottle-emulators [install]   install what's missing, pin each to the taskbar the first time
 #   bottle-emulators status
-# Needs about 4.5 GB on the VM's disk the first time (mostly the Flatpaks' KDE runtime): skipped without the room.
+# Needs about 4.5 GB on the VM's disk the first time (mostly the runtimes: KDE 6.10 and 6.11, freedesktop
+# 26.08, with their graphics libraries): skipped without the room for what's missing.
+# Nov 4: Dolphin (GameCube, Wii), Azahar (3DS), PPSSPP (PSP), xemu (the original Xbox), melonDS (DS),
+# Flycast (Dreamcast) and MAME (arcade) too, all with ARM builds on Flathub, pinned after the others; the
+# ones that would start on OpenGL are set to Vulkan once (emulators_vulkan). No ARM build anywhere: PCSX2,
+# Cemu, shadPS4, Xenia, Vita3K.
 # BOTTLE_EMULATORS=0: nothing.
 set -uo pipefail
 RYU_VER=1.3.3
@@ -26,8 +31,10 @@ RYU_SHA256=0485b611583c401733d706ec39db40999f08ba4e22f6f38b0d94602a8016d295
 RYU_DIR="$HOME/.local/opt/ryujinx"
 APPS="$HOME/.local/share/applications"
 STATE="$HOME/.config/steamos-bottle"
-FLATPAKS=(net.rpcs3.RPCS3 org.purei.Play org.libretro.RetroArch)
-PIN=(ryujinx-gpu.desktop net.rpcs3.RPCS3.desktop org.purei.Play.desktop org.libretro.RetroArch.desktop)
+FLATPAKS=(net.rpcs3.RPCS3 org.purei.Play org.libretro.RetroArch
+          org.DolphinEmu.dolphin-emu org.azahar_emu.Azahar org.ppsspp.PPSSPP app.xemu.xemu net.kuribo64.melonDS
+          org.flycast.Flycast org.mamedev.MAME)   # (Nov 4: GameCube/Wii, 3DS, PSP, Xbox, DS, Dreamcast, arcade)
+PIN=(ryujinx-gpu.desktop "${FLATPAKS[@]/%/.desktop}")
 say() { printf '%s\n' "$*"; }
 [[ "${BOTTLE_EMULATORS:-1}" == 0 ]] && exit 0
 mkdir -p "$STATE" "$APPS"
@@ -71,25 +78,76 @@ D
   mv -f "$APPS/ryujinx-gpu.desktop.tmp" "$APPS/ryujinx-gpu.desktop"
 }
 
+# "749.0 MB" (flatpak's sizes) in KB; $2 when it can't be read.
+# (flatpak puts a no-break space, U+00A0, between the number and the unit)
+size_kb() { LC_ALL=C awk -v s="$1" -v d="$2" 'BEGIN { n = s + 0; u = s; sub(/^[0-9.]+[^A-Za-z]*/, "", u); f = (u ~ /^G/) ? 1048576 : (u ~ /^M/) ? 1024 : (u ~ /^k/) ? 1 : 0; print (n > 0 && f > 0) ? int(n * f) : d }'; }
+
 flatpaks() {
   command -v flatpak >/dev/null || { say "  no Flatpak (Desktop Mode installs it)"; return 1; }
   local missing=() a free
   for a in "${FLATPAKS[@]}"; do flatpak info --user "$a" >/dev/null 2>&1 || missing+=("$a"); done
   (( ${#missing[@]} )) || return 0
-  # room for what's missing: about 1 GB an app, 2.5 GB for each runtime not here yet (KDE's with its GL
-  # libraries), 1 GB to spare
-  local need=$((1024 * 1024)) rt rts=()
+  # room for what's missing: each app's installed size (Flathub says), each runtime not here yet with
+  # 700 MB for its graphics libraries (2.5 GB when Flathub doesn't say), 1 GB to spare
+  local need=$((1024 * 1024)) rt rts=() info
   for a in "${missing[@]}"; do
-    need=$((need + 1024 * 1024))
-    rt="$(timeout 60 flatpak remote-info --user flathub "$a" 2>/dev/null | sed -n 's/^ *Runtime: //p')"
+    info="$(timeout 60 flatpak remote-info --user flathub "$a" 2>/dev/null)"
+    need=$((need + $(size_kb "$(sed -n 's/^ *Installed Size: //p' <<<"$info")" 1048576)))
+    rt="$(sed -n 's/^ *Runtime: //p' <<<"$info")"
     [[ -z "$rt" ]] && { need=$((need + 5 * 1024 * 1024 / 2)); continue; }
     [[ " ${rts[*]-} " == *" $rt "* ]] && continue; rts+=("$rt")
-    flatpak info --user "${rt%%/*}//${rt##*/}" >/dev/null 2>&1 || need=$((need + 5 * 1024 * 1024 / 2))
+    flatpak info --user "${rt%%/*}//${rt##*/}" >/dev/null 2>&1 && continue
+    need=$((need + 700 * 1024 + $(size_kb "$(timeout 60 flatpak remote-info --user flathub "runtime/$rt" 2>/dev/null | sed -n 's/^ *Installed Size: //p')" 1835008)))
   done
   free="$(df -Pk "$HOME" | awk 'NR == 2 {print $4}')"
   if (( free < need )); then say "  not enough space on the VM's disk for ${missing[*]} (needs about $(( (need + 1024 * 1024 - 1) / 1024 / 1024 )) GB free)"; return 1; fi
   timeout 3600 flatpak install --user -y --noninteractive flathub "${missing[@]}" >/dev/null 2>&1 \
     && say "  installed ${missing[*]}" || { say "  couldn't install ${missing[*]} from Flathub"; return 1; }
+}
+
+# The new emulators (Nov 4) on Vulkan, each once, the first time it's here (a player's choice afterwards
+# stays): their default is OpenGL, which in a Flatpak draws on the processor here. melonDS (its software
+# renderer suits a DS) and MAME (2D) are left as they come. One setting in each one's own file: key names
+# from their programs (Nov 4). id | file under ~/.var/app/ID | section | key | value | separator
+VULKAN_SETTINGS='org.DolphinEmu.dolphin-emu|config/dolphin-emu/Dolphin.ini|Core|GFXBackend|Vulkan| = 
+org.azahar_emu.Azahar|config/azahar-emu/qt-config.ini|Renderer|graphics_api\default|false|=
+org.azahar_emu.Azahar|config/azahar-emu/qt-config.ini|Renderer|graphics_api|2|=
+org.ppsspp.PPSSPP|config/ppsspp/PSP/SYSTEM/ppsspp.ini|Graphics|GraphicsBackend|3 (VULKAN)| = 
+app.xemu.xemu|data/xemu/xemu/xemu.toml|display|renderer|'"'"'VULKAN'"'"'| = 
+org.flycast.Flycast|config/flycast/emu.cfg|config|pvr.rend|4| = '
+emulators_vulkan() {
+  local id file sec key val sep mark
+  while IFS='|' read -r id file sec key val sep; do
+    [[ -n "$id" ]] || continue
+    mark="$STATE/vulkan-$id"
+    [[ -e "$mark" && "$(cat "$mark")" == *"[$key]"* ]] && continue
+    flatpak info --user "$id" >/dev/null 2>&1 || continue
+    python3 - "$HOME/.var/app/$id/$file" "$sec" "$key" "$val" "$sep" <<'PY' || continue
+import os, re, sys
+path, sec, key, val, sep = sys.argv[1:6]
+lines = open(path).read().splitlines() if os.path.exists(path) else []
+out, cur, done, seen = [], None, False, False
+for l in lines:
+    m = re.match(r"^\s*\[([^\]]+)\]\s*$", l)
+    if m:
+        if cur == sec and not done:
+            out.append(f"{key}{sep}{val}"); done = True
+        cur = m.group(1); seen = seen or cur == sec
+    elif cur == sec and not done and re.match(r"^\s*" + re.escape(key) + r"\s*=", l):
+        out.append(f"{key}{sep}{val}"); done = True; continue
+    out.append(l)
+if not done:
+    if not seen:
+        if out and out[-1].strip():
+            out.append("")
+        out.append(f"[{sec}]")
+    out.append(f"{key}{sep}{val}")
+os.makedirs(os.path.dirname(path), exist_ok=True)
+open(path + ".tmp", "w").write("\n".join(out) + "\n")
+os.replace(path + ".tmp", path)
+PY
+    printf '[%s]' "$key" >> "$mark"
+  done <<<"$VULKAN_SETTINGS"
 }
 
 # RetroArch on Vulkan, once (its default, OpenGL, would draw on the processor here); a player's own choice
@@ -182,7 +240,7 @@ pin() {
 }
 
 case "${1:-install}" in
-  install) flatpaks; retroarch_vulkan; retroarch_assets; ryujinx; pin; exit 0 ;;
+  install) flatpaks; retroarch_vulkan; emulators_vulkan; retroarch_assets; ryujinx; pin; exit 0 ;;
   pin) pin; exit 0 ;;
   status)
     say "Ryujinx: $(cat "$RYU_DIR/.version" 2>/dev/null || echo "not installed")"

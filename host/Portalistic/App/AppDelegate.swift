@@ -22,6 +22,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     lazy var activity: ActivityWindow = {
         let a = ActivityWindow()
         a.onFinish = { [weak self] in self?.activityEnded() }
+        a.onClose = { [weak self] in
+            guard let self, let w = self.window, w.isVisible else { return }
+            if #available(macOS 14.0, *) { NSApp.activate() } else { NSApp.activate(ignoringOtherApps: true) }
+            w.makeKeyAndOrderFront(nil)
+        }
         return a
     }()
 
@@ -239,7 +244,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 path = String(line[r.lowerBound...]).trimmingCharacters(in: .whitespaces)
             }
             let page = c.lines.last(where: { $0.hasPrefix("ISSUE-PAGE: ") }).map { String($0.dropFirst(12)) }
-            self?.activity.window?.orderOut(nil)
+            self?.activity.dismiss()
             self?.explainReport(file: path, page: page)
         }
     }

@@ -7,7 +7,10 @@ extension AppDelegate {
     @objc func restartSteam(_ sender: Any?) {
         guard confirm("Restart Steam?", "A game that's running closes. Steam is back in about half a minute.",
                       "Restart Steam") else { return }
-        activity.run("Restarting Steam", ["steam"], log: "steam")
+        // closes by itself once Steam is back (it stays open, with the details, when it didn't work)
+        activity.run("Restarting Steam", ["steam"], log: "steam") { [weak self] code, _ in
+            if code == 0 { self?.activity.dismiss() }
+        }
     }
 
     /// The watcher found the VM's disk almost full (a kind-3 notice): the user chooses between a bigger
@@ -27,7 +30,7 @@ extension AppDelegate {
         switch alert.runModal() {
         case .alertFirstButtonReturn:
             activity.run("Making the VM's disk bigger", ["disk", "grow"], log: "disk-grow") { [weak self] code, _ in
-                if code == 0 { self?.activity.window?.orderOut(nil) }
+                if code == 0 { self?.activity.dismiss() }
             }
         case .alertSecondButtonReturn:
             runQuietly(["steam-url", "steam://settings/storage"], log: "settings", failure: "Steam's storage settings didn't open.")
@@ -45,10 +48,10 @@ extension AppDelegate {
     @objc func switchToDesktopMode(_ sender: Any?) {
         guard confirm("Switch to Desktop Mode?",
                       "Steam's Big Picture closes and a Linux desktop (KDE Plasma, like the Steam Deck's) opens in this window. "
-                      + "It installs itself in the background after Portalistic starts (about 550 MB, then the emulators it comes with: Ryujinx, RPCS3, Play!, RetroArch, about 4.5 GB); if that isn't done yet, the switch waits for it. “Return to Game Mode” on the desktop, or this menu, switches back.",
+                      + "It installs itself in the background after Portalistic starts (about 550 MB, then the emulators it comes with: Ryujinx, RPCS3, Play!, RetroArch, Dolphin, Azahar, PPSSPP, xemu, melonDS, Flycast and MAME, about 5 GB); if that isn't done yet, the switch waits for it. “Return to Game Mode” on the desktop, or this menu, switches back.",
                       "Switch to Desktop Mode") else { return }
         activity.run("Switching to Desktop Mode", ["mode", "desktop"], log: "mode") { [weak self] code, _ in
-            if code == 0 { self?.vmMode = "desktop"; self?.activity.window?.orderOut(nil) } else { self?.refreshMode() }
+            if code == 0 { self?.vmMode = "desktop"; self?.activity.dismiss() } else { self?.refreshMode() }
         }
     }
 

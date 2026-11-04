@@ -29,6 +29,10 @@ final class ActivityWindow: NSWindowController {
         w.title = "Portalistic Activity"
         w.isReleasedWhenClosed = false
         w.minSize = NSSize(width: 440, height: 260)
+        // Over the window in full screen, on its space (Nov 4): an ordinary window can't go there, so
+        // macOS switched to the desktop to show it (Restart Steam: Portalistic's screen went away, and
+        // came back only from its Dock icon)
+        w.collectionBehavior = [.fullScreenAuxiliary, .moveToActiveSpace]
         let scroll = NSTextView.scrollableTextView()
         let tv = scroll.documentView as! NSTextView
         tv.isEditable = false
@@ -115,6 +119,13 @@ final class ActivityWindow: NSWindowController {
 
     var busy: Bool { command?.running ?? false }
     var onFinish: (() -> Void)?                 // after any job ends
+    var onClose: (() -> Void)?                  // after the window goes (Close, or dismiss): the main window comes back
+
+    /// Takes the window away (a job that worked and has nothing more to show).
+    func dismiss() {
+        window?.orderOut(nil)
+        onClose?()
+    }
 
     /// Runs `bottle args...` here; `then` gets its exit status and the command.
     func run(_ title: String, _ args: [String], log: String, then: ((Int32, BottleCommand) -> Void)? = nil) {
@@ -190,7 +201,7 @@ final class ActivityWindow: NSWindowController {
     }
 
     @objc private func toggleDetails(_ sender: Any?) { showDetails(detailsScroll.isHidden) }
-    @objc private func closeWindow(_ sender: Any?) { window?.close() }
+    @objc private func closeWindow(_ sender: Any?) { window?.close(); onClose?() }
 
     private func showDetails(_ on: Bool) {
         detailsScroll.isHidden = !on

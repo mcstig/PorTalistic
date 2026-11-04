@@ -246,6 +246,12 @@ in front, and is covered again below the title bar or off the screen, unless a m
 'subsystem == "Portalistic"'`. To see the windows themselves: `host/tests/mac-mbtrace.sh` (240 s of
 pointer and window changes).
 
+Nov 4: the Activity window (Restart Steam and the Steam menu's other jobs) was an ordinary window, which
+macOS can't put on a full-screen window's space: showing it switched to the desktop, and Portalistic's
+screen came back only from its Dock icon. It's `fullScreenAuxiliary` + `moveToActiveSpace` now (it opens
+over the full-screen window), Restart Steam's closes by itself when Steam is back, and when the Activity
+window goes (`dismiss()` or Close) the main window is brought to the front again.
+
 **Emulators with Desktop Mode (Nov 3)**
 
 `guest/bottle-emulators` (started in the background by `bottle-session configure`, so at Desktop Mode's
@@ -263,6 +269,18 @@ KDE runtimes and their Mesa, RetroArch 750 MB): skipped without room for what's 
 app, 2.5 GB a runtime not installed yet, 1 GB to spare). Each is pinned to the taskbar once (Plasma's scripting, while Plasma runs; a pin the
 player removes stays removed: `~/.config/steamos-bottle/emulators-pinned`). `BOTTLE_EMULATORS=0`:
 nothing. PCSX2 has no ARM build, so Play! is the PS2 emulator.
+
+Nov 4: seven more, all with ARM builds on Flathub (checked with `flatpak remote-info --arch=aarch64`):
+Dolphin (GameCube, Wii), Azahar (3DS), PPSSPP (PSP), xemu (the original Xbox), melonDS (DS), Flycast
+(Dreamcast) and MAME (arcade; DOS and ScummVM games have RetroArch cores), about 860 MB on top of their
+runtimes (KDE 6.10/6.11, freedesktop 26.08). Pinned after the others. Dolphin, Azahar, PPSSPP, xemu and
+Flycast start on OpenGL, which in a Flatpak draws on the processor here, so `emulators_vulkan` sets each
+to Vulkan once (`GFXBackend = Vulkan`, `graphics_api=2`, `GraphicsBackend = 3 (VULKAN)`,
+`renderer = 'VULKAN'`, `pvr.rend = 4`; key names read from their programs); melonDS (software renderer)
+and MAME are left as they come. Each started for 15 s on a private screen in the development VM: all
+ran; Flycast reported "Device Virtio-GPU Venus (Apple M4 Max)"; xemu's own menus draw with OpenGL
+(llvmpipe). No ARM build anywhere: PCSX2, Cemu, shadPS4, Xenia, Vita3K. The space check now adds what
+Flathub gives as each missing app's and runtime's installed size (700 MB for a runtime's graphics libraries).
 
 **Decky Loader built in (Nov 3)**
 
